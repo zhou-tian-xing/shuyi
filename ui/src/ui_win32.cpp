@@ -120,12 +120,16 @@ bool g_analysisOn = false;
 // The last analysis spent its whole budget: the next Space continues the same
 // tree without a limit instead of starting over at the configured budget.
 bool g_analysisFinished = false;
-bool g_analysisUnlimited = false;
 // Budgets, editable in the settings window and persisted in shuyi-ui.ini.  0
 // means "no limit" (the search runs until Space is pressed again).
 int g_analysisVisits = kDefaultVisits;
 int g_playVisits = kDefaultVisits;
 bool g_enginePending = false;
+// Id of the `genmove` whose reply we are waiting for.  Without it a stray `= ` ack
+// from `play`/`clear_board` (written before the genmove reply) would be parsed as
+// a move.  The protocol allows an id on every command for exactly this reason.
+std::string g_pendingReplyId;
+int g_commandId = 0;
 std::wstring g_engineMessage = L"外部引擎未启用";
 bool g_engineReady = false;
 // Rule set of the current game.  Switching it is only allowed before the first
@@ -428,7 +432,6 @@ void startEngineAnalysis(int visits) {
     sendEngine("stop");
     g_analysisOn = true;
     g_analysisFinished = false;
-    g_analysisUnlimited = visits <= 0;
     sendEngine("analyze " + std::string(g_position.sideToMove() == Player::Red ? "red" : "black") +
                " " + std::to_string(std::max(0, visits)));
     g_engineMessage = visits > 0 ? (L"分析中（上限 " + std::to_wstring(visits) + L" 访问，空格停止）")
@@ -690,12 +693,21 @@ void scanModels() {
     for (const std::string& root : modelRoots()) walkForModels(root, std::string(), 4, found);
     std::sort(found.begin(), found.end(),
               [](const ModelEntry& a, const ModelEntry& b) { return a.label < b.label; });
-    found.erase(std::unique(found.begin(), found.end(),
-                            [](const ModelEntry& a, const ModelEntry& b) {
-                                return _wcsicmp(a.label.c_str(), b.label.c_str()) == 0;
-                            }),
-                found.end());
-    g_modelList = std::move(found);
+    // The same file is reachable through several roots (the exe directory and its
+    // parent, for instance).  Two menu entries for one model would let the user
+    // "switch" between identical networks, so keep the first path only.
+    std::vector<ModelEntry> unique;
+    for (ModelEntry& entry : found) {
+        bool seen = false;
+        for (const ModelEntry& kept : unique) {
+            if (_stricmp(normalizedPath(kept.path).c_str(), normalizedPath(entry.path).c_str()) == 0) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) unique.push_back(std::move(entry));
+    }
+    g_modelList = std::move(unique);
 }
 
 int modelIndexFor(const std::string& path) {
@@ -1212,7 +1224,23 @@ void setEngineChoice(EngineChoice choice) {
     refresh();
 }
 
-void handleEngineLine(const std::string& line) {
+void handleEngineLine(const std::string& raw) {
+    std::string line = raw;
+    std::string commandId;
+    const std::size_t space = line.find(' ');
+    if (space != std::string::npos && space <= 9) {
+        bool numeric = true;
+        for (std::size_t i = 0; i < space; ++i) {
+            if (line[i] < '0' || line[i] > '9') {
+                numeric = false;
+                break;
+            }
+        }
+        if (numeric) {
+            commandId = line.substr(0, space);
+            line = line.substr(space + 1);
+        }
+    }
     if (line.rfind("info ", 0) == 0) {
         if (g_analysisOn || g_enginePending) applyEngineAnalysis(line.substr(5));
         return;
@@ -1235,6 +1263,7 @@ void handleEngineLine(const std::string& line) {
         const bool wasPending = g_enginePending;
         g_engineMessage = L"引擎错误：" + widen(line.substr(1));
         g_enginePending = false;
+        g_pendingReplyId.clear();
         g_thinking = false;
         if (wasPending) refresh();
         return;
@@ -1242,10 +1271,15 @@ void handleEngineLine(const std::string& line) {
     if (line.rfind("= ", 0) != 0) return;
     const std::string payload = line.substr(2);
     if (!g_enginePending) return;
+    // An empty payload is an acknowledgement of some earlier command, and a
+    // different id belongs to another command: neither is the move we await.
+    if (payload.empty()) return;
+    if (!g_pendingReplyId.empty() && commandId != g_pendingReplyId) return;
     if (payload == "pass") {
         // The engine found no placement: let the rules settle the forced pass
         // and keep the engine in step.
         g_enginePending = false;
+        g_pendingReplyId.clear();
         g_engineMessage = L"引擎过手（无合法落点）";
         settleForcedPasses();
         refresh();
@@ -1258,6 +1292,7 @@ void handleEngineLine(const std::string& line) {
     int cell = 0;
     if (!parseSquare(vertex, cell) || number < 1 || number > 9) {
         g_enginePending = false;
+        g_pendingReplyId.clear();
         g_engineMessage = L"引擎返回了无法识别的着法：" + widen(payload);
         refresh();
         return;
@@ -1265,11 +1300,13 @@ void handleEngineLine(const std::string& line) {
     const Move move(cell, number);
     if (!g_position.isLegal(move)) {
         g_enginePending = false;
+        g_pendingReplyId.clear();
         g_engineMessage = L"引擎返回非法着法：" + widen(payload);
         refresh();
         return;
     }
     g_enginePending = false;
+    g_pendingReplyId.clear();
     const Player mover = g_position.sideToMove();
     g_position.play(move);
     sendEngine("play " + std::string(mover == Player::Red ? "red" : "black") + " " +
@@ -2051,7 +2088,8 @@ void maybeAiMove() {
         g_engineMessage = L"引擎思考中…";
         clearEngineAnalysis();
         sendEngine("stop");
-        sendEngine("genmove " +
+        g_pendingReplyId = std::to_string(++g_commandId);
+        sendEngine(g_pendingReplyId + " genmove " +
                    std::string(g_position.sideToMove() == Player::Red ? "red" : "black") + " " +
                    std::to_string(std::max(1, g_playVisits)));
         refresh(true);
@@ -2423,6 +2461,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         case ID_ENGINE_STOP: {
             const bool wasPending = g_enginePending;
             g_enginePending = false;
+            g_pendingReplyId.clear();
             g_analysisOn = false;
             if (g_engineClient.running()) sendEngine("stop");
             clearEngineAnalysis();
