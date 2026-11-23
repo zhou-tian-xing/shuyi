@@ -200,6 +200,30 @@ python training/elo.py --report runs/arena/blocking512/table.json --anchor rando
 `experimental/training/...` 的旧路径，`check_layout.py` 仍然指向 `experimental/`；
 这些在重组后都是死引用，已全部改到 `training/`。
 
+### 2026-11-23 · 链条可以从已有模型接着跑（`--init-model` / `--init-data`）
+
+流水线原来只会从随机网络开链：gen0 随机走子、gen1/gen2 一层扫描，等于把上一轮
+学到的东西全部丢掉。现在：
+
+```bash
+# 从现有模型继续：gen0 用已有数据微调，并与起点模型打一场 arena
+INIT_MODEL=models/b4c32-s34760-d470705.bin INIT_DATA="runs/blocking/blk1/gen_00*/selfplay" VISITS=3000 GAMES=1200 GENERATIONS=6 bash training/run_generation.sh
+```
+
+- gen0 的 `mode=warm`：不产新数据，`train_resnet --init-model <起点> --data <init-data>`，
+  并且**必须**和起点模型打一场（arena 里叫 `warm_start`）——微调后比起点差，就是这次
+  微调把旧模型扔了，要当场看见，而不是等三代之后从 ELO 曲线里猜。
+- `--resume` 会校验 `init_model` 与 `a_cond`：换起点或换格式的续跑会被拒绝，
+  否则 manifest 描述的就是一次从未发生过的运行。
+- v3 → v4 的热启动是精确的（新增两列权重补零），所以 A 的权重从 0 开始学，
+  起点强度不变。
+
+### 2026-11-23 · `run_generation.sh` 的 komi 默认值会覆盖实测值
+
+脚本原来写死 `KOMI="${KOMI:--0.5}"` 并把 `--komi` 无条件传给流水线，于是
+"阻挡规则用 +1.26" 这个实测结论被脚本静默改回 −0.5。现在 `KOMI` 默认空，
+空值就不传，由流水线按规则集取实测值；要覆盖再显式给。
+
 ### 2026-11-23 · 产品化拆分：ui / engine / core / protocol
 
 1. **仓库按产品拆分**：`core/`（规则，两侧唯一共享）、`engine/`（无头引擎）、`ui/`（界面，

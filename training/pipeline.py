@@ -232,6 +232,23 @@ def generate(args, gen_dir, gen, mode, model):
     return shard, total, stats
 
 
+def expand_shards(patterns):
+    """Expand --init-data: files, globs, or directories (searched recursively)."""
+    found = []
+    for pattern in patterns:
+        path = Path(pattern)
+        if path.is_dir():
+            found.extend(sorted(str(p) for p in path.rglob("*.bin")))
+            continue
+        hits = sorted(glob.glob(str(path)))
+        if not hits:
+            raise SystemExit(f"--init-data matched nothing: {pattern}")
+        found.extend(hits)
+    if not found:
+        raise SystemExit("--init-data matched no shards")
+    return found
+
+
 def check_targets(args, gen, mode, total, stats):
     """Refuse to train on a target distribution that cannot teach a policy."""
     if args.dry_run or not stats:
@@ -348,7 +365,7 @@ def train(args, gen_dir, gen, shards, init_model):
     return candidate, json.loads(summary.read_text(encoding="utf-8"))
 
 
-def arena(args, gen_dir, gen, candidate, previous):
+def arena(args, gen_dir, gen, candidate, previous, name_b=None):
     out_dir = gen_dir / "arena"
     out_dir.mkdir(parents=True, exist_ok=True)
     match_json = out_dir / "match.json"
@@ -358,7 +375,7 @@ def arena(args, gen_dir, gen, candidate, previous):
         "--model", str(candidate),
         "--model-b", str(previous),
         "--name-a", f"gen_{gen:03d}",
-        "--name-b", f"gen_{gen - 1:03d}",
+        "--name-b", name_b or f"gen_{gen - 1:03d}",
         "--games", str(args.arena_games),
         "--batch-games", str(min(args.arena_games, args.batch_games)),
         "--visits", str(args.arena_visits or args.visits),
@@ -519,6 +536,10 @@ def main(argv=None):
     parser.add_argument("--channels", type=int, default=32)
     parser.add_argument("--blocks", type=int, default=4)
     parser.add_argument("--input-planes", type=int, default=37, choices=[19, 37])
+    parser.add_argument("--init-model", default="",
+                        help="warm start the chain from this .bin instead of a random gen0")
+    parser.add_argument("--init-data", nargs="+", default=[],
+                        help="shards used by the warm-start generation (files, globs or dirs)")
     parser.add_argument("--a-cond", action="store_true",
                         help="train a v4 model that takes the A value as an input "
                              "(see training/README.md, 'A as an input')")
@@ -582,6 +603,11 @@ def main(argv=None):
 
     if args.generations < 1:
         raise SystemExit("--generations must be >= 1")
+    if args.init_model and not args.init_data:
+        raise SystemExit("--init-model needs --init-data: the warm-start generation "
+                         "trains on shards that already exist")
+    if args.init_model and not Path(args.init_model).exists():
+        raise SystemExit(f"--init-model does not exist: {args.init_model}")
     if args.oneply_gens < 0:
         raise SystemExit("--oneply-gens must be >= 0")
     if not Path(args.selfplay_gpu).exists() and not args.dry_run:
@@ -636,6 +662,13 @@ def main(argv=None):
                 f"resume mismatch: run used a_cond={old.get('a_cond')}, "
                 f"current a_cond={args.a_cond}"
             )
+        # Generation 0 already happened: a different warm start would describe a
+        # run that was never made.
+        if str(old.get("init_model", "")) != str(args.init_model):
+            raise SystemExit(
+                f"resume mismatch: run started from {old.get('init_model') or 'a random net'}, "
+                f"current --init-model is {args.init_model or 'a random net'}"
+            )
     manifest["config"] = vars(args)
     manifest["started"] = manifest.get("started", now())
     manifest["updated"] = now()
@@ -657,25 +690,44 @@ def main(argv=None):
             log(f"generation {gen}: already complete, skipping")
             continue
 
-        if gen == 0:
+        if gen == 0 and args.init_model:
+            # Warm start: the chain does not begin from a random net, it begins
+            # from an existing model trained on data that already exists.  The
+            # alternative (gen0 = random moves, gen1/gen2 = oneply) throws away
+            # everything the previous run learned before it produces anything.
+            mode = "warm"
+        elif gen == 0:
             mode = "random"
         elif gen <= args.oneply_gens:
             mode = "oneply"
         else:
             mode = "selfplay"
-        if mode != "random" and (previous_model is None or not Path(previous_model).exists()):
+        if mode not in ("random", "warm") and (
+            previous_model is None or not Path(previous_model).exists()
+        ):
             raise RuntimeError(f"generation {gen}: no model to generate {mode} data with")
 
         log(f"===== generation {gen}/{args.generations - 1} ({mode}) =====")
-        shard, samples, stats = generate(args, gen_dir, gen, mode, previous_model)
-        target_record = check_targets(args, gen, mode, samples, stats)
-
-        shards = replay_shards(run_dir, gen, args.replay_gens) or [shard]
-        if args.dry_run:
-            shards = [shard]
+        if mode == "warm":
+            shards = expand_shards(args.init_data)
+            samples = sum(shard_stats(path) for path in shards) if not args.dry_run else 0
+            stats = None
+            target_record = None
+            log(f"generation {gen}: warm start from {args.init_model} on "
+                f"{len(shards)} existing shard(s)")
+        else:
+            shard, samples, stats = generate(args, gen_dir, gen, mode, previous_model)
+            target_record = check_targets(args, gen, mode, samples, stats)
+            shards = replay_shards(run_dir, gen, args.replay_gens) or [shard]
+            if args.dry_run:
+                shards = [shard]
         log(f"generation {gen}: training on {len(shards)} shard(s)")
 
-        candidate, summary = train(args, gen_dir, gen, shards, None if gen == 0 else previous_model)
+        if mode == "warm":
+            candidate, summary = train(args, gen_dir, gen, shards, args.init_model)
+        else:
+            candidate, summary = train(args, gen_dir, gen, shards,
+                                       None if gen == 0 else previous_model)
         train_samples = sum(shard_stats(path) for path in shards)
         steps_per_epoch = max(
             1, (int(train_samples * (1.0 - args.val)) + args.batch - 1) // args.batch
@@ -704,7 +756,12 @@ def main(argv=None):
         # distribution and waste generations -- which is exactly what happened in
         # the 3080 run, where gen3..gen6 all played with gen2's weights.
         record["chained_from"] = str(previous_model) if previous_model else ""
-        if gen == 0 or previous_model is None:
+        if gen == 0 and mode == "warm":
+            # A warm start is measurable: it must not be worse than what it
+            # started from, or the fine-tune threw the old model away.
+            record["arena"] = arena(args, gen_dir, gen, candidate, args.init_model,
+                                    name_b="warm_start")
+        elif gen == 0 or previous_model is None:
             record["arena"] = {"note": "bootstrap generation; nothing to compare against"}
         else:
             record["arena"] = arena(args, gen_dir, gen, candidate, previous_model)

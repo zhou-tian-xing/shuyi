@@ -3,7 +3,13 @@
 # disconnect, and a machine-readable manifest that makes --resume safe.
 #
 #   bash training/run_generation.sh                        # 8 generations
-#   GENERATIONS=6 VISITS=2000 bash training/run_generation.sh
+#   GENERATIONS=6 VISITS=3000 bash training/run_generation.sh
+#   INIT_MODEL=models/b4c32-s34760-d470705.bin \
+#   INIT_DATA="runs/blocking/blk1/gen_00*/selfplay" bash training/run_generation.sh
+#
+# INIT_MODEL/INIT_DATA continue from an existing model instead of starting a
+# chain from a random net: generation 0 fine-tunes INIT_MODEL on the shards in
+# INIT_DATA (and is measured against INIT_MODEL in the arena).
 #
 # Everything runs on the GPU: positions from shuyi_selfplay_gpu (C++ tree +
 # batched CUDA evaluation), training from training/train_resnet.py.
@@ -29,6 +35,10 @@ BATCH_GAMES="${BATCH_GAMES:-128}"
 # default (blocking +1.26, classic -0.5).
 A_COND="${A_COND:-1}"
 A_ANCHOR="${A_ANCHOR:-}"
+# Continue from an existing model instead of a random chain start.  INIT_DATA
+# may list several shard files, globs or directories (space separated).
+INIT_MODEL="${INIT_MODEL:-}"
+INIT_DATA="${INIT_DATA:-}"
 
 BIN="$BUILD/shuyi_selfplay_gpu"
 [ -x "$BIN" ] || { echo "build first: bash training/server_setup.sh" >&2; exit 1; }
@@ -51,6 +61,15 @@ if [ "$A_COND" = "1" ]; then
 fi
 if [ -n "$KOMI" ]; then
     EXTRA+=(--komi "$KOMI")
+fi
+if [ -n "$INIT_MODEL" ]; then
+    if [ -z "$INIT_DATA" ]; then
+        echo "INIT_MODEL needs INIT_DATA (shards the warm-start generation trains on)" >&2
+        exit 1
+    fi
+    EXTRA+=(--init-model "$INIT_MODEL")
+    read -r -a INIT_SHARDS <<< "$INIT_DATA"
+    EXTRA+=(--init-data "${INIT_SHARDS[@]}")
 fi
 
 nohup python3 -u "$REPO/training/pipeline.py" \
