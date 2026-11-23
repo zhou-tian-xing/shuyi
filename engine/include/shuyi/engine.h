@@ -21,9 +21,11 @@ bool parseEngineName(const std::string& name, EngineKind& kind);
 // Optional replacement for the CPU network forward.  The line-protocol engine
 // hands in a CUDA evaluator when the build has one, so the UI's MCTS+NN can run
 // on the GPU instead of one CPU core.  Left empty -> PolicyValueNet on the CPU.
+// A is passed through: a model that cannot see it says so via `aInput`.
 struct NnOverride {
-    std::function<NnOutput(const Position&)> evaluate;
+    std::function<NnOutput(const Position&, double aValue)> evaluate;
     std::function<bool()> hasScoreHead;
+    std::function<bool()> aInput;
 };
 
 struct EngineOptions {

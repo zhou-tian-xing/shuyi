@@ -7,7 +7,7 @@ variable so it never appears in the process list:
 
   export SHUYI_SSH_PASSWORD='...'
   python training/remote_deploy.py --host 1.2.3.4 --user ubuntu \
-      --remote-dir /home/ubuntu/shuyi --setup --start --workers 24
+      --remote-dir /home/ubuntu/shuyi --setup --start --generations 8
 
 The archive excludes build/, runs/, .venv/ and data/*.bin; the server rebuilds
 the C++ binaries with training/setup_ubuntu.sh.
@@ -52,7 +52,6 @@ def main(argv=None):
     parser.add_argument("--setup", action="store_true", help="run setup_ubuntu.sh")
     parser.add_argument("--start", action="store_true", help="start 15-gen run with nohup")
     parser.add_argument("--run-name", default="")
-    parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--generations", type=int, default=15)
     parser.add_argument("--skip-upload", action="store_true")
     args = parser.parse_args(argv)
@@ -106,13 +105,14 @@ def main(argv=None):
         if args.setup:
             run(f"cd {shlex.quote(args.remote_dir)} && bash training/setup_ubuntu.sh")
         if args.start:
-            run_name = args.run_name or "run_15gen"
-            workers = f"--workers {args.workers}" if args.workers > 0 else ""
-            generations = f"--generations {args.generations}"
+            # run_generation.sh reads the run shape from the environment; the
+            # 15-gen wrapper it used to call does not exist any more.
+            run_name = args.run_name or "run_latest"
             command = (
                 f"cd {shlex.quote(args.remote_dir)} && "
-                f"nohup bash training/run_15gen.sh --run-name {shlex.quote(run_name)} "
-                f"{generations} {workers} > training_full.log 2>&1 & echo $!"
+                f"RUN_NAME={shlex.quote(run_name)} GENERATIONS={int(args.generations)} "
+                f"nohup bash training/run_generation.sh "
+                f"> training_full.log 2>&1 & echo $!"
             )
             run(command, check=False)
             print("started in background; monitor with:")

@@ -68,6 +68,11 @@ private:
 
     std::string backend_ = "auto";  // requested
     std::string backendUsed_ = "cpu";
+    // True when the loaded model was trained with A as an input (v4).  A v3
+    // model still plays, but its value head cannot see A, so the protocol says
+    // so (`capabilities` and every JSON line) instead of letting a front end
+    // show a komi control that does nothing.
+    bool aInput_ = false;
     std::string id_;                // id of the command being handled
     bool quit_ = false;
 };

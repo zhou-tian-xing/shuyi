@@ -14,7 +14,7 @@ include/shuyi/
   engine.h        Engine 基类、EngineOptions、SearchRequest（visits/interval）、Analysis
   ai.h            剪枝搜索：SearchOptions（nodeLimit）、SearchResult、searchAlphaBeta
   ai_policy.h     "评估 + 排序"策略接口；规则特异的实现由 ai_blocking.cpp 提供
-  nn.h            策略价值网络：SHUYINN3 文件格式、特征平面、CPU 前向、分数头
+  nn.h            策略价值网络：SHUYINN3/SHUYINN4 文件格式、特征平面、CPU 前向、分数头
   nn_cuda.h       CUDA 批量前向接口
   tt.h            置换表
   protocol.h      行协议会话：命令解析、位置状态、单搜索线程

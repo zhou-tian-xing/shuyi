@@ -97,7 +97,7 @@ def main(argv=None):
             f"gpu:{models[0]}", f"gpu:{models[-1]}",
         ]
         lines_json = out_dir / "lines.json"
-        run([PY, REPO / "experimental" / "training" / "arena.py",
+        run([PY, REPO / "training" / "arena.py",
              "--players", *players,
              "--games", args.lines_games,
              "--visits", args.lines_visits,
@@ -113,7 +113,7 @@ def main(argv=None):
 
     if not args.skip_gens and len(models) > 1:
         gens_json = out_dir / "gens.json"
-        cmd = [PY, REPO / "experimental" / "training" / "elo.py",
+        cmd = [PY, REPO / "training" / "elo.py",
                "--models", *models,
                "--labels", *gens_labels,
                "--games", args.gens_games,
@@ -134,14 +134,14 @@ def main(argv=None):
 
     merged = out_dir / "merged.json"
     if len(reports) > 1:
-        merge_cmd = [PY, REPO / "experimental" / "training" / "elo.py", "--anchor", "random",
+        merge_cmd = [PY, REPO / "training" / "elo.py", "--anchor", "random",
                      "--bootstrap", args.bootstrap, "--ratings-json", out_dir / "ratings.json"]
         for report in reports:
             merge_cmd += ["--report", report]
         text = run(merge_cmd)
         # Keep a merged matrix on disk as well, so the table can be refitted later.
         import importlib.util
-        spec = importlib.util.spec_from_file_location("elo", str(REPO / "experimental" / "training" / "elo.py"))
+        spec = importlib.util.spec_from_file_location("elo", str(REPO / "training" / "elo.py"))
         elo = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(elo)
         names, pairs, visits = elo.merge_reports([str(r) for r in reports])
@@ -153,7 +153,7 @@ def main(argv=None):
             "ruleset": args.ruleset,
         }, indent=2), encoding="utf-8")
     else:
-        text = run([PY, REPO / "experimental" / "training" / "elo.py", "--report", reports[0],
+        text = run([PY, REPO / "training" / "elo.py", "--report", reports[0],
                     "--anchor", "random", "--bootstrap", args.bootstrap])
 
     header = (f"# {args.ruleset} cross-line rating\n\n"

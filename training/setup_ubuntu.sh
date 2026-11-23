@@ -52,7 +52,10 @@ print("device", torch.cuda.get_device_name(0))
 print("capability", torch.cuda.get_device_capability(0))
 PY
 
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+# The training server is a developer machine: it needs tools/ (self-play,
+# tournaments, probes) as well as the two products, so tools are switched on
+# here.  A release build leaves SHUYI_BUILD_TOOLS off and ships nothing from it.
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSHUYI_BUILD_TOOLS=ON
 cmake --build build -j "$(nproc)"
 
 ctest --test-dir build --output-on-failure
@@ -60,5 +63,5 @@ ctest --test-dir build --output-on-failure
 echo
 echo "== ready =="
 echo "activate: source $ROOT/.venv/bin/activate"
-echo "quick check: ./build/shuyi_selfplay --help"
-echo "15 generations: bash training/run_15gen.sh"
+echo "quick check: ./build/shuyi_selfplay_gpu --help"
+echo "one generation run: bash training/run_generation.sh"

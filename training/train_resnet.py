@@ -39,7 +39,13 @@ import torch.nn.functional as F
 CELLS = 81
 INPUT_PLANES = 19
 INPUT_PLANES_V3 = 37
-GLOBAL = 22
+# Global feature width.  v4 (this trainer) appends A and |A| at 22..23 so the
+# value head can answer "who wins given this A" instead of only learning the
+# outcome under one fixed komi.  GLOBAL_V3 is the old 22-wide layout, still
+# readable so an existing model can warm start a v4 one.
+GLOBAL = 24
+GLOBAL_V3 = 22
+A_SCALE = 10.0
 POLICY = 729
 VALUE_HIDDEN = 32
 MAGIC1 = b"SYSELF1\x00"
@@ -98,25 +104,29 @@ class ResBlock(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, channels=16, blocks=2, input_planes=INPUT_PLANES, ruleset=0):
+    def __init__(self, channels=16, blocks=2, input_planes=INPUT_PLANES, ruleset=0,
+                 globals=GLOBAL):
         super().__init__()
         self.channels = int(channels)
         self.blocks = int(blocks)
         self.input_planes = int(input_planes)
+        self.globals = int(globals)
         self.ruleset = int(ruleset)
         if self.input_planes not in (INPUT_PLANES, INPUT_PLANES_V3):
             raise ValueError(f"unsupported input planes: {self.input_planes}")
+        if self.globals not in (GLOBAL, GLOBAL_V3):
+            raise ValueError(f"unsupported global features: {self.globals}")
         self.stem = nn.Conv2d(self.input_planes, channels, 3, padding=1, bias=True)
         self.res_blocks = nn.ModuleList([ResBlock(channels) for _ in range(blocks)])
         self.policy = nn.Conv2d(channels, 9, 1, padding=0, bias=True)
-        self.hand_bias = nn.Linear(GLOBAL, 9, bias=True)
+        self.hand_bias = nn.Linear(self.globals, 9, bias=True)
         # Optional score head: predicts the final raw score, tanh-squashed.
         self.use_score_head = False
         self.score_conv = nn.Conv2d(channels, 1, 1, bias=True)
-        self.score_bias = nn.Linear(1 + GLOBAL, VALUE_HIDDEN, bias=True)
+        self.score_bias = nn.Linear(1 + self.globals, VALUE_HIDDEN, bias=True)
         self.score_out = nn.Linear(VALUE_HIDDEN, 1, bias=True)
         self.value_conv = nn.Conv2d(channels, 1, 1, padding=0, bias=True)
-        self.value_fc1 = nn.Linear(1 + GLOBAL, VALUE_HIDDEN, bias=True)
+        self.value_fc1 = nn.Linear(1 + self.globals, VALUE_HIDDEN, bias=True)
         self.value_fc2 = nn.Linear(VALUE_HIDDEN, 1, bias=True)
 
     def forward(self, x, global_features):
@@ -227,10 +237,14 @@ def _max_neighbor5(planes):
     return out
 
 
-def make_inputs(data, input_planes=INPUT_PLANES):
+def make_inputs(data, input_planes=INPUT_PLANES, a_values=None, globals_width=GLOBAL):
     """Vectorized feature construction matching src/nn.cpp."""
     if input_planes not in (INPUT_PLANES, INPUT_PLANES_V3):
         raise ValueError(f"unsupported input planes: {input_planes}")
+    if globals_width not in (GLOBAL, GLOBAL_V3):
+        raise ValueError(f"unsupported global features: {globals_width}")
+    if globals_width == GLOBAL and a_values is None:
+        raise ValueError("a 24-wide global vector needs a-values")
     n = len(data)
     boards = data["board"].astype(np.int16)
     hands = data["hand"].astype(np.float32)
@@ -248,7 +262,7 @@ def make_inputs(data, input_planes=INPUT_PLANES):
                 x[:, plane, :, :] = (hands[:, side * 9 + number] / 3.0)[:, None, None]
     x[:, 18, :, :] = sides[:, None, None]
 
-    g = np.zeros((n, GLOBAL), dtype=np.float32)
+    g = np.zeros((n, globals_width), dtype=np.float32)
     g[:, :18] = hands / 3.0
     g[:, 18] = sides
     board3 = boards.reshape(n, 9, 9)
@@ -262,7 +276,34 @@ def make_inputs(data, input_planes=INPUT_PLANES):
     g[:, 19] = raw / 81.0
     g[:, 20] = data["ply"].astype(np.float32) / 54.0 if "ply" in data.dtype.names else 0.0
     g[:, 21] = (boards.reshape(n, CELLS) == 0).sum(axis=1) / 81.0
-    return torch.from_numpy(x), torch.from_numpy(g)
+    if globals_width == GLOBAL:
+        apply_a_features(g, a_values)
+    return torch.from_numpy(x), torch.from_numpy(g), raw
+
+
+def apply_a_features(g, a_values):
+    """Writes A/10 and |A|/10 into columns 22..23, matching buildGlobals()."""
+    scaled = np.asarray(a_values, dtype=np.float32) / A_SCALE
+    g[:, 22] = np.clip(scaled, -2.0, 2.0)
+    g[:, 23] = np.clip(np.abs(scaled), 0.0, 2.0)
+    return g
+
+
+def value_from_score(data, a_values):
+    """P(mover wins) given A: sign(final raw score + A, mover's perspective).
+
+    `score` is stored raw (no komi) from the mover's point of view, so the A
+    term flips sign with the side: A is added to Red's score, and Black wants
+    Red's total to be negative.  This is the exact game result, which makes it a
+    better value target than the search value it replaces (that one is a
+    bootstrapped estimate of the same thing under a single A).
+    """
+    if "score" not in data.dtype.names:
+        raise ValueError("A-conditioned value targets need SYSELF4 data with a score field")
+    score = data["score"].astype(np.float32)
+    side_sign = np.where(data["side"].astype(np.int64) == 0, 1.0, -1.0).astype(np.float32)
+    total = score + side_sign * np.asarray(a_values, dtype=np.float32)
+    return (total > 0).astype(np.float32), (total == 0).astype(np.float32)
 
 
 def make_legal_mask(data):
@@ -286,21 +327,25 @@ def _read_float_tensor(f, shape):
 def load_bin(model, path):
     with open(path, "rb") as f:
         magic = f.read(8)
-        if magic not in (b"SHUYINN2", b"SHUYINN3"):
+        if magic not in (b"SHUYINN2", b"SHUYINN3", b"SHUYINN4"):
             raise ValueError(f"bad model magic {magic!r}")
         version, channels, blocks, inputs, globals_ = struct.unpack("<IIIII", f.read(20))
         file_ruleset = 0
-        if magic == b"SHUYINN3":
+        if magic in (b"SHUYINN3", b"SHUYINN4"):
             flags, file_ruleset, feature_version, _reserved = struct.unpack("<IBBH", f.read(8))
             if feature_version != 1:
                 raise ValueError(f"unsupported feature layout {feature_version}")
             has_score = bool(flags & 1)
-            if version != 3:
+            expected = 4 if magic == b"SHUYINN4" else 3
+            if version != expected:
                 raise ValueError("unsupported model format")
         elif version != 2:
             raise ValueError("unsupported model format")
-        if globals_ != GLOBAL:
-            raise ValueError("unsupported model format")
+        if globals_ not in (GLOBAL, GLOBAL_V3):
+            raise ValueError(
+                f"model has {globals_} global features, expected {GLOBAL} (v4) or "
+                f"{GLOBAL_V3} (v3)"
+            )
         if file_ruleset != getattr(model, "ruleset", 0):
             raise ValueError(
                 f"model was trained for the {RULESET_NAMES.get(file_ruleset, file_ruleset)} "
@@ -312,6 +357,12 @@ def load_bin(model, path):
         expand = inputs != model.input_planes
         if expand and not (inputs == INPUT_PLANES and model.input_planes == INPUT_PLANES_V3):
             raise ValueError(f"cannot warm start {model.input_planes} planes from {inputs}")
+        # A 22-wide global vector (v3) can warm start a 24-wide one (v4): the new
+        # A columns start at zero, which makes the old value head exactly
+        # preserved until fine-tuning gives A real weight.
+        grow_globals = globals_ != model.globals
+        if grow_globals and not (globals_ == GLOBAL_V3 and model.globals == GLOBAL):
+            raise ValueError(f"cannot warm start {model.globals} globals from {globals_}")
         if channels != model.channels or blocks != model.blocks:
             raise ValueError(
                 f"model shape mismatch: file {channels}x{blocks}, "
@@ -336,11 +387,30 @@ def load_bin(model, path):
             state[f"res_blocks.{i}.conv2.bias"] = _read_float_tensor(f, (channels,))
         state["policy.weight"] = _read_float_tensor(f, (9, channels, 1, 1))
         state["policy.bias"] = _read_float_tensor(f, (9,))
-        state["hand_bias.weight"] = _read_float_tensor(f, (9, GLOBAL))
+
+        def widen(tensor, src_width, dst_width):
+            """Zero-pad a [out, width] tensor on the right.
+
+            The global vector is a trailing block, so the first `src_width`
+            columns keep their meaning; for value_fc1 that block starts with the
+            spatial value, hence 1 + globals rather than globals.
+            """
+            if not grow_globals:
+                return tensor
+            grown = torch.zeros(tensor.shape[0], dst_width)
+            grown[:, :src_width] = tensor
+            return grown
+
+        state["hand_bias.weight"] = widen(
+            _read_float_tensor(f, (9, globals_)), globals_, model.globals
+        )
         state["hand_bias.bias"] = _read_float_tensor(f, (9,))
         state["value_conv.weight"] = _read_float_tensor(f, (1, channels, 1, 1))
         state["value_conv.bias"] = _read_float_tensor(f, (1,))
-        state["value_fc1.weight"] = _read_float_tensor(f, (VALUE_HIDDEN, 1 + GLOBAL))
+        state["value_fc1.weight"] = widen(
+            _read_float_tensor(f, (VALUE_HIDDEN, 1 + globals_)), 1 + globals_,
+            1 + model.globals
+        )
         state["value_fc1.bias"] = _read_float_tensor(f, (VALUE_HIDDEN,))
         state["value_fc2.weight"] = _read_float_tensor(f, (1, VALUE_HIDDEN))
         state["value_fc2.bias"] = _read_float_tensor(f, (1,))
@@ -357,11 +427,16 @@ def save_bin(model, path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
+    globals_width = getattr(model, "globals", GLOBAL)
+    # A 24-wide global vector means the model reads A, so the file must say v4:
+    # an older engine refuses a v4 file instead of reading 24-wide weights as 22.
+    magic, version = (b"SHUYINN4", 4) if globals_width == GLOBAL else (b"SHUYINN3", 3)
     with open(tmp, "wb") as f:
-        f.write(b"SHUYINN3")
+        f.write(magic)
         f.write(
             struct.pack(
-                "<IIIII", 3, model.channels, model.blocks, model.input_planes, GLOBAL
+                "<IIIII", version, model.channels, model.blocks, model.input_planes,
+                globals_width
             )
         )
         flags = 1 if getattr(model, "use_score_head", False) else 0
@@ -501,6 +576,18 @@ def main(argv=None):
     parser.add_argument("--score-weight", type=float, default=0.0,
                         help=">0 enables the score head (needs SYSELF4 data with a score field)")
     parser.add_argument("--label-smoothing", type=float, default=0.02)
+    # --- A conditioning (v4) -------------------------------------------------
+    parser.add_argument("--a-cond", action="store_true",
+                        help="train with A as an input (v4 model): the global vector grows "
+                             "to 24 and the value target is sign(final raw score + A)")
+    parser.add_argument("--a-range", type=float, default=12.0,
+                        help="training A is drawn uniformly from [-range, range]")
+    parser.add_argument("--a-anchor", type=float, default=1.26,
+                        help="the A the engine actually plays with (avalue.py measured "
+                             "+1.26 at 192 visits); part of every epoch uses it verbatim")
+    parser.add_argument("--a-anchor-fraction", type=float, default=0.35,
+                        help="fraction of training samples drawn at the anchor A; the "
+                             "rest explore the range (0 = never, 1 = anchor only)")
     parser.add_argument("--val", type=float, default=0.08)
     parser.add_argument("--max-samples", type=int, default=400000)
     parser.add_argument("--augment", action="store_true", default=True)
@@ -515,6 +602,11 @@ def main(argv=None):
     parser.add_argument("--log-every", type=int, default=50)
     args = parser.parse_args(argv)
 
+    if not 0.0 <= args.a_anchor_fraction <= 1.0:
+        raise SystemExit("--a-anchor-fraction must be in [0, 1]")
+    if args.a_range < 0.0:
+        raise SystemExit("--a-range must be >= 0")
+
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     if torch.cuda.is_available():
@@ -523,7 +615,11 @@ def main(argv=None):
 
     if args.init_only:
         code = 0 if args.ruleset == "classic" else 1
-        save_bin(ResNet(args.channels, args.blocks, args.input_planes, code), args.out)
+        save_bin(
+            ResNet(args.channels, args.blocks, args.input_planes, code,
+                   GLOBAL if args.a_cond else GLOBAL_V3),
+            args.out,
+        )
         print(f"wrote initial model {args.out}", flush=True)
         return 0
     if not args.data:
@@ -532,9 +628,22 @@ def main(argv=None):
     data = load_shards(args.data, args.max_samples, args.seed,
                       0 if args.ruleset == "classic" else 1)
     train_mask, val_mask = split_by_game(data, args.val, args.seed)
-    x, g = make_inputs(data, args.input_planes)
+    if args.a_cond and "score" not in data.dtype.names:
+        raise SystemExit(
+            "--a-cond needs the final score of every game (SYSELF4 data); the older "
+            "shards cannot relabel the value target for a random A"
+        )
+    # Without --a-cond the model keeps the old 22-wide global vector: an A-blind
+    # model stays a deliberate choice rather than an accident.
+    globals_width = GLOBAL if args.a_cond else GLOBAL_V3
+    a_values = np.full(len(data), args.a_anchor, dtype=np.float32)
+    x, g, _raw = make_inputs(data, args.input_planes, a_values, globals_width)
     policy = torch.from_numpy(data["policy"].astype(np.float32))
-    value = torch.from_numpy(data["value"].astype(np.float32))
+    if args.a_cond:
+        win, tie = value_from_score(data, a_values)
+        value = torch.from_numpy((win * (1.0 - 0.5 * tie) + 0.5 * tie).astype(np.float32))
+    else:
+        value = torch.from_numpy(data["value"].astype(np.float32))
     score = None
     if args.score_weight > 0:
         if "score" not in data.dtype.names:
@@ -555,7 +664,8 @@ def main(argv=None):
     )
 
     ruleset_code = 0 if args.ruleset == "classic" else 1
-    model = ResNet(args.channels, args.blocks, args.input_planes, ruleset_code).to(device)
+    model = ResNet(args.channels, args.blocks, args.input_planes, ruleset_code,
+                   globals_width).to(device)
     model.use_score_head = args.score_weight > 0
     if args.init_model:
         load_bin(model, args.init_model)
@@ -569,8 +679,11 @@ def main(argv=None):
     if args.resume:
         checkpoint = torch.load(args.resume, map_location="cpu", weights_only=False)
         if (checkpoint["channels"] != args.channels or checkpoint["blocks"] != args.blocks
-                or checkpoint.get("input_planes", INPUT_PLANES) != args.input_planes):
-            raise ValueError("checkpoint shape does not match --channels/--blocks/--input-planes")
+                or checkpoint.get("input_planes", INPUT_PLANES) != args.input_planes
+                or checkpoint.get("globals", globals_width) != globals_width):
+            raise ValueError(
+                "checkpoint shape does not match --channels/--blocks/--input-planes/globals"
+            )
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         start_epoch = int(checkpoint["epoch"]) + 1
@@ -588,6 +701,26 @@ def main(argv=None):
     if history:
         best_score = min(float(row.get("val_loss", 1e9)) for row in history)
     global_step = start_epoch * steps_per_epoch
+
+    # A-conditioned training: every epoch redraws A per sample, so one position
+    # teaches the head "wins under A=-6, loses under A=+6" instead of memorising
+    # a single komi.  Validation always sits at the anchor A, which keeps
+    # val_loss comparable between epochs and equal to the operating point.
+    g_np = g.numpy()
+    value_np = value.numpy()
+
+    def draw_a(epoch):
+        if not args.a_cond:
+            return
+        rng = np.random.default_rng(np.uint64(args.seed) * 7919 + epoch)
+        draw = rng.uniform(-args.a_range, args.a_range, len(data)).astype(np.float32)
+        if args.a_anchor_fraction > 0.0:
+            at_anchor = rng.random(len(data)) < args.a_anchor_fraction
+            draw[at_anchor] = args.a_anchor
+        draw[~train_mask] = args.a_anchor
+        apply_a_features(g_np, draw)
+        win, tie = value_from_score(data, draw)
+        value_np[:] = win * (1.0 - 0.5 * tie) + 0.5 * tie
 
     if args.log_csv and not Path(args.log_csv).exists():
         Path(args.log_csv).parent.mkdir(parents=True, exist_ok=True)
@@ -609,6 +742,7 @@ def main(argv=None):
 
     for epoch in range(start_epoch, args.epochs):
         model.train()
+        draw_a(epoch)
         order = train_idx[torch.randperm(len(train_idx), generator=torch.Generator().manual_seed(args.seed + epoch))]
         total_loss = 0.0
         seen = 0
@@ -709,6 +843,7 @@ def main(argv=None):
                 "channels": args.channels,
                 "blocks": args.blocks,
                 "input_planes": args.input_planes,
+                "globals": globals_width,
                 "history": history,
                 "args": vars(args),
             }
@@ -736,6 +871,10 @@ def main(argv=None):
         "channels": int(args.channels),
         "blocks": int(args.blocks),
         "input_planes": int(args.input_planes),
+        "globals": int(globals_width),
+        "a_cond": bool(args.a_cond),
+        "a_anchor": float(args.a_anchor),
+        "a_range": float(args.a_range),
         "best_val_loss": float(best_score),
         "last": history[-1] if history else {},
     }

@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tools.train_resnet import (  # noqa: E402
+from train_resnet import (  # noqa: E402
     ResNet,
     load_bin,
     load_shards,
@@ -32,6 +32,8 @@ def main(argv=None):
     parser.add_argument("--blocks", type=int, default=4)
     parser.add_argument("--input-planes", type=int, default=19, choices=[19, 37])
     parser.add_argument("--max-samples", type=int, default=200000)
+    parser.add_argument("--a", type=float, default=1.26,
+                        help="A value the value head is queried with")
     parser.add_argument("--json", default="", help="optional metrics json")
     args = parser.parse_args(argv)
 
@@ -45,7 +47,9 @@ def main(argv=None):
     data = data[data["ply"] <= args.ply]
     if len(data) == 0:
         raise SystemExit("no opening samples")
-    x, g = make_inputs(data, args.input_planes)
+    a_values = np.full(len(data), args.a, dtype=np.float32)
+    x, g, _raw = make_inputs(data, args.input_planes, a_values,
+                             getattr(model, "globals", GLOBAL))
     mask = make_legal_mask(data)
     x = x.to(device)
     g = g.to(device)

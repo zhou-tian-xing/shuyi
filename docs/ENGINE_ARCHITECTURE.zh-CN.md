@@ -179,7 +179,8 @@ info engine=mcts visits=20000 winrate=0.57 best=e5:7 moves=e5:7:0.57:9000,c4:3:0
 - UI 通过 `CreateProcessW` + 匿名管道启动引擎；reader 线程入队，100ms Timer 消费并重绘。
 - MCTS 节点/边使用 SoA；`onPlay()` 尝试把根推进到对应子节点，失败则重置。
 - MCTS-NN 使用 KataGo 风格 ResNet：19 个输入平面、可配置通道/残差块，
-  策略头输出 729 个 `(格子,数字)` logits，价值头融合 22 维全局特征
+  策略头输出 729 个 `(格子,数字)` logits，价值头融合 22 维全局特征（v4 模型 24 维，
+  末尾是 A/10 与 |A|/10，这样 A 才是网络的输入而不只是终局判定的一部分）
   （双方手牌、行棋方、当前局面分、手数、空格数）。仓库基线模型
   `models/shuyi_resnet_v1.bin` 是 16×2；服务器训练脚本默认 32×4，
   导出格式相同。

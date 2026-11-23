@@ -432,7 +432,7 @@ void testNnModel() {
     CHECK(net.load(path, &error));
     if (!error.empty()) std::cerr << error << "\n";
     Position position;
-    const NnOutput output = net.evaluate(position);
+    const NnOutput output = net.evaluate(position, 1.0);
     CHECK(output.value >= 0.0f && output.value <= 1.0f);
     const Move move(index(4, 4), 7);
     CHECK(move.valid());
@@ -451,7 +451,7 @@ void testNnModel() {
     CHECK(reloaded.load(temp, &error));
     CHECK(reloaded.channels() == 8);
     CHECK(reloaded.blocks() == 1);
-    const NnOutput reloadedOutput = reloaded.evaluate(position);
+    const NnOutput reloadedOutput = reloaded.evaluate(position, 1.0);
     CHECK(reloadedOutput.value >= 0.0f && reloadedOutput.value <= 1.0f);
     std::filesystem::remove(temp);
 
@@ -462,9 +462,34 @@ void testNnModel() {
     PolicyValueNet v3reloaded;
     CHECK(v3reloaded.load(temp, &error));
     CHECK(v3reloaded.modelInputPlanes() == kResInputPlanesV3);
-    const NnOutput v3out = v3reloaded.evaluate(position);
+    const NnOutput v3out = v3reloaded.evaluate(position, 1.0);
     CHECK(v3out.value >= 0.0f && v3out.value <= 1.0f);
     std::filesystem::remove(temp);
+
+    // v4: A is an input.  A v4 model must answer differently for different A; a
+    // v3 model cannot see A and answers identically -- that asymmetry is the
+    // whole point, and it is what made "set_a 10" leave a midgame win rate
+    // unchanged.  Both directions are asserted, so dropping A from the input or
+    // misreading an old file as A-aware fails here.
+    PolicyValueNet aAware = PolicyValueNet::random(45, "a-input-test", 8, 1);
+    CHECK(aAware.aInput());
+    CHECK(aAware.globalFeatures() == kResGlobalFeatures);
+    const NnOutput aLow = aAware.evaluate(position, -6.0);
+    const NnOutput aHigh = aAware.evaluate(position, 6.0);
+    CHECK(std::fabs(aLow.value - aHigh.value) > 1e-6f);
+    CHECK(aAware.save(temp, &error));
+    PolicyValueNet aReloaded;
+    CHECK(aReloaded.load(temp, &error));
+    CHECK(aReloaded.aInput());
+    CHECK(std::fabs(aReloaded.evaluate(position, 6.0).value - aHigh.value) < 1e-6f);
+    std::filesystem::remove(temp);
+
+    PolicyValueNet aBlind;
+    CHECK(aBlind.load(std::string(SHUYI_SOURCE_DIR) + "/models/shuyi_resnet_v1.bin", &error));
+    CHECK(!aBlind.aInput());
+    const float blindLow = aBlind.evaluate(position, -6.0).value;
+    const float blindHigh = aBlind.evaluate(position, 6.0).value;
+    CHECK(blindLow == blindHigh);
 
     // Score head flag must survive clear()/allocate() inside load(); it is a
     // separate bit in the v3 header and used to be wiped on the way in.
@@ -475,7 +500,7 @@ void testNnModel() {
     PolicyValueNet scoreLoaded;
     CHECK(scoreLoaded.load(temp, &error));
     CHECK(scoreLoaded.hasScoreHead());
-    const NnOutput scored = scoreLoaded.evaluate(position);
+    const NnOutput scored = scoreLoaded.evaluate(position, 1.0);
     // Output bias 1.0 through tanh: the head is untrained but not silent.
     CHECK(std::isfinite(scored.expectedScore));
     CHECK(std::fabs(scored.expectedScore - std::tanh(1.0f) * kScoreScale) < 1e-3f);

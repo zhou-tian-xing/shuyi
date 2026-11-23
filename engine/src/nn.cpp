@@ -18,17 +18,20 @@ namespace shuyi {
 namespace {
 // v2 (historical) carries only the shape.  v3 adds the rule set and the feature
 // layout so a model can never be silently loaded into the wrong game, plus a
-// flags word for heads that may be added later (the score head).
+// flags word for heads that may be added later (the score head).  v4 appends
+// A and |A| to the global vector, which is what makes A a real input instead of
+// a constant the value head never sees.
 constexpr char kMagicV2[8] = {'S', 'H', 'U', 'Y', 'I', 'N', 'N', '2'};
 constexpr char kMagicV3[8] = {'S', 'H', 'U', 'Y', 'I', 'N', 'N', '3'};
+constexpr char kMagicV4[8] = {'S', 'H', 'U', 'Y', 'I', 'N', 'N', '4'};
 constexpr std::uint32_t kVersion2 = 2;
 constexpr std::uint32_t kVersion3 = 3;
+constexpr std::uint32_t kVersion4 = 4;
 // Feature layouts: 1 = stones 0..17, side to move 18, hand planes 19..36.
 constexpr std::uint8_t kFeatureVersion = 1;
 constexpr std::uint32_t kFlagScoreHead = 1u << 0;
 
 constexpr int kPlane = kCells;
-constexpr int kHiddenInput = 1 + kResGlobalFeatures;
 constexpr int kMaxChannels = 128;
 constexpr int kMaxBlocks = 16;
 
@@ -143,10 +146,12 @@ void PolicyValueNet::clear() {
     modelName_.clear();
 }
 
-void PolicyValueNet::allocate(int channels, int blocks, int inputPlanes) {
+void PolicyValueNet::allocate(int channels, int blocks, int inputPlanes, int globals) {
     channels_ = std::clamp(channels, 1, kMaxChannels);
     blocks_ = std::clamp(blocks, 1, kMaxBlocks);
     inputPlanes_ = std::clamp(inputPlanes, 1, 64);
+    globals_ = std::clamp(globals, kResGlobalFeaturesV3, kResGlobalFeatures);
+    const int hiddenInput = 1 + globals_;
     stemW_.assign(static_cast<std::size_t>(channels_) * inputPlanes_ * 9, 0.0f);
     stemB_.assign(channels_, 0.0f);
     blocksData_.clear();
@@ -159,15 +164,15 @@ void PolicyValueNet::allocate(int channels, int blocks, int inputPlanes) {
     }
     policyW_.assign(static_cast<std::size_t>(9) * channels_, 0.0f);
     policyB_.assign(9, 0.0f);
-    handW_.assign(static_cast<std::size_t>(9) * kResGlobalFeatures, 0.0f);
+    handW_.assign(static_cast<std::size_t>(9) * globals_, 0.0f);
     handB_.assign(9, 0.0f);
     valueW_.assign(channels_, 0.0f);
-    valueFc1W_.assign(static_cast<std::size_t>(kResValueHidden) * kHiddenInput, 0.0f);
+    valueFc1W_.assign(static_cast<std::size_t>(kResValueHidden) * hiddenInput, 0.0f);
     valueFc1B_.assign(kResValueHidden, 0.0f);
     valueFc2W_.assign(kResValueHidden, 0.0f);
     valueFc2B_.assign(1, 0.0f);
     scoreW_.assign(channels_, 0.0f);
-    scoreFc1W_.assign(static_cast<std::size_t>(kResValueHidden) * kHiddenInput, 0.0f);
+    scoreFc1W_.assign(static_cast<std::size_t>(kResValueHidden) * hiddenInput, 0.0f);
     scoreFc1B_.assign(kResValueHidden, 0.0f);
     scoreFc2W_.assign(kResValueHidden, 0.0f);
     scoreFc2B_.assign(1, 0.0f);
@@ -177,7 +182,8 @@ void PolicyValueNet::allocate(int channels, int blocks, int inputPlanes) {
 PolicyValueNet PolicyValueNet::random(std::uint64_t seed, const std::string& name, int channels,
                                       int blocks, int inputPlanes) {
     PolicyValueNet net;
-    net.allocate(channels, blocks, inputPlanes);
+    net.allocate(channels, blocks, inputPlanes, kResGlobalFeatures);
+    const int hiddenInput = 1 + net.globals_;
     std::mt19937_64 rng(seed);
     fillRandom(net.stemW_, static_cast<std::size_t>(net.inputPlanes_) * 9, rng);
     fillRandom(net.stemB_, static_cast<std::size_t>(kResInputPlanes) * 9, rng);
@@ -189,11 +195,11 @@ PolicyValueNet PolicyValueNet::random(std::uint64_t seed, const std::string& nam
     }
     fillRandom(net.policyW_, net.channels_, rng);
     fillRandom(net.policyB_, net.channels_, rng);
-    fillRandom(net.handW_, kResGlobalFeatures, rng);
-    fillRandom(net.handB_, kResGlobalFeatures, rng);
+    fillRandom(net.handW_, net.globals_, rng);
+    fillRandom(net.handB_, net.globals_, rng);
     fillRandom(net.valueW_, net.channels_, rng);
-    fillRandom(net.valueFc1W_, kHiddenInput, rng);
-    fillRandom(net.valueFc1B_, kHiddenInput, rng);
+    fillRandom(net.valueFc1W_, hiddenInput, rng);
+    fillRandom(net.valueFc1B_, hiddenInput, rng);
     fillRandom(net.valueFc2W_, kResValueHidden, rng);
     fillRandom(net.valueFc2B_, kResValueHidden, rng);
     net.loaded_ = true;
@@ -211,12 +217,17 @@ bool PolicyValueNet::save(const std::string& path, std::string* error) const {
         if (error) *error = "cannot open model for writing: " + path;
         return false;
     }
-    out.write(kMagicV3, sizeof(kMagicV3));
-    const std::uint32_t version = kVersion3;
+    // The file version follows the global vector: a model that cannot see A is
+    // written as v3 so an older engine can still read it, and a model that can
+    // is written as v4 so an older engine refuses it instead of loading 24-wide
+    // weights into a 22-wide reader.
+    const bool aAware = aInput();
+    out.write(aAware ? kMagicV4 : kMagicV3, sizeof(kMagicV4));
+    const std::uint32_t version = aAware ? kVersion4 : kVersion3;
     const std::uint32_t channels = static_cast<std::uint32_t>(channels_);
     const std::uint32_t blocks = static_cast<std::uint32_t>(blocks_);
     const std::uint32_t inputs = static_cast<std::uint32_t>(inputPlanes_);
-    const std::uint32_t globals = kResGlobalFeatures;
+    const std::uint32_t globals = static_cast<std::uint32_t>(globals_);
     const std::uint32_t flags = hasScoreHead_ ? kFlagScoreHead : 0u;
     const std::uint8_t ruleset = static_cast<std::uint8_t>(ruleset_);
     const std::uint8_t features = kFeatureVersion;
@@ -271,9 +282,10 @@ bool PolicyValueNet::load(const std::string& path, std::string* error) {
     }
     char magic[8]{};
     in.read(magic, sizeof(magic));
+    const bool isV4 = std::equal(std::begin(kMagicV4), std::end(kMagicV4), magic);
     const bool isV3 = std::equal(std::begin(kMagicV3), std::end(kMagicV3), magic);
     const bool isV2 = std::equal(std::begin(kMagicV2), std::end(kMagicV2), magic);
-    if (!in || (!isV3 && !isV2)) {
+    if (!in || (!isV4 && !isV3 && !isV2)) {
         if (error) *error = "bad model magic: " + path;
         return false;
     }
@@ -287,21 +299,23 @@ bool PolicyValueNet::load(const std::string& path, std::string* error) {
     std::uint8_t ruleset = 0;
     std::uint8_t features = kFeatureVersion;
     std::uint16_t reserved = 0;
-    if (isV3) {
+    if (isV4 || isV3) {
         in.read(reinterpret_cast<char*>(&flags), sizeof(flags));
         in.read(reinterpret_cast<char*>(&ruleset), sizeof(ruleset));
         in.read(reinterpret_cast<char*>(&features), sizeof(features));
         in.read(reinterpret_cast<char*>(&reserved), sizeof(reserved));
     }
-    const bool versionOk = isV3 ? (version == kVersion3) : (version == kVersion2);
+    const bool versionOk = isV4 ? (version == kVersion4)
+                                : (isV3 ? (version == kVersion3) : (version == kVersion2));
+    const bool globalsOk = isV4 ? (globals == kResGlobalFeatures)
+                                : (globals == kResGlobalFeaturesV3);
     if (!in || !versionOk || ruleset > 1 || features != kFeatureVersion ||
-        (inputs != kResInputPlanes && inputs != kResInputPlanesV3) ||
-        globals != kResGlobalFeatures || channels < 1 || channels > kMaxChannels ||
-        blocks < 1 || blocks > kMaxBlocks) {
+        (inputs != kResInputPlanes && inputs != kResInputPlanesV3) || !globalsOk ||
+        channels < 1 || channels > kMaxChannels || blocks < 1 || blocks > kMaxBlocks) {
         if (error) *error = "unsupported model shape: " + path;
         return false;
     }
-    if (isV2 && inputPlanes_ == kResInputPlanesV3) {
+    if (isV2 && inputs == kResInputPlanesV3) {
         // v2 files with 37 planes used the old layout, where the side plane was
         // written at index 36 on top of Black's count-of-9 plane.  Those weights
         // are not usable with the current features.
@@ -313,7 +327,8 @@ bool PolicyValueNet::load(const std::string& path, std::string* error) {
     ruleset_ = static_cast<Ruleset>(ruleset);
 
     clear();
-    allocate(static_cast<int>(channels), static_cast<int>(blocks), static_cast<int>(inputs));
+    allocate(static_cast<int>(channels), static_cast<int>(blocks), static_cast<int>(inputs),
+             static_cast<int>(globals));
     // After clear(): it resets the head flag, so setting it before is lost.
     hasScoreHead_ = (flags & kFlagScoreHead) != 0;
     const auto readFloats = [&](std::vector<float>& values) {
@@ -391,7 +406,7 @@ void PolicyValueNet::buildFeaturePlanes(const std::array<std::int8_t, kCells>& b
 }
 
 void PolicyValueNet::buildGlobals(const std::array<std::int8_t, kCells>& board, int ply, int raw,
-                                  float* out) const {
+                                  double aValue, float* out) const {
     std::array<std::array<int, 10>, 2> counts{};
     int empty = 0;
     for (int cell = 0; cell < kCells; ++cell) {
@@ -417,14 +432,23 @@ void PolicyValueNet::buildGlobals(const std::array<std::int8_t, kCells>& board, 
     out[19] = static_cast<float>(raw) / 81.0f;
     out[20] = static_cast<float>(cappedPly) / 54.0f;
     out[21] = static_cast<float>(empty) / 81.0f;
+    if (globals_ >= kResGlobalFeatures) {
+        // The A value itself and its magnitude.  The second term lets the head
+        // treat "Red must win by more" differently from "Red may win by less"
+        // without relying on a ReLU to recover |A| from a linear term.
+        const float scaled = static_cast<float>(aValue / kAFeatureScale);
+        out[22] = std::clamp(scaled, -2.0f, 2.0f);
+        out[23] = std::clamp(std::fabs(scaled), 0.0f, 2.0f);
+    }
 }
 
-NnOutput PolicyValueNet::evaluate(const Position& position) const {
+NnOutput PolicyValueNet::evaluate(const Position& position, double aValue) const {
     NnOutput out;
     if (!loaded_) return out;
 
     const int channels = channels_;
     const int planes = inputPlanes_;
+    const int hiddenInput = 1 + globals_;
     std::array<std::int8_t, kCells> board{};
     for (int cell = 0; cell < kCells; ++cell) {
         board[cell] = static_cast<std::int8_t>(position.stoneAt(cell));
@@ -448,13 +472,13 @@ NnOutput PolicyValueNet::evaluate(const Position& position) const {
 
     // Hand-conditioned policy and value features.
     std::array<float, kResGlobalFeatures> global{};
-    buildGlobals(board, position.ply(), position.rawScore(), global.data());
+    buildGlobals(board, position.ply(), position.rawScore(), aValue, global.data());
 
     std::array<float, 9> handBias{};
     for (int number = 0; number < 9; ++number) {
         float sum = handB_[number];
-        for (int g = 0; g < kResGlobalFeatures; ++g) {
-            sum += handW_[static_cast<std::size_t>(number) * kResGlobalFeatures + g] * global[g];
+        for (int g = 0; g < globals_; ++g) {
+            sum += handW_[static_cast<std::size_t>(number) * globals_ + g] * global[g];
         }
         handBias[number] = sum;
     }
@@ -480,14 +504,15 @@ NnOutput PolicyValueNet::evaluate(const Position& position) const {
         }
         valueSpatial += sum;
     }
-    std::array<float, kHiddenInput> hiddenInput{};
-    hiddenInput[0] = valueSpatial / static_cast<float>(kCells) + valueB_;
-    for (int g = 0; g < kResGlobalFeatures; ++g) hiddenInput[1 + g] = global[g];
+    const int inputWidth = 1 + globals_;
+    std::array<float, kResGlobalFeatures + 1> valueInput{};
+    valueInput[0] = valueSpatial / static_cast<float>(kCells) + valueB_;
+    for (int g = 0; g < globals_; ++g) valueInput[1 + g] = global[g];
     std::array<float, kResValueHidden> hidden{};
     for (int h = 0; h < kResValueHidden; ++h) {
         float sum = valueFc1B_[h];
-        for (int i = 0; i < kHiddenInput; ++i) {
-            sum += valueFc1W_[static_cast<std::size_t>(h) * kHiddenInput + i] * hiddenInput[i];
+        for (int i = 0; i < inputWidth; ++i) {
+            sum += valueFc1W_[static_cast<std::size_t>(h) * inputWidth + i] * valueInput[i];
         }
         hidden[h] = std::max(0.0f, sum);
     }
@@ -504,14 +529,14 @@ NnOutput PolicyValueNet::evaluate(const Position& position) const {
             }
             scoreSpatial += sum;
         }
-        std::array<float, kHiddenInput> scoreInput{};
+        std::array<float, kResGlobalFeatures + 1> scoreInput{};
         scoreInput[0] = scoreSpatial / static_cast<float>(kCells) + scoreB_;
-        for (int g = 0; g < kResGlobalFeatures; ++g) scoreInput[1 + g] = global[g];
+        for (int g = 0; g < globals_; ++g) scoreInput[1 + g] = global[g];
         std::array<float, kResValueHidden> scoreHidden{};
         for (int h = 0; h < kResValueHidden; ++h) {
             float sum = scoreFc1B_[h];
-            for (int i = 0; i < kHiddenInput; ++i) {
-                sum += scoreFc1W_[static_cast<std::size_t>(h) * kHiddenInput + i] * scoreInput[i];
+            for (int i = 0; i < inputWidth; ++i) {
+                sum += scoreFc1W_[static_cast<std::size_t>(h) * inputWidth + i] * scoreInput[i];
             }
             scoreHidden[h] = std::max(0.0f, sum);
         }

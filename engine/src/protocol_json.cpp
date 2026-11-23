@@ -49,7 +49,8 @@ std::string moveText(Move move) {
 } // namespace
 
 std::string analysisJson(const Analysis& analysis, const std::string& backend,
-                         const std::string& turn, long long elapsedMs, const std::string& nn) {
+                         const std::string& turn, long long elapsedMs, const std::string& nn,
+                         bool aInput) {
     std::ostringstream out;
     out << '{';
     out << "\"engine\":" << quoted(engineName(analysis.kind));
@@ -65,6 +66,7 @@ std::string analysisJson(const Analysis& analysis, const std::string& backend,
     out << ",\"best\":" << quoted(moveText(analysis.best));
     out << ",\"elapsed_ms\":" << elapsedMs;
     out << ",\"nn\":" << quoted(nn);
+    out << ",\"a_input\":" << (aInput ? 1 : 0);
 
     if (!analysis.pv.empty()) {
         out << ",\"pv\":[";

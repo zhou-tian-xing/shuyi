@@ -315,8 +315,8 @@ private:
         if (useNn_ && (nn_.loaded() || useFasterNn_) && !forcedPass &&
             nn_.ruleset() == position.ruleset()) {
             const NnOutput output = (useFasterNn_ && options_.nnOverride->evaluate)
-                                        ? options_.nnOverride->evaluate(position)
-                                        : nn_.evaluate(position);
+                                        ? options_.nnOverride->evaluate(position, options_.aValue)
+                                        : nn_.evaluate(position, options_.aValue);
             if (valueOut) *valueOut = output.value;
             if (hasValue) *hasValue = true;
             // The score head is an extra target; when the model has one its

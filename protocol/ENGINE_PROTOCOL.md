@@ -62,7 +62,7 @@ can pipeline: replies that arrive out of order stay attributable. A late
 | `name` | `ShuyiEngine` | |
 | `version` | e.g. `0.3.0` | |
 | `list_commands` | space separated names | |
-| `capabilities` | `engine=shuyi_engine proto=2 cuda=0\|1 backend=cpu\|cuda rulesets=classic,blocking visits=1 stream=1 json=1 model=0\|1` | probe before choosing a binary |
+| `capabilities` | `engine=shuyi_engine proto=2 cuda=0\|1 backend=cpu\|cuda rulesets=classic,blocking visits=1 stream=1 json=1 model=0\|1 a_input=0\|1` | probe before choosing a binary |
 | `boardsize <n>` | empty | only 9 is accepted; anything else is an error |
 | `ruleset [classic\|blocking]` | the active rule set | only before the first move |
 | `clear_board` | empty | resets the position and the tree |
@@ -73,10 +73,10 @@ can pipeline: replies that arrive out of order stay attributable. A late
 | `stop` | `stopped` | ends a running search; the tree is kept |
 | `set_engine <random\|pruning\|mcts\|mcts_nn>` | the name | rebuilds the search, keeps the position |
 | `set_backend <cpu\|cuda\|auto>` | the backend actually used | `cuda` fails on a CPU build |
-| `set_model <path>` | the path | validated and rule-set checked before use |
+| `set_model <path>` | the path, plus `(no A input: v3 model)` when the file predates A conditioning | validated and rule-set checked before use |
 | `set_visits <n>` | `n` or `off` | default budget only; does not touch the tree |
 | `set_time <ms>` | `ms` | clock budget, used only when no visit budget applies |
-| `set_a <value>` | the value | score offset for the endgame result |
+| `set_a <value>` | the value | score offset added to Red's raw score. With a v4 model it is an input to the network; with a v3 model it only shifts the terminal result (`a_input=0`) |
 | `set_window <points>` | the value | aspiration window (alpha-beta) |
 | `set_pvs <on\|off>` | `on`/`off` | principal-variation search (alpha-beta) |
 | `bench [visits]` | `visits=… time_ms=… visits_per_second=…` | throughput probe |
@@ -119,6 +119,7 @@ rebuild it because the search itself changed.
   "turn": "red",
   "backend": "cuda",
   "nn": "b4c32-s34760-d470705.bin",
+  "a_input": 1,
   "visits": 512,
   "nodes": 984,
   "depth": 0,
@@ -144,6 +145,7 @@ rebuild it because the search itself changed.
 | `turn` | side to move for this analysis (`red`/`black`); all values are from its point of view |
 | `backend` | which forward actually ran: `cpu` or `cuda` |
 | `nn` | network name, empty without one |
+| `a_input` | `1` when the loaded network takes A as an input, `0` when it cannot see it: a front end that offers an A control must say which |
 | `visits`, `nodes` | search effort |
 | `proven` | the position is solved: win rate, score and best move are game-theoretic values |
 | `winrate` | win probability for the side to move, `[0,1]` |
@@ -165,7 +167,9 @@ Every command either does what it says or fails with `?`.
 * A wrong board size, an unknown command, a bad argument: `?`.
 * `set_backend cuda` on a CPU build: `?`. With `auto` the engine uses the GPU when
   it works and reports `cpu` in the reply and in every analysis object.
-* `set_model` refuses a network trained for the other rule set.
+* `set_model` refuses a network trained for the other rule set, and refuses a
+  model file whose shape it cannot read (a v4 file in a v3-only engine is an
+  error, not a silently truncated load).
 * `genmove`/`analyze` refuse to run when the selected engine cannot run (for
   example `mcts_nn` without a model).
 * If the search cannot produce a move, the reply is `?`, never a made-up move.
@@ -188,7 +192,10 @@ this document:
 ```
 python protocol/tests/protocol_smoke.py  <engine.exe> [model.bin]
 python protocol/tests/visit_budget_smoke.py <engine.exe> [model.bin]
+python protocol/tests/a_response.py      <engine.exe> <model.bin>   # manual
 ```
 
 They run as part of `ctest` and are the acceptance test for any engine — this one
-or one written elsewhere.
+or one written elsewhere. `a_response.py` is manual (it needs a trained v4
+network): it asserts that a model reporting `a_input=1` moves its win rate with A,
+and that a v3 model (`a_input=0`) does not.

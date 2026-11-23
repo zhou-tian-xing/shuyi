@@ -80,21 +80,22 @@ public:
         if (!gpu_.load(net_, error)) return false;
         planes_ = net_.modelInputPlanes();
         features_.assign(static_cast<std::size_t>(planes_) * kCells, 0.0f);
-        globals_.assign(kResGlobalFeatures, 0.0f);
+        globals_.assign(static_cast<std::size_t>(net_.globalFeatures()), 0.0f);
         logits_.assign(kNnPolicy, 0.0f);
         return true;
     }
 
     bool hasScoreHead() const { return net_.hasScoreHead(); }
+    bool aInput() const { return net_.aInput(); }
 
-    NnOutput evaluate(const Position& position) {
+    NnOutput evaluate(const Position& position, double aValue) {
         NnOutput out;
         std::array<std::int8_t, kCells> board{};
         for (int cell = 0; cell < kCells; ++cell) {
             board[cell] = static_cast<std::int8_t>(position.stoneAt(cell));
         }
         net_.buildFeaturePlanes(board, position.ply(), features_.data());
-        net_.buildGlobals(board, position.ply(), position.rawScore(), globals_.data());
+        net_.buildGlobals(board, position.ply(), position.rawScore(), aValue, globals_.data());
         float value = 0.5f;
         float score = 0.0f;
         gpu_.evaluate(features_.data(), globals_.data(), 1, logits_.data(), &value,
@@ -175,8 +176,11 @@ bool ProtocolSession::applyBackend(std::string* error) {
         return true;
     }
     auto override = std::make_shared<NnOverride>();
-    override->evaluate = [evaluator](const Position& position) { return evaluator->evaluate(position); };
+    override->evaluate = [evaluator](const Position& position, double aValue) {
+        return evaluator->evaluate(position, aValue);
+    };
     override->hasScoreHead = [evaluator] { return evaluator->hasScoreHead(); };
+    override->aInput = [evaluator] { return evaluator->aInput(); };
     options_.nnOverride = override;
     cudaOverride_ = override;
     backendUsed_ = "cuda";
@@ -339,6 +343,7 @@ void ProtocolSession::handle(const std::string& raw) {
         if (path.empty()) return respond(false, "usage: set_model <path to .bin>");
         // Validate before touching the running engine: a model trained for the
         // other rule set produces plausible-looking nonsense, so it is refused.
+        bool modelSeesA = false;
         {
             PolicyValueNet probe;
             std::string reason;
@@ -351,18 +356,24 @@ void ProtocolSession::handle(const std::string& raw) {
                                           " ruleset, but the position is " +
                                           rulesetName(position_.ruleset()));
             }
+            modelSeesA = probe.aInput();
         }
         stopAndJoin();
         const std::string previous = options_.nnModelPath;
+        const bool previousAInput = aInput_;
         options_.nnModelPath = path;
         std::string error;
         if (!applyBackend(&error) || !rebuild(kind_, &error)) {
             options_.nnModelPath = previous;
+            aInput_ = previousAInput;
             std::string ignored;
             applyBackend(&ignored);
             return respond(false, error);
         }
-        return respond(true, path);
+        aInput_ = modelSeesA;
+        // The reply says what the model can do; `set_a` is meaningless to a
+        // v3 model and a front end must be able to warn about that.
+        return respond(true, path + (aInput_ ? "" : " (no A input: v3 model)"));
     }
     if (command == "set_visits") {
         int visits = 0;
@@ -521,7 +532,7 @@ void ProtocolSession::cmdCapabilities() {
     std::ostringstream out;
     out << "engine=shuyi_engine proto=" << kProtocolVersion << " cuda=" << (cuda ? 1 : 0)
         << " backend=" << backendUsed_ << " rulesets=classic,blocking visits=1 stream=1 json=1"
-        << " model=" << (model ? 1 : 0);
+        << " model=" << (model ? 1 : 0) << " a_input=" << (aInput_ ? 1 : 0);
     respond(true, out.str());
 }
 
@@ -606,7 +617,8 @@ void ProtocolSession::cmdAnalyze(const std::string& args, bool playMode) {
             std::string line;
             if (!id.empty()) line += id + " ";
             line += "info ";
-            line += analysisJson(snapshotAnalysis, backend, turn, elapsedMs(started), tag);
+            line += analysisJson(snapshotAnalysis, backend, turn, elapsedMs(started), tag,
+                                 aInput_);
             writeLine(line);
         };
 

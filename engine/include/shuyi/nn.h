@@ -23,11 +23,23 @@ namespace shuyi {
 //   36     side to move
 // The binary format stores the actual input/channel/block shape, so old and
 // new models load through the same C++ code.
+//
+// v4 (this version) keeps the planes and appends the A value to the global
+// vector: index 22 = A/10, index 23 = |A|/10, both clamped to +-2.  Without it
+// A reached the search only at terminal leaves (sign(raw + A)), so changing it
+// on a midgame position could not move the win rate at all -- a network has no
+// way to answer a question it cannot see.  A v3 model still loads and still
+// plays; aInput() reports that it is A-blind, and the protocol exposes that as
+// `a_input=0` instead of pretending.
 constexpr int kResInputPlanes = 19;          // legacy
 constexpr int kResInputPlanesV3 = 37;       // explicit hand-count planes
 constexpr int kResChannels = 16;
 constexpr int kResBlocks = 2;
-constexpr int kResGlobalFeatures = 22;
+constexpr int kResGlobalFeaturesV3 = 22;    // v3: hands, side, raw, ply, empty
+constexpr int kResGlobalFeatures = 24;      // v4: + A, |A|
+// A is fed as aValue / kAFeatureScale.  The engine accepts +-20; clamping keeps
+// the feature inside the range the weights were trained on.
+constexpr float kAFeatureScale = 10.0f;
 constexpr int kResValueHidden = 32;
 // The score head predicts tanh(score / kScoreScale); 30 covers the observed
 // range of final scores (about +-25).
@@ -57,8 +69,15 @@ public:
     int channels() const { return channels_; }
     int blocks() const { return blocks_; }
     int modelInputPlanes() const { return inputPlanes_; }
+    // Length of the global feature vector this model was trained with: 22 for a
+    // v3 file, 24 for a v4 file that can see A.
+    int globalFeatures() const { return globals_; }
+    bool aInput() const { return globals_ >= kResGlobalFeatures; }
 
-    NnOutput evaluate(const Position& position) const;
+    // `aValue` is the A (komi-like) constant the game is played with.  It is a
+    // parameter rather than a Position field because it is an engine option,
+    // not a property of the board, and every caller must decide it explicitly.
+    NnOutput evaluate(const Position& position, double aValue) const;
 
     // Feature construction shared by the CPU and CUDA backends.  `out` must hold
     // modelInputPlanes() * kCells floats.  The v3 layout keeps the historical
@@ -66,8 +85,10 @@ public:
     // .bin models stay valid.
     void buildFeaturePlanes(const std::array<std::int8_t, kCells>& board, int ply,
                             float* out) const;
+    // `out` must hold globalFeatures() floats.  A model with a 22-wide vector
+    // ignores `aValue` entirely.
     void buildGlobals(const std::array<std::int8_t, kCells>& board, int ply, int raw,
-                      float* out) const;
+                      double aValue, float* out) const;
 
     // Weight accessors for the CUDA backend.
     const std::vector<float>& stemWeight() const { return stemW_; }
@@ -100,7 +121,7 @@ public:
     static constexpr int inputPlanes() { return kResInputPlanes; }
     static constexpr int defaultChannels() { return kResChannels; }
     static constexpr int defaultBlocks() { return kResBlocks; }
-    static constexpr int globalFeatures() { return kResGlobalFeatures; }
+    static constexpr int defaultGlobalFeatures() { return kResGlobalFeatures; }
 
     // Rule set the weights were trained under.  Loading is permissive (a v2 file
     // is Classic) but callers must compare this against the game they are about
@@ -118,12 +139,13 @@ public:
     }
 
 private:
-    void allocate(int channels, int blocks, int inputPlanes);
+    void allocate(int channels, int blocks, int inputPlanes, int globals);
     void clear();
 
     int channels_ = kResChannels;
     int blocks_ = kResBlocks;
     int inputPlanes_ = kResInputPlanes;
+    int globals_ = kResGlobalFeatures;
     std::vector<float> stemW_, stemB_;
     std::vector<Block> blocksData_;
     std::vector<float> policyW_, policyB_;

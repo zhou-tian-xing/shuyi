@@ -420,6 +420,12 @@ public:
     Ruleset rulesetOf(int index) const { return cpus_[index]->ruleset(); }
     int blocks() const { return cpus_[0]->blocks(); }
     const std::string& device() const { return gpus_[0]->deviceName(); }
+    int globals(int index) const { return cpus_[index]->globalFeatures(); }
+    // The A value the network is asked about.  v4 models consume it; v3 models
+    // ignore it (their `aInput()` is false), so a mixed pool is still coherent.
+    void setA(double a) { a_ = a; }
+    double a() const { return a_; }
+    bool aInput() const { return cpus_[0]->aInput(); }
 
     int planes(int index) const { return cpus_[index]->modelInputPlanes(); }
 
@@ -429,9 +435,10 @@ public:
               float* scores = nullptr) {
         if (count <= 0) return;
         const int planes = cpus_[index]->modelInputPlanes();
+        const int width = globals(index);
         const int chunk = std::min<int>(chunk_, count);
         features_.resize(static_cast<std::size_t>(chunk) * planes * kCells);
-        globals_.resize(static_cast<std::size_t>(chunk) * kResGlobalFeatures);
+        globals_.resize(static_cast<std::size_t>(chunk) * width);
         for (int base = 0; base < count; base += chunk) {
             const int m = std::min(chunk, count - base);
             for (int i = 0; i < m; ++i) {
@@ -439,9 +446,9 @@ public:
                 cpus_[index]->buildFeaturePlanes(
                     node.board, node.ply,
                     features_.data() + static_cast<std::size_t>(i) * planes * kCells);
-                cpus_[index]->buildGlobals(node.board, node.ply, node.raw,
-                                           globals_.data() + static_cast<std::size_t>(i) *
-                                                                 kResGlobalFeatures);
+                cpus_[index]->buildGlobals(
+                    node.board, node.ply, node.raw, a_,
+                    globals_.data() + static_cast<std::size_t>(i) * width);
             }
             gpus_[index]->evaluate(features_.data(), globals_.data(), m,
                                    logits + static_cast<std::size_t>(base) * kNnPolicy,
@@ -456,6 +463,7 @@ private:
     std::vector<float> features_;
     std::vector<float> globals_;
     int chunk_ = 1024;
+    double a_ = 1.0;
 };
 
 // --------------------------------------------------------------- samples ---
@@ -1605,7 +1613,7 @@ int runCheck(Evaluator& evaluator, const Options& o) {
     double maxValue = 0.0;
     double maxScore = 0.0;
     for (std::size_t i = 0; i < nodes.size(); ++i) {
-        const NnOutput reference = evaluator.cpu(0).evaluate(positions[i]);
+        const NnOutput reference = evaluator.cpu(0).evaluate(positions[i], evaluator.a());
         for (int k = 0; k < kNnPolicy; ++k) {
             maxLogit = std::max(maxLogit, std::fabs(static_cast<double>(
                                               logits[i * kNnPolicy + k] - reference.policy[k])));
@@ -1625,7 +1633,7 @@ int runCheck(Evaluator& evaluator, const Options& o) {
         // zero padding of the convolution is wrong; a uniform spread means the
         // GEMM indexes are.
         std::vector<std::pair<double, int>> diffs;
-        const NnOutput reference = evaluator.cpu(0).evaluate(positions[0]);
+        const NnOutput reference = evaluator.cpu(0).evaluate(positions[0], evaluator.a());
         for (int k = 0; k < kNnPolicy; ++k) {
             diffs.push_back({std::fabs(static_cast<double>(logits[k] - reference.policy[k])), k});
         }
@@ -1647,9 +1655,15 @@ int runCheck(Evaluator& evaluator, const Options& o) {
         }
         const std::uint32_t count = static_cast<std::uint32_t>(nodes.size());
         const std::uint32_t planeCount = static_cast<std::uint32_t>(planes);
+        const std::uint32_t globalCount = static_cast<std::uint32_t>(evaluator.globals(0));
         std::fwrite(&count, sizeof(count), 1, f);
         std::fwrite(&planeCount, sizeof(planeCount), 1, f);
+        // The global vector is part of the input in v4 (it carries A), so it is
+        // dumped too: a plane-only check could not catch the two implementations
+        // disagreeing about A.
+        std::fwrite(&globalCount, sizeof(globalCount), 1, f);
         std::vector<float> features(static_cast<std::size_t>(planes) * kCells);
+        std::vector<float> globals(globalCount);
         for (const Node& node : nodes) {
             const auto ply = static_cast<std::uint8_t>(node.ply);
             std::fwrite(&ply, sizeof(ply), 1, f);
@@ -1657,10 +1671,14 @@ int runCheck(Evaluator& evaluator, const Options& o) {
             std::fwrite(node.rem.data(), node.rem.size(), 1, f);
             evaluator.cpu(0).buildFeaturePlanes(node.board, node.ply, features.data());
             std::fwrite(features.data(), sizeof(float), features.size(), f);
+            evaluator.cpu(0).buildGlobals(node.board, node.ply, node.raw, evaluator.a(),
+                                          globals.data());
+            std::fwrite(globals.data(), sizeof(float), globals.size(), f);
         }
         std::fclose(f);
-        std::printf("wrote feature dump %s (%u positions, %u planes)\n", o.dumpFeatures.c_str(),
-                    count, planeCount);
+        std::printf("wrote feature dump %s (%u positions, %u planes, %u globals, A=%.3f)\n",
+                    o.dumpFeatures.c_str(), count, planeCount, globalCount,
+                    evaluator.a());
     }
     // 5e-3 leaves room for TF32 tensor-core GEMMs on Ampere and newer, where the
     // library is allowed to round mantissas; a real indexing bug is off by ~1.
@@ -1696,6 +1714,7 @@ int main(int argc, char** argv) {
         std::cerr << "cannot load model: " << error << "\n";
         return 1;
     }
+    evaluator.setA(options.komi);
     // A model trained for one rule set has the wrong value semantics for the
     // other, so mixing them is refused rather than silently trusted.
     for (int i = 0; i < evaluator.count(); ++i) {

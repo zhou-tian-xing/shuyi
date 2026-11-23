@@ -32,7 +32,8 @@ int main(int argc, char** argv) {
     const auto started = std::chrono::steady_clock::now();
     volatile float sink = 0.0f;
     for (int i = 0; i < iterations; ++i) {
-        const NnOutput out = net.evaluate(position);
+        // A fixed 1.0: this tool measures throughput, not the A response.
+        const NnOutput out = net.evaluate(position, 1.0);
         sink = sink + out.value;
     }
     const double seconds =

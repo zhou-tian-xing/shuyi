@@ -159,6 +159,10 @@ struct CudaPolicyValueNet::Impl {
     int planes = kResInputPlanes;
     int channels = kResChannels;
     int blocks = kResBlocks;
+    // Width of the global vector of the loaded model: 22 for a v3 file, 24 for a
+    // v4 file that sees A.  The host-side MLP weights are laid out with this
+    // stride, so it cannot be a compile-time constant.
+    int globals = kResGlobalFeatures;
     std::string name;
     bool ready = false;
     cublasHandle_t blas = nullptr;
@@ -339,6 +343,7 @@ bool CudaPolicyValueNet::load(const PolicyValueNet& net, std::string* error) {
     d.planes = net.modelInputPlanes();
     d.channels = net.channels();
     d.blocks = net.blocks();
+    d.globals = net.globalFeatures();
     cudaDeviceProp prop{};
     if (cudaGetDeviceProperties(&prop, 0) != cudaSuccess) {
         if (error) *error = "no CUDA device";
@@ -420,13 +425,14 @@ void CudaPolicyValueNet::evaluate(const float* x, const float* globals, int batc
     const int planes = d.planes;
 
     // Hand-conditioned policy bias is cheap and stays on the host.
+    const int globalsWidth = d.globals;
     std::vector<float> handBias(static_cast<std::size_t>(batch) * 9);
     for (int b = 0; b < batch; ++b) {
         for (int n = 0; n < 9; ++n) {
             float sum = d.hHandB[n];
-            for (int g = 0; g < kResGlobalFeatures; ++g) {
-                sum += d.hHandW[static_cast<std::size_t>(n) * kResGlobalFeatures + g] *
-                       globals[static_cast<std::size_t>(b) * kResGlobalFeatures + g];
+            for (int g = 0; g < globalsWidth; ++g) {
+                sum += d.hHandW[static_cast<std::size_t>(n) * globalsWidth + g] *
+                       globals[static_cast<std::size_t>(b) * globalsWidth + g];
             }
             handBias[static_cast<std::size_t>(b) * 9 + n] = sum;
         }
@@ -477,13 +483,13 @@ void CudaPolicyValueNet::evaluate(const float* x, const float* globals, int batc
 
     for (int b = 0; b < batch; ++b) {
         float hidden[kResValueHidden];
-        const std::size_t stride = 1 + kResGlobalFeatures;
+        const std::size_t stride = 1 + static_cast<std::size_t>(globalsWidth);
         for (int h = 0; h < kResValueHidden; ++h) {
             float sum = d.hFc1B[h];
             sum += d.hFc1W[static_cast<std::size_t>(h) * stride] * (spatial[b] + d.hValueBias);
-            for (int g = 0; g < kResGlobalFeatures; ++g) {
+            for (int g = 0; g < globalsWidth; ++g) {
                 sum += d.hFc1W[static_cast<std::size_t>(h) * stride + 1 + g] *
-                       globals[static_cast<std::size_t>(b) * kResGlobalFeatures + g];
+                       globals[static_cast<std::size_t>(b) * globalsWidth + g];
             }
             hidden[h] = std::fmax(sum, 0.0f);
         }
@@ -498,14 +504,14 @@ void CudaPolicyValueNet::evaluate(const float* x, const float* globals, int batc
                    static_cast<std::size_t>(batch) * sizeof(float), cudaMemcpyDeviceToHost);
         for (int b = 0; b < batch; ++b) {
             float hidden[kResValueHidden];
-            const std::size_t stride = 1 + kResGlobalFeatures;
+            const std::size_t stride = 1 + static_cast<std::size_t>(globalsWidth);
             for (int h = 0; h < kResValueHidden; ++h) {
                 float sum = d.hScoreFc1B[h];
                 sum += d.hScoreFc1W[static_cast<std::size_t>(h) * stride] *
                        (scoreSpatial[b] + d.hScoreB);
-                for (int g = 0; g < kResGlobalFeatures; ++g) {
+                for (int g = 0; g < globalsWidth; ++g) {
                     sum += d.hScoreFc1W[static_cast<std::size_t>(h) * stride + 1 + g] *
-                           globals[static_cast<std::size_t>(b) * kResGlobalFeatures + g];
+                           globals[static_cast<std::size_t>(b) * globalsWidth + g];
                 }
                 hidden[h] = std::fmax(sum, 0.0f);
             }

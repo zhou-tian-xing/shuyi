@@ -39,7 +39,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]  # repo root (training/..)
 DEFAULT_SELFPLAY_GPU = REPO / "build" / "shuyi_selfplay_gpu"
-DEFAULT_TRAINER = REPO / "experimental" / "training" / "train_resnet.py"
+DEFAULT_TRAINER = REPO / "training" / "train_resnet.py"
 TOTAL_PLIES = 54
 MOVES = 729
 
@@ -327,6 +327,13 @@ def train(args, gen_dir, gen, shards, init_model):
         "--seed", str(args.seed + gen * 101),
         "--device", args.device,
     ]
+    if args.a_cond:
+        cmd += [
+            "--a-cond",
+            "--a-anchor", str(args.a_anchor),
+            "--a-range", str(args.a_range),
+            "--a-anchor-fraction", str(args.a_anchor_fraction),
+        ]
     if args.amp:
         cmd.append("--amp")
     else:
@@ -499,7 +506,7 @@ def main(argv=None):
                         help="rule set: data, models and run directory are tagged with it")
     parser.add_argument("--komi", type=float, default=None,
                         help="points added to Red; default is per rule set: -0.5 classic "
-                             "(Red 52%% at 0 in the 3080 run) and +1.3 blocking "
+                             "(Red 52%% at 0 in the 3080 run) and +1.26 blocking "
                              "(training/avalue.py measured A* = +1.26 at 192 visits)")
     parser.add_argument("--opening", type=int, default=2)
     parser.add_argument("--temp-moves", type=int, default=12)
@@ -512,6 +519,14 @@ def main(argv=None):
     parser.add_argument("--channels", type=int, default=32)
     parser.add_argument("--blocks", type=int, default=4)
     parser.add_argument("--input-planes", type=int, default=37, choices=[19, 37])
+    parser.add_argument("--a-cond", action="store_true",
+                        help="train a v4 model that takes the A value as an input "
+                             "(see training/README.md, 'A as an input')")
+    parser.add_argument("--a-anchor", type=float, default=1.26,
+                        help="A the engine plays with; part of each epoch trains at it")
+    parser.add_argument("--a-range", type=float, default=12.0,
+                        help="explore A uniformly in [-range, range]")
+    parser.add_argument("--a-anchor-fraction", type=float, default=0.35)
     parser.add_argument("--max-samples", type=int, default=600000)
     parser.add_argument("--val", type=float, default=0.06)
     parser.add_argument("--lr", type=float, default=2e-3)
@@ -519,7 +534,7 @@ def main(argv=None):
     parser.add_argument("--replay-gens", type=int, default=1)
     parser.add_argument("--train-from-scratch", action="store_true",
                         help="ignore the previous generation's weights (gen 0 always does)")
-    parser.add_argument("--elo", default=str(REPO / "experimental" / "training" / "elo.py"),
+    parser.add_argument("--elo", default=str(REPO / "training" / "elo.py"),
                         help="ELO rating script (GPU round robin)")
     parser.add_argument("--elo-every", type=int, default=1,
                         help="rate the model pool every N generations (0 = never)")
@@ -559,9 +574,9 @@ def main(argv=None):
     args.trainer = str(resolve_binary(args.trainer))
     if args.komi is None:
         # Measured, not guessed: classic -0.5 (Red 52% at 0 on the 3080 run),
-        # blocking +1.3 (training/avalue.py: A* = +1.26, SE 0.22, 240 games per
+        # blocking +1.26 (training/avalue.py: A* = +1.26, SE 0.22, 240 games per
         # point at 192 visits -- going first is a liability under this rule).
-        args.komi = -0.5 if args.ruleset == "classic" else 1.3
+        args.komi = -0.5 if args.ruleset == "classic" else 1.26
     if args.promotion_games:
         args.arena_games = args.promotion_games
 
@@ -582,12 +597,14 @@ def main(argv=None):
         # A random net is enough to measure the forward pass.
         probe = models_dir / "probe.bin"
         if not probe.exists():
-            run_command(
-                [args.python, str(args.trainer), "--init-only", "--out", str(probe),
-                 "--channels", str(args.channels), "--blocks", str(args.blocks),
-                 "--input-planes", str(args.input_planes)],
-                run_dir / "logs" / "probe.log",
-            )
+            probe_cmd = [
+                args.python, str(args.trainer), "--init-only", "--out", str(probe),
+                "--channels", str(args.channels), "--blocks", str(args.blocks),
+                "--input-planes", str(args.input_planes),
+            ]
+            if args.a_cond:
+                probe_cmd += ["--a-cond", "--a-anchor", str(args.a_anchor)]
+            run_command(probe_cmd, run_dir / "logs" / "probe.log")
         evals = bench(run_dir, args.selfplay_gpu, probe, args.chunk)
         plan = Plan(evals)
         print(f"\nmeasured forward throughput: {evals:,.0f} evals/s "
@@ -612,6 +629,13 @@ def main(argv=None):
                     f"resume shape mismatch: run used {key}={old.get(key)}, "
                     f"current {key}={getattr(args, key)}"
                 )
+        # A v3 model and a v4 model are different formats: resuming a run with a
+        # different --a-cond would warm start a 22-wide head from a 24-wide file.
+        if bool(old.get("a_cond", False)) != bool(args.a_cond):
+            raise SystemExit(
+                f"resume mismatch: run used a_cond={old.get('a_cond')}, "
+                f"current a_cond={args.a_cond}"
+            )
     manifest["config"] = vars(args)
     manifest["started"] = manifest.get("started", now())
     manifest["updated"] = now()

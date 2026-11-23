@@ -62,7 +62,7 @@ engine/include/shuyi/
 ├── ai.h             剪枝引擎：SearchOptions（nodeLimit）、SearchProgress、searchAlphaBeta
 ├── ai_policy.h      "评估 + 排序"策略接口；规则特异的实现挂这里
 ├── mcts.h           （无独立头）MCTS 在 src/mcts.cpp，接口即 Engine
-├── nn.h             策略价值网络：SHUYINN3 格式、特征平面、CPU 前向、NnOutput
+├── nn.h             策略价值网络：SHUYINN3/V4 格式、特征平面、CPU 前向、NnOutput
 ├── nn_cuda.h        CUDA 批量前向接口（nn_cuda.cu 实现）
 ├── tt.h             置换表
 └── protocol.h       行协议会话（命令解析、位置状态、单搜索线程）

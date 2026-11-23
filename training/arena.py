@@ -42,7 +42,7 @@ DEFAULT_GPU = REPO / "build" / "shuyi_selfplay_gpu"
 
 
 def _load_rule_probe():
-    spec = importlib.util.spec_from_file_location("rule_probe", str(REPO / "experimental" / "training" / "rule_probe.py"))
+    spec = importlib.util.spec_from_file_location("rule_probe", str(REPO / "training" / "rule_probe.py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

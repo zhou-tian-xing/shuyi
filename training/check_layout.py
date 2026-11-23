@@ -23,38 +23,44 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 
-_spec = importlib.util.spec_from_file_location("train_resnet", str(REPO / "experimental" / "training" / "train_resnet.py"))
+_spec = importlib.util.spec_from_file_location("train_resnet", str(REPO / "training" / "train_resnet.py"))
 _tr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_tr)
 
 
 def load_dump(path):
     with open(path, "rb") as f:
-        count, planes = struct.unpack("<II", f.read(8))
+        count, planes, globals_width = struct.unpack("<III", f.read(12))
         out = []
         for _ in range(count):
             ply = struct.unpack("<B", f.read(1))[0]
             board = np.frombuffer(f.read(81), dtype=np.int8).copy()
             hand = np.frombuffer(f.read(18), dtype=np.uint8).copy()
             features = np.frombuffer(f.read(planes * 81 * 4), dtype="<f4").copy()
-            out.append((ply, board, hand, features.reshape(planes, 9, 9)))
-    return planes, out
+            g = np.frombuffer(f.read(globals_width * 4), dtype="<f4").copy()
+            out.append((ply, board, hand, features.reshape(planes, 9, 9), g))
+    return planes, globals_width, out
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dump", nargs="?", default=str(REPO / "build" / "layout_check.bin"))
     ap.add_argument("--planes", type=int, default=0, help="expected plane count (0 = from dump)")
+    ap.add_argument("--a", type=float, default=1.0,
+                    help="A value the dump was written with (the engine prints it)")
     args = ap.parse_args()
 
-    planes, samples = load_dump(args.dump)
+    planes, globals_width, samples = load_dump(args.dump)
     if args.planes and args.planes != planes:
         raise SystemExit(f"dump has {planes} planes, expected {args.planes}")
     if planes not in (_tr.INPUT_PLANES, _tr.INPUT_PLANES_V3):
         raise SystemExit(f"unexpected plane count {planes}")
 
+    if globals_width not in (_tr.GLOBAL, _tr.GLOBAL_V3):
+        raise SystemExit(f"unexpected global width {globals_width}")
+
     failures = 0
-    for index, (ply, board, hand, features) in enumerate(samples):
+    for index, (ply, board, hand, features, engine_g) in enumerate(samples):
         data = np.zeros(1, dtype=_tr.SAMPLE_DTYPE) if hasattr(_tr, "SAMPLE_DTYPE") else None
         if data is None:
             data = np.zeros(
@@ -75,16 +81,22 @@ def main():
         data["board"] = board
         data["hand"] = hand
         data["ply"] = ply
-        x, _g = _tr.make_inputs(data, planes)
+        a_values = np.full(len(data), args.a, dtype=np.float32)
+        x, g, _raw = _tr.make_inputs(data, planes, a_values, globals_width)
         delta = np.abs(x[0] - features).max()
-        if delta > 1e-6:
+        g_delta = np.abs(g[0].numpy() - engine_g).max()
+        if delta > 1e-6 or g_delta > 1e-6:
             failures += 1
-            print(f"position {index}: layout mismatch, |max| = {delta}")
+            print(f"position {index}: layout mismatch, planes |max| = {delta}, "
+                  f"globals |max| = {g_delta}")
             diff = np.abs(x[0] - features).reshape(planes, -1).max(axis=1)
             print("  planes that differ:", [i for i, d in enumerate(diff) if d > 1e-6])
+            gdiff = np.abs(g[0].numpy() - engine_g)
+            print("  globals that differ:", [i for i, d in enumerate(gdiff) if d > 1e-6])
     if failures:
         raise SystemExit(f"{failures}/{len(samples)} positions differ")
-    print(f"layout OK: {len(samples)} positions, {planes} planes, engine == trainer")
+    print(f"layout OK: {len(samples)} positions, {planes} planes, "
+          f"{globals_width} globals (A={args.a}), engine == trainer")
 
 
 if __name__ == "__main__":
