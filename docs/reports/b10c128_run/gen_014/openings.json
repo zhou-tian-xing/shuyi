@@ -1,0 +1,63 @@
+{
+  "model": "/root/shuyi/runs/b10c128_3h/gen_014/candidate.bin",
+  "samples": 10386,
+  "max_ply": 10,
+  "corner": 0.09387637203928365,
+  "edge": 0.10774119006354708,
+  "inner": 0.6665703832081649,
+  "center": 0.13181205468900442,
+  "top1_agreement": 0.025996534153819084,
+  "mean_value": 0.4810987412929535,
+  "top_cells": [
+    {
+      "cell": 64,
+      "name": "b8",
+      "count": 855
+    },
+    {
+      "cell": 10,
+      "name": "b2",
+      "count": 790
+    },
+    {
+      "cell": 16,
+      "name": "h2",
+      "count": 713
+    },
+    {
+      "cell": 70,
+      "name": "h8",
+      "count": 579
+    },
+    {
+      "cell": 72,
+      "name": "a9",
+      "count": 330
+    },
+    {
+      "cell": 19,
+      "name": "b3",
+      "count": 300
+    },
+    {
+      "cell": 11,
+      "name": "c2",
+      "count": 263
+    },
+    {
+      "cell": 55,
+      "name": "b7",
+      "count": 259
+    },
+    {
+      "cell": 13,
+      "name": "e2",
+      "count": 246
+    },
+    {
+      "cell": 80,
+      "name": "i9",
+      "count": 243
+    }
+  ]
+}

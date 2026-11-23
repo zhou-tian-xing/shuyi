@@ -1,0 +1,12 @@
+# Build trees and packaged output
+build/
+build-cuda/
+build_ui_only/
+build_engine_only/
+dist/
+# Training runs: models, self-play data and logs are big binaries, kept out of
+# git on purpose (they live on the server and in runs/ on this machine).
+runs/
+*.bin
+# Local scratch
+*.log

@@ -1,0 +1,20 @@
+{
+  "a_name": "gen0_new",
+  "b_name": "resnet_v1",
+  "a_engine": "mcts_nn",
+  "b_engine": "mcts_nn",
+  "a_model": "runs/onehour/models/gen_000.bin",
+  "b_model": "models/shuyi_resnet_v1.bin",
+  "games": 60,
+  "wins": 57,
+  "draws": 0,
+  "losses": 3,
+  "score_a": 0.9500,
+  "score_ci_low": 0.8630,
+  "score_ci_high": 0.9829,
+  "elo_diff": 511.5014,
+  "mean_margin_a": 15.5833,
+  "time_ms": 30,
+  "opening_plies": 2,
+  "seed": 888001
+}

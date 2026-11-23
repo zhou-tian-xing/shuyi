@@ -1,0 +1,5 @@
+engine,games,wins,draws,losses,score_rate,elo,ci_low,ci_high
+random,6,0,0,6,0,0,0,0
+pruning,6,6,0,0,1,1077.55,706.686,1154.47
+mcts,6,4,0,2,0.666667,654.182,341.085,904.231
+mcts_nn,6,2,0,4,0.333333,298.973,-300.743,515.215

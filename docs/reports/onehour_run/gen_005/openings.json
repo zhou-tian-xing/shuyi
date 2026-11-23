@@ -1,0 +1,63 @@
+{
+  "model": "/root/shuyi/runs/onehour/gen_005/candidate.bin",
+  "samples": 1800,
+  "max_ply": 10,
+  "corner": 0.07333333333333333,
+  "edge": 0.185,
+  "inner": 0.6327777777777778,
+  "center": 0.10888888888888888,
+  "top1_agreement": 0.04777777940034866,
+  "mean_value": 0.5246112942695618,
+  "top_cells": [
+    {
+      "cell": 70,
+      "name": "h8",
+      "count": 107
+    },
+    {
+      "cell": 16,
+      "name": "h2",
+      "count": 102
+    },
+    {
+      "cell": 64,
+      "name": "b8",
+      "count": 78
+    },
+    {
+      "cell": 61,
+      "name": "h7",
+      "count": 75
+    },
+    {
+      "cell": 10,
+      "name": "b2",
+      "count": 73
+    },
+    {
+      "cell": 69,
+      "name": "g8",
+      "count": 57
+    },
+    {
+      "cell": 19,
+      "name": "b3",
+      "count": 57
+    },
+    {
+      "cell": 0,
+      "name": "a1",
+      "count": 56
+    },
+    {
+      "cell": 13,
+      "name": "e2",
+      "count": 54
+    },
+    {
+      "cell": 37,
+      "name": "b5",
+      "count": 49
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "a_name": "gen4cand",
+  "b_name": "gen0",
+  "a_engine": "mcts_nn",
+  "b_engine": "mcts_nn",
+  "a_model": "runs/onehour/gen_004/candidate.bin",
+  "b_model": "runs/onehour/models/gen_000.bin",
+  "games": 30,
+  "wins": 10,
+  "draws": 0,
+  "losses": 20,
+  "score_a": 0.3333,
+  "score_ci_low": 0.1923,
+  "score_ci_high": 0.5122,
+  "elo_diff": -120.4120,
+  "mean_margin_a": -5.6000,
+  "time_ms": 30,
+  "opening_plies": 2,
+  "seed": 777004
+}

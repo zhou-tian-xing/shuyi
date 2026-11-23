@@ -1,0 +1,1948 @@
+{
+  "generations": [
+    {
+      "gen": 0,
+      "engine": "mcts",
+      "play_model": "",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_000/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_000/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.035,
+        "edge": 0.042222222222222223,
+        "inner": 0.7427777777777778,
+        "center": 0.18,
+        "top1_agreement": 0.0027777778450399637,
+        "mean_value": 0.5070236921310425,
+        "top_cells": [
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 134
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 132
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 131
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 82
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 66
+          },
+          {
+            "cell": 37,
+            "name": "b5",
+            "count": 61
+          },
+          {
+            "cell": 13,
+            "name": "e2",
+            "count": 57
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 57
+          },
+          {
+            "cell": 12,
+            "name": "d2",
+            "count": 57
+          },
+          {
+            "cell": 69,
+            "name": "g8",
+            "count": 54
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_000/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "finished": "2026-11-22 01:43:45",
+      "arena": {
+        "note": "bootstrap generation; no previous model"
+      },
+      "elo": {
+        "mcts_nn_elo": 453.56,
+        "ci_low": 277.795,
+        "ci_high": 679.033,
+        "games": 12,
+        "report": "/root/shuyi/runs/onehour/elo_gen_000/ELO_REPORT.md"
+      }
+    },
+    {
+      "gen": 1,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_001/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_001/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.1738888888888889,
+        "edge": 0.1438888888888889,
+        "inner": 0.5605555555555556,
+        "center": 0.12166666666666667,
+        "top1_agreement": 0.036666665226221085,
+        "mean_value": 0.5494932532310486,
+        "top_cells": [
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 135
+          },
+          {
+            "cell": 0,
+            "name": "a1",
+            "count": 128
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 108
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 96
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 93
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 80
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 62
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 49
+          },
+          {
+            "cell": 80,
+            "name": "i9",
+            "count": 43
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 39
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_001/candidate.bin",
+      "promoted": false,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_001.bin",
+      "finished": "2026-11-22 01:45:06",
+      "arena": {
+        "a_name": "gen_001",
+        "b_name": "gen_000",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_001/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+        "games": 20,
+        "wins": 8,
+        "draws": 1,
+        "losses": 11,
+        "score_a": 0.425,
+        "score_ci_low": 0.2383,
+        "score_ci_high": 0.6359,
+        "elo_diff": -52.5116,
+        "mean_margin_a": -0.7,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20292538,
+        "promoted": false
+      }
+    },
+    {
+      "gen": 2,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_001.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_002/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_002/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.06055555555555556,
+        "edge": 0.2088888888888889,
+        "inner": 0.5777777777777777,
+        "center": 0.1527777777777778,
+        "top1_agreement": 0.03444444388151169,
+        "mean_value": 0.5296069383621216,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 99
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 97
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 86
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 83
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 73
+          },
+          {
+            "cell": 37,
+            "name": "b5",
+            "count": 59
+          },
+          {
+            "cell": 46,
+            "name": "b6",
+            "count": 51
+          },
+          {
+            "cell": 4,
+            "name": "e1",
+            "count": 46
+          },
+          {
+            "cell": 5,
+            "name": "f1",
+            "count": 44
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 42
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_002/candidate.bin",
+      "promoted": false,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_002.bin",
+      "finished": "2026-11-22 01:46:38",
+      "arena": {
+        "a_name": "gen_002",
+        "b_name": "gen_001",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_002/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_001.bin",
+        "games": 20,
+        "wins": 9,
+        "draws": 1,
+        "losses": 10,
+        "score_a": 0.475,
+        "score_ci_low": 0.2785,
+        "score_ci_high": 0.6795,
+        "elo_diff": -17.3863,
+        "mean_margin_a": 0.9,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20323875,
+        "promoted": false
+      }
+    },
+    {
+      "gen": 3,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_002.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_000/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_003/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_003/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.10277777777777777,
+        "edge": 0.20277777777777778,
+        "inner": 0.5355555555555556,
+        "center": 0.15888888888888889,
+        "top1_agreement": 0.039444442838430405,
+        "mean_value": 0.5273756384849548,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 93
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 83
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 78
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 72
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 61
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 50
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 49
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 47
+          },
+          {
+            "cell": 65,
+            "name": "c8",
+            "count": 42
+          },
+          {
+            "cell": 25,
+            "name": "h3",
+            "count": 41
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_003/candidate.bin",
+      "promoted": false,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_003.bin",
+      "finished": "2026-11-22 01:48:17",
+      "arena": {
+        "a_name": "gen_003",
+        "b_name": "gen_002",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_003/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_002.bin",
+        "games": 20,
+        "wins": 7,
+        "draws": 0,
+        "losses": 13,
+        "score_a": 0.35,
+        "score_ci_low": 0.1812,
+        "score_ci_high": 0.5671,
+        "elo_diff": -107.5381,
+        "mean_margin_a": -2.85,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20355212,
+        "promoted": false
+      }
+    },
+    {
+      "gen": 4,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_003.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_001/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_004/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_004/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.1111111111111111,
+        "edge": 0.15333333333333332,
+        "inner": 0.6011111111111112,
+        "center": 0.13444444444444445,
+        "top1_agreement": 0.036666665226221085,
+        "mean_value": 0.5343738198280334,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 117
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 106
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 87
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 79
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 62
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 61
+          },
+          {
+            "cell": 65,
+            "name": "c8",
+            "count": 50
+          },
+          {
+            "cell": 80,
+            "name": "i9",
+            "count": 48
+          },
+          {
+            "cell": 0,
+            "name": "a1",
+            "count": 45
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 45
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_004/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_004.bin",
+      "finished": "2026-11-22 01:49:57",
+      "arena": {
+        "a_name": "gen_004",
+        "b_name": "gen_003",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_004/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_003.bin",
+        "games": 20,
+        "wins": 12,
+        "draws": 3,
+        "losses": 5,
+        "score_a": 0.675,
+        "score_ci_low": 0.4567,
+        "score_ci_high": 0.8369,
+        "elo_diff": 126.9682,
+        "mean_margin_a": 1.85,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20386549,
+        "promoted": true
+      }
+    },
+    {
+      "gen": 5,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_004.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_002/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_005/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_005/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.07333333333333333,
+        "edge": 0.185,
+        "inner": 0.6327777777777778,
+        "center": 0.10888888888888888,
+        "top1_agreement": 0.04777777940034866,
+        "mean_value": 0.5246112942695618,
+        "top_cells": [
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 107
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 102
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 78
+          },
+          {
+            "cell": 61,
+            "name": "h7",
+            "count": 75
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 73
+          },
+          {
+            "cell": 69,
+            "name": "g8",
+            "count": 57
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 57
+          },
+          {
+            "cell": 0,
+            "name": "a1",
+            "count": 56
+          },
+          {
+            "cell": 13,
+            "name": "e2",
+            "count": 54
+          },
+          {
+            "cell": 37,
+            "name": "b5",
+            "count": 49
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_005/candidate.bin",
+      "promoted": false,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_005.bin",
+      "finished": "2026-11-22 01:51:37",
+      "arena": {
+        "a_name": "gen_005",
+        "b_name": "gen_004",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_005/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_004.bin",
+        "games": 20,
+        "wins": 8,
+        "draws": 2,
+        "losses": 10,
+        "score_a": 0.45,
+        "score_ci_low": 0.2582,
+        "score_ci_high": 0.6579,
+        "elo_diff": -34.8601,
+        "mean_margin_a": 0.5,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20417886,
+        "promoted": false
+      },
+      "elo": {
+        "mcts_nn_elo": 139.024,
+        "ci_low": -280.177,
+        "ci_high": 451.668,
+        "games": 12,
+        "report": "/root/shuyi/runs/onehour/elo_gen_005/ELO_REPORT.md"
+      }
+    },
+    {
+      "gen": 6,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_005.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_003/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_006/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_006/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.08277777777777778,
+        "edge": 0.18833333333333332,
+        "inner": 0.6138888888888889,
+        "center": 0.115,
+        "top1_agreement": 0.043888889253139496,
+        "mean_value": 0.5229980945587158,
+        "top_cells": [
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 105
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 94
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 85
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 63
+          },
+          {
+            "cell": 25,
+            "name": "h3",
+            "count": 58
+          },
+          {
+            "cell": 65,
+            "name": "c8",
+            "count": 57
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 56
+          },
+          {
+            "cell": 67,
+            "name": "e8",
+            "count": 43
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 42
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 41
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_006/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_006.bin",
+      "finished": "2026-11-22 01:53:34",
+      "arena": {
+        "a_name": "gen_006",
+        "b_name": "gen_005",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_006/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_005.bin",
+        "games": 20,
+        "wins": 10,
+        "draws": 1,
+        "losses": 9,
+        "score_a": 0.525,
+        "score_ci_low": 0.3205,
+        "score_ci_high": 0.7215,
+        "elo_diff": 17.3863,
+        "mean_margin_a": 0.25,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20449223,
+        "promoted": true
+      }
+    },
+    {
+      "gen": 7,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_006.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_004/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_007/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_007/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.07666666666666666,
+        "edge": 0.22166666666666668,
+        "inner": 0.5894444444444444,
+        "center": 0.11222222222222222,
+        "top1_agreement": 0.029444444924592972,
+        "mean_value": 0.4898543953895569,
+        "top_cells": [
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 110
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 83
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 74
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 73
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 60
+          },
+          {
+            "cell": 13,
+            "name": "e2",
+            "count": 57
+          },
+          {
+            "cell": 25,
+            "name": "h3",
+            "count": 50
+          },
+          {
+            "cell": 37,
+            "name": "b5",
+            "count": 46
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 43
+          },
+          {
+            "cell": 76,
+            "name": "e9",
+            "count": 43
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_007/candidate.bin",
+      "promoted": false,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_007.bin",
+      "finished": "2026-11-22 01:55:15",
+      "arena": {
+        "a_name": "gen_007",
+        "b_name": "gen_006",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_007/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_006.bin",
+        "games": 20,
+        "wins": 8,
+        "draws": 1,
+        "losses": 11,
+        "score_a": 0.425,
+        "score_ci_low": 0.2383,
+        "score_ci_high": 0.6359,
+        "elo_diff": -52.5116,
+        "mean_margin_a": -0.5,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20480560,
+        "promoted": false
+      }
+    },
+    {
+      "gen": 8,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_007.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_005/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_008/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_008/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.07833333333333334,
+        "edge": 0.2361111111111111,
+        "inner": 0.5794444444444444,
+        "center": 0.10611111111111111,
+        "top1_agreement": 0.03333333507180214,
+        "mean_value": 0.4806601405143738,
+        "top_cells": [
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 90
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 87
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 79
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 70
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 69
+          },
+          {
+            "cell": 61,
+            "name": "h7",
+            "count": 52
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 48
+          },
+          {
+            "cell": 65,
+            "name": "c8",
+            "count": 45
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 45
+          },
+          {
+            "cell": 46,
+            "name": "b6",
+            "count": 45
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_008/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_008.bin",
+      "finished": "2026-11-22 01:56:57",
+      "arena": {
+        "a_name": "gen_008",
+        "b_name": "gen_007",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_008/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_007.bin",
+        "games": 20,
+        "wins": 13,
+        "draws": 0,
+        "losses": 7,
+        "score_a": 0.65,
+        "score_ci_low": 0.4329,
+        "score_ci_high": 0.8188,
+        "elo_diff": 107.5381,
+        "mean_margin_a": 0.45,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20511897,
+        "promoted": true
+      }
+    },
+    {
+      "gen": 9,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_008.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_006/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_009/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_009/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.07611111111111112,
+        "edge": 0.23055555555555557,
+        "inner": 0.5888888888888889,
+        "center": 0.10444444444444445,
+        "top1_agreement": 0.035555556416511536,
+        "mean_value": 0.49837300181388855,
+        "top_cells": [
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 90
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 90
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 82
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 75
+          },
+          {
+            "cell": 36,
+            "name": "a5",
+            "count": 71
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 51
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 51
+          },
+          {
+            "cell": 28,
+            "name": "b4",
+            "count": 47
+          },
+          {
+            "cell": 76,
+            "name": "e9",
+            "count": 46
+          },
+          {
+            "cell": 14,
+            "name": "f2",
+            "count": 46
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_009/candidate.bin",
+      "promoted": false,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_009.bin",
+      "finished": "2026-11-22 01:58:38",
+      "arena": {
+        "a_name": "gen_009",
+        "b_name": "gen_008",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_009/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_008.bin",
+        "games": 20,
+        "wins": 8,
+        "draws": 3,
+        "losses": 9,
+        "score_a": 0.475,
+        "score_ci_low": 0.2785,
+        "score_ci_high": 0.6795,
+        "elo_diff": -17.3863,
+        "mean_margin_a": -0.85,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20543234,
+        "promoted": false
+      }
+    },
+    {
+      "gen": 10,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_009.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_007/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_010/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_010/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.07833333333333334,
+        "edge": 0.22555555555555556,
+        "inner": 0.56,
+        "center": 0.1361111111111111,
+        "top1_agreement": 0.03777777776122093,
+        "mean_value": 0.4816790819168091,
+        "top_cells": [
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 97
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 78
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 70
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 69
+          },
+          {
+            "cell": 61,
+            "name": "h7",
+            "count": 53
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 53
+          },
+          {
+            "cell": 25,
+            "name": "h3",
+            "count": 48
+          },
+          {
+            "cell": 4,
+            "name": "e1",
+            "count": 48
+          },
+          {
+            "cell": 0,
+            "name": "a1",
+            "count": 45
+          },
+          {
+            "cell": 67,
+            "name": "e8",
+            "count": 42
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_010/candidate.bin",
+      "promoted": false,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_010.bin",
+      "finished": "2026-11-22 02:00:18",
+      "arena": {
+        "a_name": "gen_010",
+        "b_name": "gen_009",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_010/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_009.bin",
+        "games": 20,
+        "wins": 7,
+        "draws": 1,
+        "losses": 12,
+        "score_a": 0.375,
+        "score_ci_low": 0.1998,
+        "score_ci_high": 0.5905,
+        "elo_diff": -88.7395,
+        "mean_margin_a": -0.95,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20574571,
+        "promoted": false
+      },
+      "elo": {
+        "mcts_nn_elo": 383.045,
+        "ci_low": 150.173,
+        "ci_high": 490.73,
+        "games": 12,
+        "report": "/root/shuyi/runs/onehour/elo_gen_010/ELO_REPORT.md"
+      }
+    },
+    {
+      "gen": 11,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_010.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_008/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_011/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_011/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.07833333333333334,
+        "edge": 0.2722222222222222,
+        "inner": 0.5377777777777778,
+        "center": 0.11166666666666666,
+        "top1_agreement": 0.035555556416511536,
+        "mean_value": 0.49326154589653015,
+        "top_cells": [
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 95
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 82
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 70
+          },
+          {
+            "cell": 44,
+            "name": "i5",
+            "count": 65
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 60
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 57
+          },
+          {
+            "cell": 76,
+            "name": "e9",
+            "count": 51
+          },
+          {
+            "cell": 77,
+            "name": "f9",
+            "count": 46
+          },
+          {
+            "cell": 37,
+            "name": "b5",
+            "count": 45
+          },
+          {
+            "cell": 36,
+            "name": "a5",
+            "count": 44
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_011/candidate.bin",
+      "promoted": false,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_011.bin",
+      "finished": "2026-11-22 02:02:14",
+      "arena": {
+        "a_name": "gen_011",
+        "b_name": "gen_010",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_011/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_010.bin",
+        "games": 20,
+        "wins": 7,
+        "draws": 0,
+        "losses": 13,
+        "score_a": 0.35,
+        "score_ci_low": 0.1812,
+        "score_ci_high": 0.5671,
+        "elo_diff": -107.5381,
+        "mean_margin_a": -1.6,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20605908,
+        "promoted": false
+      }
+    },
+    {
+      "gen": 12,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_011.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_009/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_012/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_012/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.075,
+        "edge": 0.23722222222222222,
+        "inner": 0.5633333333333334,
+        "center": 0.12444444444444444,
+        "top1_agreement": 0.02777777798473835,
+        "mean_value": 0.4817332625389099,
+        "top_cells": [
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 87
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 85
+          },
+          {
+            "cell": 76,
+            "name": "e9",
+            "count": 71
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 70
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 67
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 62
+          },
+          {
+            "cell": 61,
+            "name": "h7",
+            "count": 59
+          },
+          {
+            "cell": 67,
+            "name": "e8",
+            "count": 47
+          },
+          {
+            "cell": 44,
+            "name": "i5",
+            "count": 46
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 46
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_012/candidate.bin",
+      "promoted": false,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_012.bin",
+      "finished": "2026-11-22 02:03:53",
+      "arena": {
+        "a_name": "gen_012",
+        "b_name": "gen_011",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_012/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_011.bin",
+        "games": 20,
+        "wins": 7,
+        "draws": 0,
+        "losses": 13,
+        "score_a": 0.35,
+        "score_ci_low": 0.1812,
+        "score_ci_high": 0.5671,
+        "elo_diff": -107.5381,
+        "mean_margin_a": -2.65,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20637245,
+        "promoted": false
+      }
+    },
+    {
+      "gen": 13,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_012.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_010/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_013/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_013/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.08388888888888889,
+        "edge": 0.2388888888888889,
+        "inner": 0.5811111111111111,
+        "center": 0.0961111111111111,
+        "top1_agreement": 0.03611111268401146,
+        "mean_value": 0.48217886686325073,
+        "top_cells": [
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 90
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 86
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 82
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 72
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 69
+          },
+          {
+            "cell": 76,
+            "name": "e9",
+            "count": 54
+          },
+          {
+            "cell": 36,
+            "name": "a5",
+            "count": 52
+          },
+          {
+            "cell": 15,
+            "name": "g2",
+            "count": 50
+          },
+          {
+            "cell": 37,
+            "name": "b5",
+            "count": 46
+          },
+          {
+            "cell": 4,
+            "name": "e1",
+            "count": 44
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_013/candidate.bin",
+      "promoted": false,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_013.bin",
+      "finished": "2026-11-22 02:05:34",
+      "arena": {
+        "a_name": "gen_013",
+        "b_name": "gen_012",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_013/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_012.bin",
+        "games": 20,
+        "wins": 10,
+        "draws": 0,
+        "losses": 10,
+        "score_a": 0.5,
+        "score_ci_low": 0.2993,
+        "score_ci_high": 0.7007,
+        "elo_diff": 0.0,
+        "mean_margin_a": 0.15,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20668582,
+        "promoted": false
+      }
+    },
+    {
+      "gen": 14,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_013.bin",
+      "selfplay_samples": 10400,
+      "train_shards": [
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_011/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_012/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_013/selfplay/shard_007.bin",
+        "/root/shuyi/runs/onehour/gen_014/selfplay/shard_000.bin",
+        "/root/shuyi/runs/onehour/gen_014/selfplay/shard_001.bin",
+        "/root/shuyi/runs/onehour/gen_014/selfplay/shard_002.bin",
+        "/root/shuyi/runs/onehour/gen_014/selfplay/shard_003.bin",
+        "/root/shuyi/runs/onehour/gen_014/selfplay/shard_004.bin",
+        "/root/shuyi/runs/onehour/gen_014/selfplay/shard_005.bin",
+        "/root/shuyi/runs/onehour/gen_014/selfplay/shard_006.bin",
+        "/root/shuyi/runs/onehour/gen_014/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/onehour/gen_014/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/onehour/gen_014/candidate.bin",
+        "samples": 1800,
+        "max_ply": 10,
+        "corner": 0.09888888888888889,
+        "edge": 0.2733333333333333,
+        "inner": 0.5272222222222223,
+        "center": 0.10055555555555555,
+        "top1_agreement": 0.03444444388151169,
+        "mean_value": 0.47396260499954224,
+        "top_cells": [
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 81
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 72
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 63
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 58
+          },
+          {
+            "cell": 44,
+            "name": "i5",
+            "count": 57
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 57
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 51
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 51
+          },
+          {
+            "cell": 76,
+            "name": "e9",
+            "count": 47
+          },
+          {
+            "cell": 61,
+            "name": "h7",
+            "count": 46
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/onehour/gen_014/candidate.bin",
+      "promoted": false,
+      "final_model": "/root/shuyi/runs/onehour/models/gen_014.bin",
+      "finished": "2026-11-22 02:07:14",
+      "arena": {
+        "a_name": "gen_014",
+        "b_name": "gen_013",
+        "a_engine": "mcts_nn",
+        "b_engine": "mcts_nn",
+        "a_model": "/root/shuyi/runs/onehour/gen_014/candidate.bin",
+        "b_model": "/root/shuyi/runs/onehour/models/gen_013.bin",
+        "games": 20,
+        "wins": 6,
+        "draws": 3,
+        "losses": 11,
+        "score_a": 0.375,
+        "score_ci_low": 0.1998,
+        "score_ci_high": 0.5905,
+        "elo_diff": -88.7395,
+        "mean_margin_a": -2.2,
+        "time_ms": 15,
+        "opening_plies": 2,
+        "seed": 20699919,
+        "promoted": false
+      },
+      "elo": {
+        "mcts_nn_elo": 383.045,
+        "ci_low": 155.068,
+        "ci_high": 504.095,
+        "games": 12,
+        "report": "/root/shuyi/runs/onehour/elo_gen_014/ELO_REPORT.md"
+      }
+    }
+  ],
+  "config": {
+    "run_name": "onehour",
+    "run_dir": "/root/shuyi/runs/onehour",
+    "resume": false,
+    "force": false,
+    "dry_run": false,
+    "generations": 15,
+    "games_per_gen": 200,
+    "min_positions": 10000,
+    "workers": 8,
+    "time_ms": 30,
+    "epochs": 50,
+    "batch": 512,
+    "channels": 16,
+    "blocks": 2,
+    "max_samples": 0,
+    "replay_gens": 4,
+    "lr": 0.002,
+    "value_weight": 0.5,
+    "val": 0.08,
+    "opening": 2,
+    "root_children": 32,
+    "temp_moves": 12,
+    "temperature": 1.0,
+    "dirichlet": 0.3,
+    "noise": 0.25,
+    "max_plies": 54,
+    "elo_every": 5,
+    "elo_games": 4,
+    "elo_time": 15,
+    "elo": true,
+    "promotion_games": 20,
+    "promotion_time": 15,
+    "promotion_threshold": 0.52,
+    "seed": 20261201,
+    "device": "cuda",
+    "amp": true,
+    "selfplay": "/root/shuyi/build/shuyi_selfplay",
+    "match": "/root/shuyi/build/shuyi_match",
+    "tournament": "/root/shuyi/build/shuyi_tournament",
+    "trainer": "/root/shuyi/tools/train_resnet.py",
+    "diagnose": "/root/shuyi/training/diagnose_openings.py",
+    "python": "/root/torchenv/bin/python"
+  },
+  "started": "2026-11-22 01:42:49",
+  "updated": "2026-11-22 02:07:46",
+  "finished": "2026-11-22 02:07:46"
+}

@@ -1,0 +1,627 @@
+# 训练手册（数弈）
+
+这份文件是训练相关的**唯一入口**：原则、流程、评估口径、以及每次改进的记录。
+改训练相关的东西时，先把改动写进第 6 节的记录，再改代码。
+
+文件都在这个目录下（`experimental/training/`），需要完整文件地图看
+[../../docs/MAINTAINERS.zh-CN.md](../../docs/MAINTAINERS.zh-CN.md)：
+
+| 要做什么 | 用哪个文件 |
+|---|---|
+| 跑一代代训练 | `pipeline.py`（编排）、`train_resnet.py`（训练器） |
+| 产自对弈数据 | `../selfplay/selfplay_gpu.cpp`（C++/CUDA） |
+| 横评与 Elo | `arena.py`（异构玩家）、`elo.py`（拟合/合并）、`cross_eval.py`（合成一张表） |
+| 标定 A值 | `avalue.py` |
+| 评测预算常量 | `evalconfig.py`（`EVAL_VISITS`，**唯一**允许的预算来源） |
+| 计分互校 | `rule_probe.py`（独立实现） |
+| 目标分布闸门 | `target_stats.py` |
+| 把服务器产物拉回本地 | `pull.py` |
+
+---
+
+## 1. 两条硬性原则（用户定，不要违背）
+
+### 1.1 连续 10 代最高 ELO 没有提升 → 换更大的模型
+
+单代噪声很大（160 局 arena 的 σ≈4%，200 局 head-to-head 的 σ≈3.5%），
+所以"这代没涨"不能作为换模型的理由；但**连续 10 代**最高 ELO 都没超过历史最高
+（超过阈值为 `--plateau-margin`，默认 +20 Elo），说明瓶颈在容量或数据分辨率，
+而不是运气。
+
+实现：`experimental/training/pipeline.py` 的 `--plateau-generations 10 --plateau-margin 20`，
+触发后按 `--capacity-ladder "b4c32,b6c48,b6c64,b8c96"` 升一档，
+manifest 里记 `capacity_history`。宽度变了不能热启动，所以升级是**开新 run、用已有数据冷启动**。
+
+实测参考（srv1，2 小时 09 分，7 代）：gen2 之后 gen3..gen6 的 ELO 全部重叠在 +320…+375，
+也就是**第 2 代之后就是平台**——按这条原则，那种情况该考虑换更大的模型，而不是继续刷代数。
+
+### 1.2 ELO 永远以"随机落子 = 0"为基准，高胜率用相对 ELO 表达
+
+评分不是"赢了上一代多少"，也不是 `val_loss`，而是同一池子里的 Elo 标定：
+
+- `random`（均匀随机）**固定为 0**，不参与拟合；其他模型的分 = 相对随机落子的 Elo。
+- 这样跨 run、跨模型大小、跨规则都能比较（只要锚点相同）。
+- 接近 100% 胜率时不要写"100%"，写**相对 ELO 与下界**（如 `≥ +900`）：
+  全胜样本没有失败可重采样，bootstrap 区间会退化，此时只有下界是诚实的。
+- 实现：`experimental/training/elo.py --anchor random`；`experimental/training/arena.py` 自动加入 random 锚点。
+
+绝对 Elo 依赖参赛池和先验，**只有同一池内的差距有意义**。
+
+---
+
+## 2. 数据从哪来
+
+一个二进制，五种模式（`experimental/selfplay/selfplay_gpu.cpp`，C++ 树 + 批量 CUDA）：
+
+| 阶段 | 命令 | 作用 |
+|------|------|------|
+| 引导 | `--mode random` | 随机对局，只教价值头；policy 目标老实地均匀 |
+| 引导 | `--mode oneply` | 一层**全宽**价值扫描：每个合法着法走一步、用价值网评估，`p ∝ exp((Q-max)/T)`，`T=0.5·std(Q)` |
+| 主循环 | `--mode selfplay --visits N` | Dirichlet-MCTS 自对弈，根访问分布作 policy 目标 |
+| 评估 | `--mode match` | 换色对局，GPU 上跑 |
+| 评估 | `--mode serve` | 走行协议，和 CPU 引擎同池对战 |
+
+为什么先 oneply：开局分支是 729（81 格 × 9 个数字），400 次访问摊下去只有 0.5~1.2 次/着法，
+目标几乎等于先验顺序；实测 128 visits 在**阻挡规则**下 `cell_ratio` 已经 0.557，
+而经典规则 400 visits 全宽根是 0.846（1.0 = 只区分"下哪个数字"）。
+
+`visits` 的规则：**≥ 20 × root-k**；先验没变尖之前保持 `--root-k 0`。
+
+---
+
+## 3. 每代都过闸门（训练之前）
+
+`experimental/training/pipeline.py` 在训练前检查目标分布，不达标直接失败（不浪费训练时间）：
+
+| 指标 | 默认阈值 | 含义 |
+|------|---------|------|
+| `cell_ratio` | ≤ 0.90 | 目标能否区分格子；≈1 就是"只知道下哪个数字" |
+| `max_prob × legal` | ≥ 2 | 峰值至少 2 倍于均匀 |
+| `entropy / ln(legal)` | ≤ 0.97 | 别太接近均匀 |
+
+被拒时错误信息会说明该调什么（提高 visits/root-k，或加大 gen0）。
+
+---
+
+## 4. 横评（所有线路、所有模型）
+
+### 4.1 预算只有一个数字：visits
+
+评估看的是**模型**，所以每一步的搜索量必须固定、与机器无关。**不看时间**：同一句
+`--time 80` 在 3080 和 MX350 上是完全不同的访问数，那样测出来的是主机性能，不是棋力。
+唯一允许的预算是 `experimental/training/evalconfig.py` 里的常量：
+
+```python
+EVAL_VISITS = 512      # 每一步、每个参赛者，都用这个数
+```
+
+一个"visit"是什么，按参赛者类型定义（这就是全部契约）：
+
+| 参赛者 | 1 visit = |
+|---|---|
+| `gpu:<model>` | 一次树搜索模拟 = 一次批量 CUDA 前向 |
+| `mcts_nn:<model>` | 一次树搜索模拟 = 一次 CPU 前向 |
+| `mcts` | 一次树搜索模拟 = 一次 rollout |
+| `pruning` | **一个节点 = 一次叶子评估**（alpha-beta 没有"模拟"，用节点数对齐） |
+
+实施细节（都是为了让数字可复现）：
+
+- `shuyi_engine` 的 `set_visits N` 现在对四种引擎都生效。剪枝引擎以前收到 `visits>0`
+  会把 `timeLimitMs` 设成 0 然后**立刻中止**（等于下随机棋），所以旧脚本只能给它按时间跑——
+  这是错的。现在 `SearchOptions::nodeLimit` 走节点预算，**完全不看墙钟**。
+- 剪枝会搜完当前这一层才停（不能用一个半成品深度的着法），所以节点数会在预算之上溢出一点；
+  这个溢出是**确定的**，两次相同输入永远给出相同的节点数与着法（`shuyi_visit_budget` 测试）。
+- `arena.py` 里 `--time` 只保留为**挂死保护**（默认 1 小时，正常永远不会触发），
+  `--hang-guard-ms` 可调。它必须永远晚于访问预算触发，否则表就变成主机性能表。
+- `elo.py --report` **拒绝合并预算不同的矩阵**（旧表 96/128/192 混着合并过，那是错的，
+  现在直接报错退出）。
+
+### 4.2 跑法
+
+```bash
+export OMP_NUM_THREADS=1     # 必须：多个 serve 进程各吃满线程会假死
+python experimental/training/arena.py --players random pruning mcts \
+    mcts_nn:runs/blocking/blk1/models/b4c32-s34760-d470705.bin \
+    gpu:runs/blocking/blk1/models/b4c32-s34760-d470705.bin \
+    --games 6 --visits 512 --komi 1.26 --ruleset blocking --workers 2 \
+    --out runs/arena/blocking512/table.json
+python experimental/training/elo.py --report runs/arena/blocking512/table.json --anchor random
+```
+
+- 每局记录全部着法，终局分用 `experimental/training/rule_probe.py` 的计分函数算（和引擎同一公式）。
+- 结果 `runs/arena/<ruleset>.json` 可直接喂给 `elo.py --report`（可传多份，预算必须一致）。
+- 样本量：50% 附近，20 局 ≈ ±20pp、60 局 ≈ ±12pp、200 局 ≈ ±7pp、400 局 ≈ ±5pp。
+  **每对少于 60 局的表只用来排序，不要比小数点。**
+
+### 4.3 512 visits 的实际成本（实测）
+
+| 参赛者 | 每步 | 每局（~52 手） | 机器 |
+|---|---|---|---|
+| `gpu:*` | ~0.19 s | ~10 s | 本机 MX350 |
+| `pruning` | ~2 ms | ~0.1 s | 本机 CPU |
+| `mcts` | ~15 ms | ~0.8 s | 本机 CPU |
+| `mcts_nn:*`（b4c32，CPU 前向 ~3.6 ms/次） | ~1.9 s | **~100 s** | 本机 CPU |
+
+→ GPU 线路和剪枝/MCTS 线路在 512 visits 下都能跑完整表；CPU 版的 MCTS-NN 每局 ~100 s，
+只够跑少数几对（GPU 上同样 512 visits 只要 10 s）。这不是预算问题，是 CPU 前向的固有限制——
+所以**不要**为了让它跑快而给它更少的 visits，那样表就不可比了；要么接受它贵，要么上 GPU。
+
+---
+
+## 5. 规则隔离（两套规则并行）
+
+- 模型 `SHUYINN3`、数据 `SYSELF3` 都带 `ruleset` 字节；**加载时双向校验**，
+  阻挡模型配经典规则直接拒绝。
+- 旧文件用 `experimental/training/model_migrate.py --ruleset classic` 显式升级（只改头，不动权重）。
+- v2 的 37 平面文件（side 平面写在 36 的旧布局）会被拒绝——那批权重不能用。
+- 目录 `runs/<ruleset>/`，模型名后缀 `-cls` / `-blk`。
+
+---
+
+## 6. 改进记录
+
+### 2026-11-22 · srv1 实跑后的修正
+
+1. **顺次训练**：链条无条件前进（第 N+1 代打第 N 代的数据、从第 N 代权重续训），
+   arena 只记录不设闸门。原因：srv1 的 gen3..gen6 全部对着 gen2 的权重打，白跑 50 分钟；
+   而"某个模型 match 里强"不等于"它的数据适合训练"。
+2. **ELO 标定取代 val_loss**：srv1 的 gen5/gen6 把 `val_policy` 从 4.40 降到 3.34、
+   目标 `cell_ratio` 从 0.77 降到 0.60，但对 gen2 的 200 局复核是 0.495 / 0.5125 ——
+   **指标降了、棋力没涨**。之后只认 ELO。
+3. **komi 重新标定**：实测 gen2 在 komi 0 时红胜 52.4%、komi −5 时 10.9% ⇒ 公平 komi ≈ −0.3，
+   默认从 −5 改为 −0.5；小数 komi 让和棋结构性消失（0.00%）。
+4. **OpenMP 并行** descend/expand/back up（三棵树立，天然可并行）：本机 descend 0.29→0.14 ms、
+   expand 1.65→0.55 ms；服务器上原来 GPU 只有 27% 利用率，CPU 那半 ~4.7 ms。
+5. **每 tick 复用缓冲**，去掉每 tick 1.5 MB 的分配；`--stats` 打三段耗时。
+
+### 2026-11-23 · 界面、横评、格式 v4、分数头
+
+1. **棋子改方形**（圆角矩形，半径 = 格宽 40%），最后一手的金框也改成同形状；分析标记复用同一几何。
+2. **MCTS 标记**：与棋子同尺寸的细边框 + 半透明染色（按棋盘色混合，避免用 alpha 通道）；
+   **最优浅蓝**，其余按"与最优的胜率差"红→绿插值；
+   差值 >20 个百分点或访问数 < 最优 5% 的格子**不画**。
+   三栏依次是胜率 / 访问数（`820`、`1.2k`、`12k`、`120k`、`1.2M`，≤4 字符，有单测）/ 预期平均分。
+   没有分数头时第三栏显示 `--`。
+3. **横评工具**：`experimental/training/arena.py` 让 GPU 模型（`--mode serve`）与 CPU 引擎同池对战，
+   任意两方配对、换色、记录着法、用 `rule_probe` 的计分函数算终局；
+   `experimental/training/elo.py --anchor random` 把随机钉在 0。（预算规则已于 2026-11-24 改为统一 visits，见 4.1；此处旧的按时间预算说法作废。）
+4. **数据 v4**：样本尾部加 `int8 score`（终局 raw 分，走子方视角），作为分数头目标；
+   v1/v2/v3 仍可读。
+5. **分数头框架**：`--score-weight`，模型 flags bit0 + 尾部权重（与价值头同形状），
+   CPU 推理填 `NnOutput.expectedScore`（tanh × 30）。CUDA 路径暂不实现分数头（只用于产数据）。
+
+### 2026-11-23 · 规则隔离打通
+
+1. **一条命令跑通阻挡规则**：`python experimental/training/pipeline.py --ruleset blocking ...`
+   → 数据（`SYSELF4`）、模型（`SHUYINN3`，ruleset 字节）、训练器（`--ruleset`）、
+   arena/ELO（`--ruleset`）全部带标签，run 目录在 `runs/blocking/<name>`，
+   模型名带 `-blk` 后缀。经典侧仍是 `runs/classic/...` + `-cls`。
+2. **UI 规则菜单**：`规则(&R)` → 现行规则 / 阻挡规则；开赛后不允许切换（会提示先开新局），
+   切换时重启引擎进程并把 `ruleset` 下发给引擎。
+3. `target_stats.py` 的"合法着法数"按规则算（阻挡下随机对局均值 308，经典是 390）。
+4. 顺带修：训练器热启动时对缺失的分数头用 `strict=False`（其它键仍严格校验）。
+
+### 2026-11-23 · 阻挡规则
+
+1. `Ruleset{Classic,Blocking}` 作为运行时参数贯穿引擎/协议/数据/模型/UI；
+   规则特有代码隔离在 `src/ai_blocking.cpp`。
+2. 新剪枝：评估加"挤压"（双方可落子格数之差），排序加"封锁数"。
+   同规则对打 **36 : 3** 胜过经典策略。
+3. 强制过手 + 连续两次过手终局；过手位置不写训练样本（policy 没有"过手"这一维）。
+4. 格式 v3（模型/数据带 ruleset）；`arena.py` + `elo.py --anchor random` 上线。
+
+### 2026-11-23 · 阻挡规则首跑（服务器 3 小时）、A值标定、分数头真正接通
+
+1. **blk1 运行**：RTX 3080，`--ruleset blocking --komi 0 --games-per-gen 1500 --visits 1024
+   --root-k 16 --top-k 16 --batch-games 96 --arena-visits 256 --arena-games 120`，
+   容量 b4c32（与 srv1 同容量，这样两套规则的差别不是容量差别），模型名
+   `b4c32-s*-d*-blk.bin`。gen0 随机（3.5 s）→ gen1/gen2 单层扫描 → gen3 起 MCTS 自对弈。
+   链无条件前进，arena 只记录（§1.2 的规则）。
+2. **A值标定工具** `experimental/training/avalue.py`：同一个模型自己打自己（强弱对称，剩下的只有颜色偏差），
+   逐 komi 跑 `--mode match`，直接读每局的 `a_is_red` + `result` 算红方得分，
+   再用两参数 logistic 拟合交点 A\*（不局限于扫过的点，还有 delta-method 的 SE）。
+3. **新规则默认 A=0**：先按 0 训练，标定后再决定是否改默认值（结果见 §8）。
+4. **分数头从来没生效过（真 bug）**：`PolicyValueNet::load()` 里 `hasScoreHead_ = flags & 1`
+   写在 `clear()` **之前**，而 `clear()` 会把它清零 —— 于是所有带 flags bit0 的模型读进来
+   `hasScoreHead_` 都是 false，CPU 推理永远不填 `expectedScore`，`--score-weight` 训出来的头
+   等于白训。修法：赋值挪到 `clear()/allocate()` 之后。单测覆盖（save→load 后 flags 仍在）。
+5. **CUDA 前向补上分数头**：额外一次 1×1 空间归约（复用 `valueSpatialKernel`）+ 同形状 MLP，
+   输出 `tanh(x) × kScoreScale`；`--check` 现在也对比 `score |max|`（本机 1e-6）。
+6. **MCTS 真正用上 `expectedScore`**：叶子回传的分数改成"有分数头就用网络预测，
+   没有才退回 value→分数 的线性映射"。单测：`enableScoreHead(1.0)` 的模型（输出恒为
+   tanh(1)×30）在 visits=1 时，根节点 `averageScore` 正好是 −tanh(1)×30（根边一次符号翻转）。
+   UI 第三行因此显示网络的判断，而不是从胜率猜的分数。
+7. **UI 二级菜单**：`引擎(&E)` → `MCTS + 网络` 子菜单，列出 `models/*.bin` 和
+   `runs/*/models/*.bin` 里的**全部**模型（名字后标 `[现行]`/`[阻挡]`）＋
+   `重新扫描模型目录`；选中即换模型并重启引擎进程（`set_model` 只在启动时读）。
+   `shuyi.exe --dump-models out.txt` 无界面导出菜单条目，回归检查用。
+8. **横评/标定脚本**：`experimental/training/cross_eval.py` 把"线路横评（`arena.py`，异构对手）"与
+   "代数爬梯（`elo.py --models`，批量 GPU）"合成**一张**以 random=0 为锚的评分表；
+   `elo.py --report` 现在可以重复传多份矩阵合并（同一对按无序对相加）。
+   `experimental/training/pull.py` 断点续拉服务器产物（模型/数据/日志/JSON），训练还在跑时就能同步。
+9. **操作教训（server 横评）**：`arena.py` 并发拉起多个 `--mode serve` 的 GPU 进程时，
+   每个进程默认用满 OpenMP 线程 —— 16 核上 7 个进程 × 8 线程，单步 `genmove` 退化成
+   "看起来卡死"（实际是在抢核）。给 serve 进程加 `OMP_NUM_THREADS=1` 后，同样一局从
+   十几分钟掉到 <11 s。以后跑 GPU 横评一律先设这个环境变量。
+
+### 2026-11-23 · 对称性：等价点只搜一次、显示同一份结果
+
+棋盘在正方形的 8 个等距变换（4 旋转 + 4 镜像）下不变，两套规则都只看"本身 + 上下左右
+四邻"，所以变换前后是**同一个游戏**。但搜索一直把 a1 和 i1 当成两个不同的着法各自搜，
+分析结果也各报各的，于是同一类点的胜率/访问数不一样，界面看起来像"引擎只认一个点"。
+
+改动：
+
+1. `Position::transformCell / symmetryMask / stabilizer / orbitSize`（`position.cpp`）：
+   8 个变换的坐标映射、当前局面的对称群（8 位掩码）、固定某格的子群、某格轨道大小。
+2. MCTS 每个节点带一个对称群掩码（`symmetry_`）：根本局面算一次，子节点是
+   `父群 ∩ 固定着法子群`，不重复扫描棋盘。展开时把着法按轨道分组，**一个轨道只留一个
+   可搜索的代表**（选策略先验最高的那个，因为网络的先验只是近似对称的），其余
+   `searchable=0`、只记录 `representative` 指向代表。
+3. 报告：`cells=` 里每个格子都按代表边的数字填，所以同一轨道的点显示**完全相同**的
+   胜率/访问数/目差；`rootPolicy()` 也让等价着法共享访问数，否则自对弈的策略目标会
+   教网络"两个等价着法里有一个更好"。
+4. 证明（MCTS-Solver）只在代表边上归纳：等价着法带到的局面和代表一样，既不会多证也
+   不会少证。
+5. 顺手修掉一个**真 bug**：`rootKey_ = 0` 同时是**空盘的 Zobrist 键**，而它又被当作
+   "还没有树"的哨兵。结果空盘的根节点一直用恒等掩码（没走对称合并）。现在用显式的
+   `rootValid_` 标志，单测 `testSymmetryReport` 盯着这一点。
+
+实测（空盘、mcts_nn、3000 visits，协议层 `cells=`）：
+
+```
+c1:3 0.607/135  g1:3 0.607/135  a3:3 0.607/135  i9:3 0.607/135   ← 8 个镜像点同一组数
+b1:3 0.607/84   a1:3 0.603/13   （四个角 a1/i1/a9/i9 都是 0.603/13）
+```
+
+78 个空格里 52 个有数据（以前 12 个），因为一个代表的结果会覆盖它整个轨道。
+`shuyi_tests` 新增 `testBoardSymmetry`（变换是双射、保持邻接、轨道大小、稳定子）和
+`testSymmetryReport`（空盘四角数字完全一致；a1 有子时对角线转置对 b1/a2 一致）。
+
+**同时修掉"只剩一个点"的两个来源：**
+
+1. `EngineOptions::visits` 默认从 0 改成 **512**。以前 0 表示"按墙钟"，任何没显式设预算
+   的前端（包括旧界面）在 analyze 模式下都会无限搜，访问数能涨到几千万，界面上就只剩
+   一个被反复访问的点。现在默认就是固定预算，`set_visits 0` 才回到墙钟。
+2. 界面标记：以前"访问数低于最优 5%"的点直接不画，搜索一旦收敛，棋盘上就剩一个标记。
+   现在**排名前 8 的点无论如何都画**（`kMarkAlwaysShow = 8`），其余仍按窗口+门槛过滤。
+   一个点上有 99% 访问是搜索收敛，不是引擎证明了唯一解；界面不该把这件事表現成"只剩一点"。
+
+### 2026-11-23 · 终局"硬结果"必须真的硬：MCTS 求解器 + 界面固定 visits
+
+用户的原话是"如果搜索到终局，用硬性胜负、目差代替模型"。上一版只做了**叶子替换**：
+终局叶子的值确实换成了规则算出的硬结果，但有两个问题。
+
+1. **叶子值被平均掉了，看起来像"没强制胜利"。** 一个叶子是硬胜（1.0）时，它和一堆
+   网络估值一起被平均；同时对手的反驳根本没被搜到，于是引擎在 6 步之内会说
+   "99%，赢定了"，而精确求解那一步是 0.00。实测：ply=48 阻挡规则下 16 个候选点里有
+   10 个报 >0.88 而精确值是 0.00。**这不是符号问题**——我用精确极小极大逐点验证过
+   1 层和 2 层的传播符号（`shuyi_endgame_probe`，源码 `experimental/research/endgame_probe.cpp`），
+   终局胜负和目差的方向都是对的。
+2. **界面里根本没有 visits 预算。** `engine_main.cpp` 在 analyze 模式下把
+   `request.visits` 强制成 0，界面也从未发 `set_visits`，所以"分析"是按墙钟无限搜，
+   同一个局面每次刷新数字都不一样、越看越"确定"。这与第 4.1 节的评估规则直接冲突。
+
+改动：
+
+1. `engine/src/mcts.cpp` 加 **MCTS-Solver**：节点新增 `provenValue_/provenScore_/scoreExact_`。
+   终局叶子按规则立即 proven；一个着法让对手 proven 输 ⇒ 本节点 proven 胜（不必等
+   全部着法）；全部着法都 proven 才能判负/和。已解算的节点不再被访问，
+   **根一解算就提前结束搜索**（预算故意不花完）。
+2. `complete_`：只有**没有被宽度剪枝**的节点才能做"所有着法都不行"的归纳，避免在
+   被剪过的子树上伪造证明。
+3. `deadEnd_` 取代原来的"终局"标志：树节点上限触发时以前会把**未终局的局面**按静态分
+   当硬结果用，现在只当普通叶子。
+4. `Analysis::proven` / `CellAnalysis::proven`，协议 `info ... proven=0|1`，
+   `cells=` 第 6 个字段是每个点的证明标志；界面把已解算的点按**精确胜率**排名
+   （Wilson 下界只用于估计值），状态栏显示"已解算"。
+5. 目差只在**精确**时公布：根全解 → 全树的极大极小目差；根解但目差未定 → 报"引擎实际
+   会走的那步"的精确目差；都没有就报 `--`。之前公布的是"已证明的子集里的最大值"，
+   实测出现过 +3 而真实是 +1、+8 而真实是 +9。
+6. `rootPolicy()` 在解算局面下只返回证明最优的那一手。否则自对弈的温度采样会从
+   每点 1 次访问的均匀分布里挑一个**已证明的败着**。
+7. 界面 `kUiVisits = 512`；`capabilities` 增加 `proto=1 visits=1`，界面只在引擎声明
+   `visits=1` 时发 `set_visits`（老引擎退回 `set_time 650`）。analyze 模式同样遵守预算。
+
+验证：
+
+1. `engine/tests/test_engine.cpp::testTerminalProof`（进 ctest）：最后 1 手时引擎必须
+   `proven`、胜率等于精确值、目差等于终局分、且 visits < 预算。
+2. `shuyi_proof_check`（`experimental/research/proof_check.cpp`）：随机 300 个阻挡规则
+   残局，对**每一个** `proven` 用精确极小极大复核胜率和目差：
+   `proven=127 checked=127 skipped=0 mismatches=0`。
+3. 实测 ply=53：1 次模拟就解算（原来是 512 次还在报 0.96）；ply=52 阻挡：胜率精确、
+   目差取"实际会走的那手"的精确值；ply=48：仍然解不动（16^6 的树 512 visits 不可能解），
+   此时**不给**目差，只给估计胜率——这才是诚实的。
+
+代价：解算局面常常提前停（最后 1 手 1~23 次访问就结束），`visits` 会小于预算；
+目差未证明时不会为了"凑一个目差"把预算花完，而是照常搜到预算为止。评估脚本按预算跑，
+不受影响。
+
+### 2026-11-24 · 评估预算统一成 visits（这是评估的前提，不是可选项）
+
+问题：评估要回答的是模型多强，所以每一步花多少搜索量必须**固定且与主机无关**。
+原来的做法是 GPU 模型按 `--visits`、CPU 引擎按 `--time` 毫秒 —— 同一张表里既有 128 visits
+又有 220 ms，CPU 行还随机器和负载漂移。3 小时那跑的三份矩阵（128 / 96 / 192）混着合并过，
+那张表**作废**。
+
+改动：
+
+1. `experimental/training/evalconfig.py`：`EVAL_VISITS = 512` 是唯一允许的预算，所有评估脚本的默认值都来自它。
+   命令行的 `--visits` 还在（调试用），但**一张表用多少就必须写进表里**，
+   而且不同预算的表禁止合并（见第 4 点）。
+   一个 visit 的定义：MCTS/MCTS-NN = 一次模拟（= 一次网络前向），剪枝 = 一个节点
+   （= 一次叶子评估），纯 MCTS = 一次 rollout。
+2. `SearchOptions::nodeLimit`：剪枝引擎现在有**节点预算**，且**完全不看墙钟**。
+   以前给剪枝引擎 `set_visits` 会把它 `timeLimitMs` 设成 0 -> 立刻中止 -> 下随机棋，
+   所以旧脚本只能按时间跑。这是这次才真正修掉的。
+3. `arena.py`：四种引擎一律 `set_visits V`；`--time` 降级为**挂死保护**
+   （`--hang-guard-ms`，默认 1 小时，必须晚于预算触发）。
+4. `elo.py --report`：**拒绝合并预算不同的矩阵**（直接报错退出），防止再把两把尺子拼一起。
+5. 回归测试：`engine/tests/visit_budget_smoke.py`（进 ctest）驱动协议读回 `visits`/`nodes`：
+   MCTS/MCTS-NN 必须**正好**等于预算；剪枝的节点数可在预算之上溢出（它要搜完当前这一层），
+   但**同一输入两次必须是同一个节点数和同一个着法**；C++ 侧 `testVisitBudget` 同样断言。
+   同时把 MCTS 报的 `visits` 改成实际模拟次数（以前是根边访问数之和，永远少 1）。
+
+实测（本机 MX350，512 visits/步）：GPU ~10 s/局、剪枝 ~0.1 s/局、纯 MCTS ~0.8 s/局、
+CPU MCTS-NN ~100 s/局。所以 512 的表能完整跑前三种，CPU MCTS-NN 只能跑少数几对。
+
+---
+
+### 2026-11-23 · 引擎按能力挑选（UI/引擎分离的正确做法）
+
+我之前把"想用 GPU"说成"要用 CUDA 构建的界面跑"，这是错的：界面和引擎是两个进程，
+界面只管把**最快的那个引擎**拉起来，自己是什么构建无所谓。
+
+1. 引擎新增协议命令 `capabilities` → `engine=shuyi_engine cuda=1|0 rulesets=...`。
+2. 界面启动时按 `SHUYI_ENGINE` → exe 同级 → `../build-cuda` → `../build` → 当前目录 依次探测，
+   **优先选回答 `cuda=1` 的**；再发 `set_backend auto`，标题显示 `(GPU)`/`(CPU)`。
+3. `shuyi.exe --dump-engine out.txt` 无界面导出"试了哪些路径、各自回答什么、选了谁"，
+   回归测试 `ui/tests/engine_choice_smoke.py`（ctest: `shuyi_engine_choice`）。
+4. 本机把 `build-cuda` 做成指向 `C:\shuyi_cuda_build` 的 junction（nvcc 不能写中文路径），
+   于是 MinGW 编的 CPU 界面会自动选中 MSVC/CUDA 编的引擎。
+5. 顺带修：`GetModuleFileNameA`/`GetCurrentDirectoryA`/环境变量给的是 **ANSI**，
+   之前用 `CP_UTF8` 去加宽，中文路径直接变乱码、候选全被判"不存在"。
+
+---
+
+### 2026-11-23 · 推理速度：CPU 前向重写 + 引擎可以走 CUDA
+
+问题：界面里 MCTS+NN 几乎不动。测下来是 **CPU 前向 36 ms/次**（b4c32，86k 参数），
+512 visits 一步要 18.6 s；而这一步的算术量只有 6.8 M MAC，属于**写得不对**。
+
+1. `conv3x3` 重写：输入做 1 格 padding（去掉内层循环的 4 个边界判断）、
+   按"9 个 tap × 81 个连续浮点"的 FMA 链、`restrict` 帮助别名分析、
+   复用 scratch（原来每次卷积都分配三份 plane 大小的 vector）。
+   **36.4 ms → 3.7~4.4 ms/次（约 10 倍）**，b2c16 从 4.9 ms → 0.2 ms。
+2. `-march=native` 实测反而更慢（4.3 vs 3.7 ms，Ice Lake 的 AVX-512 降频），
+   所以 `SHUYI_NATIVE_SIMD` 默认 **OFF**，要用自己开。
+3. 引擎进程现在能走 CUDA：`-DSHUYI_CUDA=ON` 时 `shuyi_engine` 链接 `shuyi_cuda`，
+   协议新增 `set_backend cpu|cuda|auto`，`info` 行回报 `backend=cuda|cpu`。
+   界面启动时发 `set_backend auto`，标题显示 `(GPU)`/`(CPU)`。
+   实测（b4c32，512 visits）：CPU 5.7~6.1 s → **GPU 0.39 s**，着法与节点数完全一致。
+4. 教训（第二次踩）：改完编译选项后 `build/` 里的旧 `.o` 会让"优化没生效"——
+   中间一度测出 14.5 ms 其实是陈旧对象。**改 flag 就清空构建目录**。
+
+---
+
+### 2026-11-23 · 终局精确值、删掉假的目差、容量结论
+
+1. **终局用精确值代替模型**：`mctsFullWidthPlies = 6` —— 最后 6 手内不剪宽度，
+   树才能真正走到终局；终局节点用 `raw + A` 的硬胜负、硬目差（`SimulationResult::hasScore`）。
+   单测 `testEndgameExactScore`：两格空盘时，**没有分数头**的网络也必须报出真实分数。
+2. **删掉 `(value*2-1)*73` 的目差映射**：这是错的（空盘会给出 −15.2 分）。现在分数只有两个
+   来源——精确终局、或训练过的分数头；都没有时协议发 `hasscore=0`，界面第三行显示 `--`。
+   `Edge` 增加 `scoreVisits`，平均分只在"真正带回分数"的访问上取平均。
+3. **容量是主因**：b4c32 只有 **8.6 万参数**（86,009，实测文件 344,076 字节），
+   b6c96 是 **103 万**（12.0×参数、12.2×MACs），b8c128 241 万（28×），b10c128 300 万（35×）。
+   我们比 KataGo 的**起步档**还小 12 倍，且只训了 6 代 / 47 万局面 ⇒ 下一步直接换 b6c96，
+   并把每代数据量提到 5 倍以上；详见 `docs/plans/NEXT_STEPS.zh-CN.md`。
+
+---
+
+### 2026-11-23 · UI 的最优标记、模型命名
+
+1. **最优标记改成"置信下界 + 访问数"**：以前 `best` 取 `winrate` 最大的格子，于是一个
+   只搜了 1 次的 100% 格子会被标成最优，每次刷新在两个格子之间来回跳（闪烁）。
+   现在用 Wilson 95% 置信下界 `lb(p, n)`（n=1,p=1 → 0.21；n=200,p=0.55 → 0.49）作为
+   "综合搜索量和胜率"的打分：`best = argmax lb`，颜色也按 `lb` 的差着色，
+   平局时保留上一帧的最优格（`kMarkTieMargin`），所以标记稳定。
+2. **第三行不再显示"猜出来的分数"**：协议新增 `info scorehead=0|1`，没有分数头时
+   UI 显示 `--`。实测 blk1 的模型在开局位置会给出 `score=-15.2`（`(value*2-1)*73` 的
+   线性映射），这种数字比空着更糟。
+3. **模型命名统一为 KataGo 形式** `b{blocks}c{channels}-s{steps}-d{data}`：
+   - 去掉 `-blk` / `-cls` 后缀 —— 规则已经在模型头的 ruleset 字节里，run 目录也分开；
+   - 去掉 `gen_XXX.bin` 副本 —— 它不符合命名标准，还让 UI 菜单出现重复项；
+     续跑与池内 Elo 现在都从 manifest 的 `named_model` 取路径；
+   - 已有的 blk1 也按此整理（`b4c32-s34760-d470705-blk.bin` → `b4c32-s34760-d470705.bin`，
+     `gen_00N.bin` 删除前逐个 SHA-256 校验过是同一份权重）。
+
+---
+
+### 2026-11-24 · 仓库按 ui / engine / experimental 重组
+
+问题：根目录平铺着 `include/ src/ tools/ training/ tests/` 五套代码目录，加 16 篇文档，
+新人和自己都找不到东西；而且 **UI 的模型菜单在一次从 `build/` 启动时只显示 2 个模型**。
+
+改动：
+
+1. 目录：`engine/`（include+src+tests）、`ui/`（src+include+tests）、
+   `experimental/`（selfplay / research / training / tests）。`data/ models/ runs/` 是共享数据，
+   留在根目录并写进文件地图；`docs/` 拆出 `plans/` 与 `reports/`。
+2. 文档：新增 [../../docs/MAINTAINERS.zh-CN.md](../../docs/MAINTAINERS.zh-CN.md)（每个文件在哪、干什么、
+   改它注意什么）、[../../docs/README.md](../../docs/README.md)（文档索引），
+   以及 `engine/README.md`、`ui/README.md`、`experimental/README.md`。
+3. **模型菜单修好了**：以前按相对路径找 `models/` 和 `runs/*/models`，从 `build/shuyi.exe` 启动时
+   工作目录是 `build/`，于是只剩两个夹具模型。现在扫描 exe 目录、其父目录（仓库根）、当前目录
+   以及 `SHUYI_MODEL_DIRS`，每个根下递归找 `models/`；标签带运行名（`blk1/gen_005.bin`），
+   规则 tag **从模型头的 ruleset 字节读**（`gen_000.bin` 这种名字猜不出来）。
+   回归测试 `ui/tests/ui_menu_smoke.py` 会断言两种规则都在菜单里。
+4. 顺带修了两个只在中文路径下暴露的 bug：`std::filesystem`/`fopen` 用 ANSI 编码打开
+   UTF-8 路径会抛 "Illegal byte sequence"（现在有 `engine/include/shuyi/io.h`：`fopenUtf8`、
+   `openOutUtf8`、`Utf8Args`），以及 `windows.h` 的 min/max 宏破坏 `std::max`。
+   UI 侧因此把 `ModelEntry` 分成 ANSI `path` 和 UTF-8 `enginePath` 两份。
+
+---
+
+## 7. 横评结果（2026-11-23，经典规则，本机）
+
+`experimental/training/arena.py --games 6 --time 80 --visits 96`，锚点 random = 0，168 局（**预算不统一，已被 9.2 的 512 visits 表取代，仅作历史记录**）：
+
+| 模型 | Elo（相对随机） | ±90% | 战绩 |
+|------|----------------:|------|------|
+| `gen_006`（srv1 命名，旧格式） | **+1376** | [1294, 1576] | 40/0/2 |
+| gpu:gen_004 | +1136 | [1098, 1229] | 33/0/9 |
+| pruning（Alpha-Beta） | +1026 | [946, 1168] | 29/0/13 |
+| gpu:gen_002 | +947 | [852, 1040] | 26/0/16 |
+| gpu:gen_001 | +787 | [719, 866] | 20/0/22 |
+| mcts（CPU） | +514 | [414, 650] | 11/0/31 |
+| mcts_nn（旧部署 b2c16） | +444 | [347, 525] | 9/0/33 |
+| random | 0 | [−40, 40] | 0/0/42 |
+
+读法：
+
+1. 新流程训出来的模型全部远高于旧部署模型（+787…+1376 对 +444）；
+2. **96 visits 太少**：剪枝引擎（+1026）排在 gen_004 与 gen_002 之间。
+   下一次横评必须把 visits 提到 512–1024，否则比的是"低预算下的鲁棒性"，不是棋力；
+3. gen_001 < gen_002 < gen_004 < gen_006 的顺序与 srv1 池内 Elo 一致，说明两套测法互相印证；
+4. random 的 CI 正好跨在 0 上（[−40, +40]），是锚点正确的自检。
+
+复现：
+
+```bash
+python experimental/training/arena.py --games 6 --time 80 --visits 96 --workers 2 \
+  --players random pruning mcts mcts_nn:models/shuyi_resnet_v2.bin \
+            gpu:docs/srv1_run/models/gen_001.bin gpu:docs/srv1_run/models/gen_002.bin \
+            gpu:docs/srv1_run/models/gen_004.bin gpu:docs/srv1_run/models/gen_006.bin \
+  --gpu-binary <build>/shuyi_selfplay_gpu
+python experimental/training/elo.py --report runs/arena/classic.json --anchor random
+```
+
+---
+
+## 8. A值标定（第二套规则第一次定标）
+
+规则里那个"平衡因子"就是本文档里的 A值：`T = P + A`，A 加在红方局面分上。A值公平不公平
+不能靠猜，也不能用旧规则的数（两套规则的手数结构完全不同），必须用**该规则的模型自己打自己**
+来量：同一权重两边对局，唯一的系统偏差就是颜色。
+
+工具 `experimental/training/avalue.py`：
+
+```bash
+python experimental/training/avalue.py --model runs/blocking/blk1/models/b4c32-s34760-d470705.bin \
+    --ruleset blocking --komis "-2,-1,0,1" --games 240 --visits 192
+```
+
+每个 komi 跑 `--mode match`（换色、同模型两边），直接读每局 CSV 的 `a_is_red` + `result`
+统计红方得分，再用两参数 logistic 拟合交点 A\*（带 delta-method 的 SE）。`--self-test`
+用已知交点的合成曲线验证符号约定（komi 加给红方，斜率必须为正）。
+
+blk1（阻挡规则，b4c32，gen_005，192 visits，每个 komi 240 局）：
+
+| A | 红方得分 | 95% CI | 红/和/黑 |
+|---:|---:|---|---|
+| −2 | 0.158 | [0.118, 0.210] | 117/22/101 |
+| −1 | 0.246 | [0.196, 0.304] | 119/20/101 |
+| 0 | 0.344 | [0.287, 0.406] | 118/27/95 |
+| +1 | 0.467 | [0.405, 0.530] | 121/28/91 |
+
+**拟合 A\* = +1.26（SE 0.22，斜率 0.506 log-odds/点）。**
+
+结论：
+
+1. **阻挡规则下先手是劣势**：A=0 时红方只有 34.4%，与经典规则的 52.4% 方向相反。
+   直觉上说得通——先落的子会先把邻居"让"给对手当封锁点。这条必须写进规则说明。
+2. 所以第二套规则的公平 A≈**+1.3**，`pipeline.py` 的 `--komi` 默认值已按规则分开
+   （classic −0.5 / blocking +1.3）。
+3. 整数 A 下有 9~11% 的和棋；A 取小数（+1.26）结构上禁止平局 —— 想保留和棋就把 A 定成整数 1 或 2。
+4. 这个 A 是用**192 visits 的 gen_005** 量的；模型更强或搜索更深时数字会移动，下一轮重测。
+
+## 9. 阻挡规则横评
+
+### 9.1 旧表作废（预算不统一）
+
+2026-11-23 服务器那一跑里我先给过一张表：线路矩阵 128 visits、桥接 96 visits、爬梯 192 visits，
+CPU 线路还是按 **220 ms** 跑的。**这张表不再有效** —— 同一张表里混了三种预算，
+GPU 行和其它行根本不是一个单位，CPU 行还随主机快慢变。`elo.py` 现在会直接拒绝合并这种矩阵：
+
+```
+refusing to merge reports with different visit budgets
+(lines_cpu.json: 128, gens.json: 192); every player in one rating must use the same fixed budget
+```
+
+旧数字只保留一个用途：说明"96~192 visits 的表会把剪枝插到两代网络之间"。要看棋力，看下面这张。
+
+### 9.2 统一 512 visits 的表（本机，阻挡规则，komi +1.26）
+
+`experimental/training/arena.py --games 6 --visits 512 --workers 2`，random 钉 0，共 115 局。
+预算全部由 `experimental/training/evalconfig.py` 的 `EVAL_VISITS = 512` 决定，四种引擎都是 512。
+
+| 参赛者 | 每步预算 | ELO（相对随机） | ±90% | 战绩 |
+|--------|---------|----------------:|------|------|
+| `b4c32-s34760-d470705`（第 6 代） | 512 visits | **+1520** | [1529, 1551] | 30/0/0 |
+| `mcts_nn`（CPU 前向，同模型） | 512 visits | +1158 | [1137, 1213] | 9/0/0 |
+| `b4c32-s17480-d236807`（第 3 代） | 512 visits | +1150 | [1158, 1185] | 24/0/6 |
+| pruning（Alpha-Beta） | 512 nodes | +758 | [717, 837] | 27/0/19 |
+| `b4c32-s5960-d80938`（第 1 代） | 512 visits | +630 | [545, 729] | 12/0/18 |
+| mcts（CPU 无网络） | 512 visits | +498 | [423, 574] | 13/0/25 |
+| random | — | 0 | [−27, 27] | 0/0/47 |
+
+读法：
+
+1. **顺序在 512 visits 下成立**：gen_005 > gen_002 > 剪枝 > gen_000 > 纯 MCTS > random。
+   剪枝（每步 512 个叶子）仍然**夹在两代网络之间**——这是真的，不是预算造成的假象，
+   因为现在所有参赛者都是同一个 512。
+2. gen_005 一轮 30:0（对 gen_000/gen_002/pruning/mcts 全胜），说明 3 小时 6 代在阻挡规则下
+   还远没到平台期。
+3. **CPU 版 MCTS-NN 与 gen_002 打平（+1158 vs +1150）**，但只有 9 局且全胜 ——
+   9:0 的成绩给出的 Elo 实际上只有下界意义，别把这两行当成"CPU 版和网络一样强"的证据。
+   它每局 ~107 s，这就是为什么它只有 9 局。
+4. 每对 4~6 局，区间只够排序。要达到 ±5pp 需要每对 400 局：GPU 一局 10 s，
+   400 局 ≈ 1.1 小时/对 ⇒ 完整表必须放服务器（或只比"相邻两代"）。
+5. 未败选手（30:0、9:0）的 ±90% 是自举分布被截断的一侧，区间会整体落在点估计**上方**，
+   只能当成下界读 —— 这也是为什么 gen_005 与 mcts_nn 的区间看起来"偏"了。
+6. 训练循环内部那张表（`pipeline.py --arena-visits`，默认等于 `--visits`）也是按 visits 的，
+   但它只是"这一代是否变强"的判据，和这里的 512 标准表**不能混用**。
+
+复现：
+
+```bash
+export OMP_NUM_THREADS=1
+python experimental/training/arena.py --players random pruning mcts \
+    gpu:runs/blocking/blk1/models/b4c32-s5960-d80938.bin \
+    gpu:runs/blocking/blk1/models/b4c32-s17480-d236807.bin \
+    gpu:runs/blocking/blk1/models/b4c32-s34760-d470705.bin \
+    --games 6 --visits 512 --komi 1.26 --ruleset blocking --workers 2 \
+    --out runs/arena/blocking512/table.json
+python experimental/training/arena.py --players mcts_nn:runs/blocking/blk1/models/b4c32-s34760-d470705.bin pruning \
+    --games 4 --visits 512 --komi 1.26 --ruleset blocking \
+    --out runs/arena/blocking512/mctsnn_vs_pruning.json
+python experimental/training/elo.py --report runs/arena/blocking512/table.json \
+    --report runs/arena/blocking512/cpu_lines.json \
+    --report runs/arena/blocking512/mctsnn_vs_pruning.json \
+    --report runs/arena/blocking512/mctsnn_probe.json \
+    --anchor random --bootstrap 200
+```
+
+## 10. blk1 训练曲线（阻挡规则，b4c32，1500 局/代，1024 visits）
+
+| 代 | 方式 | 自对弈局面 | 模型 | 对上一代 | 池内 ELO |
+|---:|---|---:|---|---|---|
+| 0 | random | 80938 | b4c32-s5960-d80938-blk | 冷启动（无对比） | — |
+| 1 | oneply | 77950 | b4c32-s11720-d158888-blk | 0.979 (116/3/1) | — |
+| 2 | oneply | 77919 | b4c32-s17480-d236807-blk | 0.746 (88/3/29) | gen_002 +255 / gen_001 +121 / gen_000 −375 |
+| 3 | selfplay | 77951 | b4c32-s23240-d314758-blk | 0.912 (105/9/6) | gen_003 +457 / gen_002 +127 / gen_001 −53 / gen_000 −531 |
+| 4 | selfplay | 77971 | b4c32-s29000-d392729-blk | 0.754 (86/9/25) | gen_004 +483 / gen_003 +311 / gen_002 −30 / gen_001 −132 / gen_000 −632 |
+| 5 | selfplay | 77976 | b4c32-s34760-d470705-blk | 0.633 (69/14/37) | 已到 3 小时窗口，池内 ELO 未跑完 |
+
+要点：
+
+1. **第一个 MCTS 代（gen3）跳跃最大**：对 gen2 是 0.912，池内从 +255 直接到 +457。
+   一层扫描代（gen1/gen2）确实只值那 4~7 分钟，第 3 代必须切 MCTS —— 与 srv1 的结论一致。
+2. **越往后收益越小**：gen4→gen5 的 head-to-head 只有 0.633，但池内 ELO 仍在涨（gen_004 +483）。
+   这正是"要按 ELO 而不是按 val loss 部署"的原因：val_policy 每代都降，棋力两代才涨 10 分。
+3. **阻挡规则自带和棋**（komi 0 时 9~14/120），因为 A 是整数；这是规则差异，不是 bug。
+4. 时间账：自对弈 ~25 min/代（80938 局面、1024 visits、0.95~1.1 games/s），
+   arena+池内 ELO ~6 min/代 ⇒ 3 小时只够 6 代。想跑 10 代（触发换大模型），要么 6 小时、
+   要么把 `--games-per-gen` 降到 800。

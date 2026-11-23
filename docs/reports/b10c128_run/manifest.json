@@ -1,0 +1,1468 @@
+{
+  "generations": [
+    {
+      "gen": 0,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 7050,
+      "cumulative_data": 156000,
+      "model_name": "b10c128-s7050-d156000.bin",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_000/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_000/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_000/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_000/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_000/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_000/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_000/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_000/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_000/train_summary.json",
+      "openings": {
+        "model": "runs/b10c128_3h/gen_000/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.08886963219718852,
+        "edge": 0.16358559599460812,
+        "inner": 0.6241093780088581,
+        "center": 0.12343539379934527,
+        "top1_agreement": 0.0284999031573534,
+        "mean_value": 0.48459479212760925,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 774
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 742
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 589
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 472
+          },
+          {
+            "cell": 80,
+            "name": "i9",
+            "count": 303
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 291
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 286
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 276
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 271
+          },
+          {
+            "cell": 37,
+            "name": "b5",
+            "count": 248
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_000/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_000.bin",
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s7050-d156000.bin",
+      "finished": "2026-11-22 02:59:55",
+      "arena": {
+        "note": "promotion match disabled; validation loss + stage ELO"
+      }
+    },
+    {
+      "gen": 1,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 14100,
+      "cumulative_data": 312000,
+      "model_name": "b10c128-s14100-d312000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_001/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_001/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_001/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_001/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_001/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_001/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_001/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_001/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_001/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_001/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.07461968033891778,
+        "edge": 0.15155016368187946,
+        "inner": 0.6582900057770075,
+        "center": 0.11554015020219527,
+        "top1_agreement": 0.02888503670692444,
+        "mean_value": 0.5006774067878723,
+        "top_cells": [
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 876
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 867
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 647
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 638
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 273
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 272
+          },
+          {
+            "cell": 15,
+            "name": "g2",
+            "count": 250
+          },
+          {
+            "cell": 0,
+            "name": "a1",
+            "count": 236
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 218
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 217
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_001/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_001.bin",
+      "finished": "2026-11-22 03:10:14",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s14100-d312000.bin"
+    },
+    {
+      "gen": 2,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 21150,
+      "cumulative_data": 468000,
+      "model_name": "b10c128-s21150-d468000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_002/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_002/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_002/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_002/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_002/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_002/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_002/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_002/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_002/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_002/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.09329867128827267,
+        "edge": 0.13210090506450992,
+        "inner": 0.6405738494126709,
+        "center": 0.1340265742345465,
+        "top1_agreement": 0.019738109782338142,
+        "mean_value": 0.48175889253616333,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 727
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 669
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 602
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 528
+          },
+          {
+            "cell": 80,
+            "name": "i9",
+            "count": 426
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 327
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 302
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 297
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 257
+          },
+          {
+            "cell": 15,
+            "name": "g2",
+            "count": 256
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_002/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_002.bin",
+      "finished": "2026-11-22 03:20:16",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s21150-d468000.bin"
+    },
+    {
+      "gen": 3,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 28200,
+      "cumulative_data": 624000,
+      "model_name": "b10c128-s28200-d624000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_003/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_003/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_003/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_003/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_003/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_003/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_003/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_003/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_003/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_003/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.12093202387829771,
+        "edge": 0.12179857500481417,
+        "inner": 0.6245907953013672,
+        "center": 0.1326786058155209,
+        "top1_agreement": 0.02522626705467701,
+        "mean_value": 0.4924944043159485,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 895
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 590
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 552
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 530
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 342
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 328
+          },
+          {
+            "cell": 0,
+            "name": "a1",
+            "count": 321
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 312
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 310
+          },
+          {
+            "cell": 65,
+            "name": "c8",
+            "count": 269
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_003/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_003.bin",
+      "finished": "2026-11-22 03:30:18",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s28200-d624000.bin"
+    },
+    {
+      "gen": 4,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 35250,
+      "cumulative_data": 780000,
+      "model_name": "b10c128-s35250-d780000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_004/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_004/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_004/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_004/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_004/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_004/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_004/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_004/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_004/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_004/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.12468707875986905,
+        "edge": 0.1310417870209898,
+        "inner": 0.6127479299056422,
+        "center": 0.13152320431349895,
+        "top1_agreement": 0.02734450250864029,
+        "mean_value": 0.48613759875297546,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 680
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 678
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 589
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 548
+          },
+          {
+            "cell": 80,
+            "name": "i9",
+            "count": 476
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 301
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 293
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 284
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 271
+          },
+          {
+            "cell": 15,
+            "name": "g2",
+            "count": 254
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_004/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_004.bin",
+      "finished": "2026-11-22 03:40:21",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s35250-d780000.bin"
+    },
+    {
+      "gen": 5,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 42300,
+      "cumulative_data": 936000,
+      "model_name": "b10c128-s42300-d936000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_005/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_005/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_005/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_005/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_005/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_005/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_005/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_005/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_005/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_005/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.11294049682264587,
+        "edge": 0.11823608704024649,
+        "inner": 0.6399961486616599,
+        "center": 0.1288272674754477,
+        "top1_agreement": 0.02464856579899788,
+        "mean_value": 0.48542407155036926,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 792
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 766
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 596
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 554
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 319
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 312
+          },
+          {
+            "cell": 0,
+            "name": "a1",
+            "count": 303
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 294
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 289
+          },
+          {
+            "cell": 80,
+            "name": "i9",
+            "count": 264
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_005/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_005.bin",
+      "finished": "2026-11-22 03:50:21",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s42300-d936000.bin"
+    },
+    {
+      "gen": 6,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 49350,
+      "cumulative_data": 1092000,
+      "model_name": "b10c128-s49350-d1092000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_006/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_006/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_006/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_006/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_006/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_006/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_006/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_006/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_006/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_006/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.08482572694011169,
+        "edge": 0.11438474870017332,
+        "inner": 0.6712882726747544,
+        "center": 0.12950125168496052,
+        "top1_agreement": 0.030521856620907784,
+        "mean_value": 0.48629531264305115,
+        "top_cells": [
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 835
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 703
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 696
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 557
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 318
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 281
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 268
+          },
+          {
+            "cell": 0,
+            "name": "a1",
+            "count": 266
+          },
+          {
+            "cell": 15,
+            "name": "g2",
+            "count": 265
+          },
+          {
+            "cell": 61,
+            "name": "h7",
+            "count": 253
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_006/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_006.bin",
+      "finished": "2026-11-22 04:00:21",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s49350-d1092000.bin"
+    },
+    {
+      "gen": 7,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 56400,
+      "cumulative_data": 1248000,
+      "model_name": "b10c128-s56400-d1248000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_007/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_007/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_007/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_007/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_007/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_007/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_007/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_007/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_007/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_007/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.09888311188137879,
+        "edge": 0.11650298478721356,
+        "inner": 0.6505873290968611,
+        "center": 0.1340265742345465,
+        "top1_agreement": 0.026477951556444168,
+        "mean_value": 0.4910975992679596,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 786
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 762
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 614
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 571
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 413
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 302
+          },
+          {
+            "cell": 80,
+            "name": "i9",
+            "count": 272
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 271
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 268
+          },
+          {
+            "cell": 65,
+            "name": "c8",
+            "count": 251
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_007/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_007.bin",
+      "finished": "2026-11-22 04:10:22",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s56400-d1248000.bin"
+    },
+    {
+      "gen": 8,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 63450,
+      "cumulative_data": 1404000,
+      "model_name": "b10c128-s63450-d1404000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_008/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_008/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_008/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_008/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_008/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_008/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_008/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_008/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_008/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_008/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.10234931638744464,
+        "edge": 0.12083574041979588,
+        "inner": 0.6493356441363374,
+        "center": 0.1274792990564221,
+        "top1_agreement": 0.025611400604248047,
+        "mean_value": 0.48597168922424316,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 851
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 809
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 561
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 525
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 418
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 361
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 331
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 259
+          },
+          {
+            "cell": 65,
+            "name": "c8",
+            "count": 250
+          },
+          {
+            "cell": 61,
+            "name": "h7",
+            "count": 238
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_008/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_008.bin",
+      "finished": "2026-11-22 04:20:22",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s63450-d1404000.bin"
+    },
+    {
+      "gen": 9,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 70500,
+      "cumulative_data": 1560000,
+      "model_name": "b10c128-s70500-d1560000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_009/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_009/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_009/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_009/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_009/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_009/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_009/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_009/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_009/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_009/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.12410937800885807,
+        "edge": 0.11919892162526478,
+        "inner": 0.6357596764875795,
+        "center": 0.12093202387829771,
+        "top1_agreement": 0.025900250300765038,
+        "mean_value": 0.48663511872291565,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 821
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 763
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 650
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 564
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 375
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 346
+          },
+          {
+            "cell": 80,
+            "name": "i9",
+            "count": 320
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 269
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 259
+          },
+          {
+            "cell": 37,
+            "name": "b5",
+            "count": 258
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_009/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_009.bin",
+      "finished": "2026-11-22 04:30:19",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s70500-d1560000.bin"
+    },
+    {
+      "gen": 10,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 77550,
+      "cumulative_data": 1716000,
+      "model_name": "b10c128-s77550-d1716000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_010/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_010/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_010/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_010/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_010/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_010/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_010/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_010/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_010/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_010/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.10658578856152513,
+        "edge": 0.11390333140766416,
+        "inner": 0.6652224147891392,
+        "center": 0.11428846524167148,
+        "top1_agreement": 0.02253032848238945,
+        "mean_value": 0.4917340576648712,
+        "top_cells": [
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 883
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 818
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 721
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 484
+          },
+          {
+            "cell": 80,
+            "name": "i9",
+            "count": 442
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 323
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 298
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 287
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 264
+          },
+          {
+            "cell": 37,
+            "name": "b5",
+            "count": 259
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_010/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_010.bin",
+      "finished": "2026-11-22 04:40:17",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s77550-d1716000.bin"
+    },
+    {
+      "gen": 11,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 84600,
+      "cumulative_data": 1872000,
+      "model_name": "b10c128-s84600-d1872000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_011/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_011/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_011/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_011/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_011/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_011/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_011/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_011/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_011/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_011/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.10466011939148855,
+        "edge": 0.10793375698055074,
+        "inner": 0.6633930290776044,
+        "center": 0.12401309455035625,
+        "top1_agreement": 0.02763335220515728,
+        "mean_value": 0.48365306854248047,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 762
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 728
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 704
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 533
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 396
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 320
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 291
+          },
+          {
+            "cell": 0,
+            "name": "a1",
+            "count": 287
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 276
+          },
+          {
+            "cell": 37,
+            "name": "b5",
+            "count": 267
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_011/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_011.bin",
+      "finished": "2026-11-22 04:50:16",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s84600-d1872000.bin"
+    },
+    {
+      "gen": 12,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 91650,
+      "cumulative_data": 2028000,
+      "model_name": "b10c128-s91650-d2028000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_012/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_012/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_012/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_012/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_012/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_012/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_012/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_012/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_012/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_012/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.1097631426920855,
+        "edge": 0.13527825919507028,
+        "inner": 0.6333525900250337,
+        "center": 0.12160600808781051,
+        "top1_agreement": 0.02878875471651554,
+        "mean_value": 0.4842163920402527,
+        "top_cells": [
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 900
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 696
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 628
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 424
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 335
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 325
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 321
+          },
+          {
+            "cell": 0,
+            "name": "a1",
+            "count": 288
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 279
+          },
+          {
+            "cell": 8,
+            "name": "i1",
+            "count": 264
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_012/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_012.bin",
+      "finished": "2026-11-22 05:00:12",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s91650-d2028000.bin"
+    },
+    {
+      "gen": 13,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 98700,
+      "cumulative_data": 2184000,
+      "model_name": "b10c128-s98700-d2184000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_013/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_013/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_013/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_013/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_013/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_013/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_013/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_013/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_013/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_013/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.10783747352204891,
+        "edge": 0.11862122087425381,
+        "inner": 0.6511650298478722,
+        "center": 0.12237627575582515,
+        "top1_agreement": 0.02435971423983574,
+        "mean_value": 0.4860130846500397,
+        "top_cells": [
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 814
+          },
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 738
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 590
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 519
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 443
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 358
+          },
+          {
+            "cell": 80,
+            "name": "i9",
+            "count": 338
+          },
+          {
+            "cell": 15,
+            "name": "g2",
+            "count": 321
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 300
+          },
+          {
+            "cell": 25,
+            "name": "h3",
+            "count": 277
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_013/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_013.bin",
+      "finished": "2026-11-22 05:10:07",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s98700-d2184000.bin"
+    },
+    {
+      "gen": 14,
+      "engine": "mcts_nn",
+      "play_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+      "selfplay_samples": 156000,
+      "optimizer_steps": 7050,
+      "cumulative_steps": 105750,
+      "cumulative_data": 2340000,
+      "model_name": "b10c128-s105750-d2340000",
+      "train_shards": [
+        "/root/shuyi/runs/b10c128_3h/gen_014/selfplay/shard_000.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_014/selfplay/shard_001.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_014/selfplay/shard_002.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_014/selfplay/shard_003.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_014/selfplay/shard_004.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_014/selfplay/shard_005.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_014/selfplay/shard_006.bin",
+        "/root/shuyi/runs/b10c128_3h/gen_014/selfplay/shard_007.bin"
+      ],
+      "train_summary": "/root/shuyi/runs/b10c128_3h/gen_014/train_summary.json",
+      "openings": {
+        "model": "/root/shuyi/runs/b10c128_3h/gen_014/candidate.bin",
+        "samples": 10386,
+        "max_ply": 10,
+        "corner": 0.09387637203928365,
+        "edge": 0.10774119006354708,
+        "inner": 0.6665703832081649,
+        "center": 0.13181205468900442,
+        "top1_agreement": 0.025996534153819084,
+        "mean_value": 0.4810987412929535,
+        "top_cells": [
+          {
+            "cell": 64,
+            "name": "b8",
+            "count": 855
+          },
+          {
+            "cell": 10,
+            "name": "b2",
+            "count": 790
+          },
+          {
+            "cell": 16,
+            "name": "h2",
+            "count": 713
+          },
+          {
+            "cell": 70,
+            "name": "h8",
+            "count": 579
+          },
+          {
+            "cell": 72,
+            "name": "a9",
+            "count": 330
+          },
+          {
+            "cell": 19,
+            "name": "b3",
+            "count": 300
+          },
+          {
+            "cell": 11,
+            "name": "c2",
+            "count": 263
+          },
+          {
+            "cell": 55,
+            "name": "b7",
+            "count": 259
+          },
+          {
+            "cell": 13,
+            "name": "e2",
+            "count": 246
+          },
+          {
+            "cell": 80,
+            "name": "i9",
+            "count": 243
+          }
+        ]
+      },
+      "candidate": "/root/shuyi/runs/b10c128_3h/gen_014/candidate.bin",
+      "promoted": true,
+      "final_model": "/root/shuyi/runs/b10c128_3h/models/gen_014.bin",
+      "finished": "2026-11-22 05:20:03",
+      "arena": {
+        "score_a": 1.0,
+        "promoted": true,
+        "note": "promotion match disabled"
+      },
+      "named_model": "/root/shuyi/runs/b10c128_3h/models/b10c128-s105750-d2340000.bin",
+      "elo": {
+        "mcts_nn_elo": 298.973,
+        "ci_low": -300.743,
+        "ci_high": 515.215,
+        "games": 6,
+        "report": "/root/shuyi/runs/b10c128_3h/elo_gen_014/ELO_REPORT.md"
+      }
+    }
+  ],
+  "config": {
+    "run_name": "b10c128_3h",
+    "run_dir": "/root/shuyi/runs/b10c128_3h",
+    "resume": true,
+    "force": false,
+    "dry_run": false,
+    "generations": 15,
+    "games_per_gen": 3000,
+    "min_positions": 150000,
+    "workers": 8,
+    "time_ms": 10,
+    "epochs": 50,
+    "batch": 1024,
+    "channels": 128,
+    "blocks": 10,
+    "max_samples": 0,
+    "replay_gens": 1,
+    "selfplay_model": "/root/shuyi/runs/onehour/models/gen_000.bin",
+    "name_template": "b{blocks}c{channels}-s{steps}-d{data}",
+    "lr": 0.002,
+    "value_weight": 0.5,
+    "val": 0.08,
+    "opening": 2,
+    "root_children": 32,
+    "temp_moves": 12,
+    "temperature": 1.0,
+    "dirichlet": 0.3,
+    "noise": 0.25,
+    "max_plies": 54,
+    "elo_every": 15,
+    "elo_games": 2,
+    "elo_time": 10,
+    "elo": true,
+    "promotion_games": 0,
+    "promotion_time": 100,
+    "promotion_threshold": 0.5,
+    "seed": 20261201,
+    "device": "cuda",
+    "amp": true,
+    "selfplay": "/root/shuyi/build/shuyi_selfplay",
+    "match": "/root/shuyi/build/shuyi_match",
+    "tournament": "/root/shuyi/build/shuyi_tournament",
+    "trainer": "/root/shuyi/tools/train_resnet.py",
+    "diagnose": "/root/shuyi/training/diagnose_openings.py",
+    "python": "/root/torchenv/bin/python"
+  },
+  "started": "2026-11-22 02:44:45",
+  "updated": "2026-11-22 05:28:06",
+  "finished": "2026-11-22 05:28:06"
+}
