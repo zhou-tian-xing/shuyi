@@ -28,6 +28,7 @@ Each generation is gated on the *health of its targets* before any training
 happens, and promotion is decided by a GPU arena with alternating colours.
 """
 import argparse
+import glob
 import json
 import os
 import shutil
@@ -678,6 +679,10 @@ def main(argv=None):
     cumulative_steps = sum(int(item.get("optimizer_steps", 0)) for item in manifest["generations"])
     cumulative_data = sum(int(item.get("selfplay_samples", 0)) for item in manifest["generations"])
     previous_model = None
+    # Models produced by this process, by generation.  The ELO pool used to read
+    # `completed` (the manifest as it was at start-up), so a fresh run reached the
+    # ELO stage with one model and died with "need at least two --models".
+    produced = {}
     for gen in range(args.generations):
         gen_dir = run_dir / f"gen_{gen:03d}"
         gen_dir.mkdir(parents=True, exist_ok=True)
@@ -777,6 +782,8 @@ def main(argv=None):
             shutil.copyfile(candidate, final_model)
             log(f"generation {gen}: model {final_model.name}")
 
+        if not args.dry_run:
+            produced[gen] = final_model
         if args.elo_every and gen >= 1 and not args.dry_run and (
             gen % args.elo_every == 0 or gen == args.generations - 1
         ):
@@ -784,6 +791,9 @@ def main(argv=None):
             for g in range(gen, -1, -1):
                 if g == gen:
                     pool.append(final_model)
+                    continue
+                if g in produced:
+                    pool.append(produced[g])
                     continue
                 earlier = completed.get(g)
                 if not earlier:
