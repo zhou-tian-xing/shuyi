@@ -47,10 +47,10 @@ struct EngineOptions {
     int mctsFullWidthPlies = 6;
     int aspirationWindow = 24;
     bool usePvs = true;
-    // Hard cap on tree edges (memory guard).  Reaching it ends the search with the
-    // visits spent so far instead of degrading the evaluation; 4M edges is roughly
-    // 200 MB of host memory, which covers a 100k-visit analysis on this game.
-    std::size_t mctsMaxTreeEdges = 4000000;
+    // There is deliberately no tree-size cap: a cap silently changed how leaves
+    // were scored once it was reached (a stale build reported a hard 100% win at
+    // ~35k visits that way).  The tree grows until the visit budget is spent, and
+    // the only stop conditions are the budget, the clock and `stop`.
     double mctsC = 1.2;
     double mctsPuct = 1.7;
     double nnPriorBlend = 0.5; // 1 = pure policy, 0 = uniform

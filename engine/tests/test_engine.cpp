@@ -77,30 +77,32 @@ void testEndgameExactScore() {
     CHECK(finish.hasScore);
 }
 
-// The tree-size cap must end the search cleanly.  It used to reuse the "terminal"
-// flag, so every leaf refused by the cap was scored with rawScore() as if the game
-// were over: at ~35k visits on an empty board (where the old 1.5M edge cap was
-// hit) a corner cell then reported an exact 100% win on an unsolved position.
-void testTreeCapIsNotTerminal() {
+// A search must never report a hard 1.0/0.0 value for an unsolved position.  The
+// old tree-size cap did exactly that: once the cap was reached it scored the leaf
+// with rawScore() as if the game were over, which produced a solid 100% win at
+// ~35k visits on an empty board.  There is no cap any more, so this pins the
+// invariant instead: without a proof, values stay samples.
+void testNoHardValueWithoutProof() {
     const std::string headless = std::string(SHUYI_SOURCE_DIR) + "/models/shuyi_resnet_v1.bin";
     EngineOptions options = optionsFor(24680);
     options.nnModelPath = headless;
-    options.nnValueBlend = 1.0;
-    options.mctsMaxTreeEdges = 4000;  // reached within a few hundred visits
+    options.nnValueBlend = 1.0;  // value head only: it cannot output exactly 1.0 here
     auto engine = makeEngine(EngineKind::MctsNn, options);
     Position opening;
     SearchRequest request;
     request.timeLimitMs = 0;
-    request.visits = 20000;
+    request.visits = 600;
     const Analysis analysis = engine->search(opening, request);
     CHECK(analysis.valid);
     CHECK(opening.isLegal(analysis.best));
-    // The cap stops the search instead of silently degrading it, so the budget is
-    // not spent -- and nothing is claimed to be solved.
-    CHECK(analysis.visits < request.visits);
     CHECK(!analysis.proven);
+    CHECK(analysis.winrate < 0.999);
+    CHECK(analysis.winrate > 0.001);
     for (const CellAnalysis& info : analysis.cells) {
         CHECK(!info.proven);
+        if (info.visits == 0) continue;
+        CHECK(info.winrate < 0.999);
+        CHECK(info.winrate > 0.001);
     }
 }
 
@@ -516,7 +518,7 @@ int runEngineTests() {
     testDirichletRoot();
     testNnModel();
     testEndgameExactScore();
-    testTreeCapIsNotTerminal();
+    testNoHardValueWithoutProof();
     testTerminalProof();
     testSymmetryReport();
     testVisitBudget();

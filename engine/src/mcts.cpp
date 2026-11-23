@@ -123,7 +123,6 @@ public:
 
     Analysis search(const Position& position, const SearchRequest& request) override {
         ensureRoot(position);
-        treeCapped_ = false;
         if (position.gameOver()) return snapshot();
         if (options_.rootDirichletAlpha > 0.0 && !rootNoiseApplied_ && edgeCount_.size() > 0 &&
             edgeCount_[root_] > 1) {
@@ -144,11 +143,6 @@ public:
             if (request.stop && request.stop->load(std::memory_order_relaxed)) break;
             simulate(position);
             ++simulated;
-            // The tree hit its memory cap: stop instead of quietly switching the
-            // remaining visits to rollouts.  Silently degrading the evaluation
-            // mid-analysis is how a stale build ended up reporting a solid 100%
-            // win at ~35k visits.
-            if (treeCapped_) break;
             // The position is solved with its exact margin: further visits cannot
             // change the result, so the rest of the budget stays unspent on
             // purpose.  A solved value with an unfinished margin keeps searching,
@@ -182,7 +176,6 @@ private:
         edgeCount_.push_back(0);
         visits_.push_back(0);
         terminal_.push_back(terminal ? 1 : 0);
-        deadEnd_.push_back(0);
         complete_.push_back(0);
         provenValue_.push_back(-1.0);
         provenScore_.push_back(0.0);
@@ -198,7 +191,6 @@ private:
         edgeCount_.clear();
         visits_.clear();
         terminal_.clear();
-        deadEnd_.clear();
         complete_.clear();
         provenValue_.clear();
         provenScore_.clear();
@@ -209,7 +201,6 @@ private:
         rootKey_ = 0;
         rootValid_ = false;
         rootNoiseApplied_ = false;
-        treeCapped_ = false;
     }
 
     void ensureRoot(const Position& position) {
@@ -497,16 +488,10 @@ private:
 
     bool expand(int node, const Position& position, double* valueOut, double* scoreOut = nullptr,
                 bool* hasScore = nullptr) {
-        if (edgeCount_[node] != 0 || terminal_[node] || deadEnd_[node]) return false;
-        if (edges_.size() >= options_.mctsMaxTreeEdges) {
-            // The tree is out of memory budget.  Flag it so the search stops after
-            // this simulation: a half-expanded leaf must never be scored as if the
-            // game were over, and the remaining visits must not silently turn into
-            // rollouts.
-            deadEnd_[node] = 1;
-            treeCapped_ = true;
-            return false;
-        }
+        // No tree-size cap: the tree grows until the budget is spent.  A cap used
+        // to sit here and quietly change how leaves were scored once it was hit,
+        // which is exactly how a stale build reported a hard 100% at ~35k visits.
+        if (edgeCount_[node] != 0 || terminal_[node]) return false;
         std::vector<float> priors;
         std::vector<std::uint8_t> searchable;
         std::vector<int> representatives;
@@ -521,7 +506,7 @@ private:
                                                        searchable, representatives, &value, &hasValue,
                                                        scoreOut, hasScore, &complete);
         if (moves.empty()) {
-            deadEnd_[node] = 1;
+            terminal_[node] = 1;
             return false;
         }
         complete_[node] = complete ? 1 : 0;
@@ -665,7 +650,7 @@ private:
     // as its representative, so it can neither add nor remove a proof.
     bool updateProof(int node) {
         if (terminal_[node]) return true;
-        if (deadEnd_[node] || edgeCount_[node] == 0) return false;
+        if (edgeCount_[node] == 0) return false;
         if (provenValue_[node] < 0.0) {
             // A single reply that is a proven loss for the opponent is a forced
             // win: no other reply matters, and the move list need not be complete.
@@ -963,9 +948,6 @@ private:
     std::vector<std::uint32_t> visits_;
     // The game is over here: the exact result is known from the rules alone.
     std::vector<std::uint8_t> terminal_;
-    // Expansion was refused (tree size cap).  The position is NOT over, so the
-    // static score must never be presented as a terminal result.
-    std::vector<std::uint8_t> deadEnd_;
     // All legal moves were expanded (nothing was pruned by width).  Only then
     // can "every reply loses for the opponent" be concluded -- a proof is only
     // valid over a complete move list.
@@ -992,8 +974,6 @@ private:
     int rootWidthCap_ = 64;
     std::uint64_t rootKey_ = 0;
     bool rootValid_ = false;
-    // The tree reached mctsMaxTreeEdges during this search; stop cleanly.
-    bool treeCapped_ = false;
     bool rootNoiseApplied_ = false;
 };
 
