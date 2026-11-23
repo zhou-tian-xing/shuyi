@@ -110,7 +110,8 @@ int g_aValue = 1;
 int g_selected = 1;
 int g_hoverCell = -1;
 bool g_thinking = false;
-Mode g_mode = Mode::HumanRed;
+// Two players by default: the window is a board and an analysis tool first.
+Mode g_mode = Mode::Pvp;
 int g_dpi = 96;
 
 EngineClient g_engineClient;

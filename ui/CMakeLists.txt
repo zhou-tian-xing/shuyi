@@ -60,6 +60,23 @@ install(FILES README.md ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/ENGINE_PROTOCOL.
         DESTINATION . COMPONENT ui)
 
 enable_testing()
+# The parser that turns the engine's JSON into what the window draws.  It is a
+# separate binary because it needs no window: a broken parser must be caught
+# before anyone sees an empty board.
+add_executable(shuyi_ui_tests
+    tests/test_engine_view.cpp
+    src/engine_protocol.cpp
+    src/json.cpp
+)
+target_include_directories(shuyi_ui_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(shuyi_ui_tests PRIVATE shuyi_core)
+if(MSVC)
+    target_compile_options(shuyi_ui_tests PRIVATE /utf-8 /W4)
+else()
+    target_compile_options(shuyi_ui_tests PRIVATE -finput-charset=UTF-8 -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME shuyi_ui_view COMMAND shuyi_ui_tests)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     # Both tests only need the window binary: they check that the window starts,
