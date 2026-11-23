@@ -35,6 +35,11 @@ public:
     void stop();
     bool running() const { return running_.load(std::memory_order_relaxed); }
     bool send(const std::string& line);
+    // Sends one command and waits for its final reply (`= ...` or `? ...`),
+    // stashing any `info` line back for the next drain().  Used for the start-up
+    // handshake, where a rejected command must be visible immediately instead of
+    // showing up later as an unexplained empty analysis.
+    bool command(const std::string& line, std::string* reply, int timeoutMs = 5000);
     std::vector<std::string> drain();
     std::wstring path() const { return path_; }
 

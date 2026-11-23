@@ -46,8 +46,7 @@ class MctsEngine final : public Engine {
 public:
     MctsEngine(const EngineOptions& options, bool useNn) : options_(options), useNn_(useNn), rng_(options.seed) {
         if (useNn_ && !options_.nnModelPath.empty()) {
-            std::string error;
-            nn_.load(options_.nnModelPath, &error);
+            nn_.load(options_.nnModelPath, &loadError_);
         }
         useFasterNn_ = useNn_ && options_.nnOverride && options_.nnOverride->evaluate;
         resetTree();
@@ -55,9 +54,27 @@ public:
 
     EngineKind kind() const override { return useNn_ ? EngineKind::MctsNn : EngineKind::Mcts; }
 
-    std::string infoTag() const override {
+    bool ready(std::string* error) const override {
+        if (!useNn_) return true;
+        const bool gpu = options_.nnOverride && options_.nnOverride->evaluate;
+        if (options_.nnModelPath.empty()) {
+            if (error) *error = "mcts_nn needs a model: set_model <path> first";
+            return false;
+        }
+        if (!nn_.loaded() && !gpu) {
+            if (error) {
+                *error = loadError_.empty() ? "model failed to load: " + options_.nnModelPath
+                                            : loadError_;
+            }
+            return false;
+        }
+        if (error) error->clear();
+        return true;
+    }
+
+    std::string modelName() const override {
         if (!useNn_) return {};
-        return "nn=" + (nn_.loaded() ? nn_.modelName() : std::string("none"));
+        return nn_.loaded() ? nn_.modelName() : std::string("none");
     }
 
     std::vector<PolicyVisit> rootPolicy() const override {
@@ -131,6 +148,7 @@ public:
 
         const auto started = Clock::now();
         auto lastReport = started - std::chrono::milliseconds(1000);
+        const int reportInterval = std::max(1, request.reportIntervalMs);
         const int timeLimit = std::max(0, request.timeLimitMs);
         const int visitLimit = std::max(0, request.visits);
         // Size the root from the budget: every root move costs one network forward,
@@ -150,7 +168,8 @@ public:
             if (provenValue_[root_] >= 0.0 && scoreExact_[root_]) break;
             if (visitLimit > 0 && simulated >= visitLimit) break;
             const auto now = Clock::now();
-            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastReport).count() >= 100) {
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastReport).count() >=
+                reportInterval) {
                 lastReport = now;
                 if (request.onUpdate) request.onUpdate(snapshot());
             }
@@ -937,6 +956,7 @@ private:
     EngineOptions options_;
     bool useNn_ = false;
     bool useFasterNn_ = false;  // a GPU (or other) evaluator replaces the CPU forward
+    std::string loadError_;
     mutable std::mt19937_64 rng_;
     PolicyValueNet nn_;
 

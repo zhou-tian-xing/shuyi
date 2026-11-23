@@ -1,0 +1,194 @@
+# 数弈 engine protocol — version 2
+
+This file is the **only** contract between a front end and the engine. They are
+separate programs, built separately, released separately, and may live in
+different projects or be written in different languages. Nothing is linked.
+
+```
+front end (shuyi.exe)                engine (shuyi_engine.exe)
+   owns the game state   -- commands -->   owns the computation
+   draws the board       <-- info / =  --   keeps a search tree for one position
+```
+
+The engine is a headless service: it answers “what are the candidate moves and
+what are they worth for this position”. It never owns a game record.
+
+## 1. Transport
+
+* One process, started once, kept alive for the whole session.
+* Commands go to **stdin**, one per line, UTF-8, `\n` terminated.
+* The engine writes to **stdout**, one message per line, flushed immediately.
+* Blank lines and lines starting with `#` are ignored.
+* Concurrent searches are not part of the protocol: sending a command that needs
+  the engine stops the running search first.
+
+## 2. Framing
+
+Three kinds of line leave the engine:
+
+| Line | Meaning |
+|---|---|
+| `= <text>` | the command succeeded (the final reply) |
+| `? <text>` | the command failed; `<text>` says why |
+| `info <json>` | an asynchronous analysis snapshot |
+
+`analyze` starts a search and streams `info` lines at a fixed interval; its
+**final** reply is `= done …` when the visit budget ran out, `= stopped` when a
+`stop` ended it. Exactly one final reply is sent per command.
+
+`genmove` also streams `info` while it thinks, and its final reply is the move:
+`= <cell> <number>` or `= pass`.
+
+### Optional command ids
+
+A command may start with an integer id; every line belonging to it repeats the
+id:
+
+```
+7 analyze red 512
+7 info {"visits":64,...}
+7 = done visits=512 proven=0 elapsed_ms=2103
+```
+
+Without an id nothing is prefixed (the simplest front end). With ids a front end
+can pipeline: replies that arrive out of order stay attributable. A late
+`= stopped` from an interrupted analysis is then unambiguous.
+
+## 3. Commands
+
+| Command | Reply | Notes |
+|---|---|---|
+| `protocol_version` | `2` | |
+| `name` | `ShuyiEngine` | |
+| `version` | e.g. `0.3.0` | |
+| `list_commands` | space separated names | |
+| `capabilities` | `engine=shuyi_engine proto=2 cuda=0\|1 backend=cpu\|cuda rulesets=classic,blocking visits=1 stream=1 json=1 model=0\|1` | probe before choosing a binary |
+| `boardsize <n>` | empty | only 9 is accepted; anything else is an error |
+| `ruleset [classic\|blocking]` | the active rule set | only before the first move |
+| `clear_board` | empty | resets the position and the tree |
+| `play <red\|black> <a1..i9> <1..9>` | empty | the front end owns the game; an illegal move is an error |
+| `play <red\|black> pass` | empty | only legal when the side has no placement |
+| `genmove <red\|black> [visits]` | `a1 5` or `pass` | `visits` is that command's budget |
+| `analyze <red\|black> [visits] [interval <ms>]` | `done …` / `stopped` | streams `info`; `visits 0` = no limit |
+| `stop` | `stopped` | ends a running search; the tree is kept |
+| `set_engine <random\|pruning\|mcts\|mcts_nn>` | the name | rebuilds the search, keeps the position |
+| `set_backend <cpu\|cuda\|auto>` | the backend actually used | `cuda` fails on a CPU build |
+| `set_model <path>` | the path | validated and rule-set checked before use |
+| `set_visits <n>` | `n` or `off` | default budget only; does not touch the tree |
+| `set_time <ms>` | `ms` | clock budget, used only when no visit budget applies |
+| `set_a <value>` | the value | score offset for the endgame result |
+| `set_window <points>` | the value | aspiration window (alpha-beta) |
+| `set_pvs <on\|off>` | `on`/`off` | principal-variation search (alpha-beta) |
+| `bench [visits]` | `visits=… time_ms=… visits_per_second=…` | throughput probe |
+| `selfplay <games> [visits]` | `games=… red=… black=… draw=…` | sanity check of a model |
+| `quit` | empty, then exit | |
+
+### Visit budgets
+
+A visit is the unit that is comparable across machines:
+
+* MCTS / MCTS+NN: one visit is one simulation (one network evaluation).
+* alpha-beta: one visit is one node (one position evaluation).
+
+`set_visits N` sets the default. `analyze`/`genmove` may carry their own budget.
+`visits 0` means “no budget”: for an analysis the search runs until `stop`, for a
+move the clock applies instead (a move must come back eventually). There is no
+tree-size cap and no hidden stopping rule: a search ends on its budget, its
+clock, or `stop`.
+
+### Streaming
+
+`analyze … interval 100` publishes a snapshot at most every 100 ms (default
+100 ms, allowed 1–60000). The interval is a reporting rate, **not** a limit: a
+slow machine streams fewer updates, it does not search less. Always one final
+snapshot is sent, followed by the final reply.
+
+Extending an analysis: the tree belongs to the position, so a second `analyze`
+on the same position continues it. `set_visits` does not reset it; `play`,
+`clear_board`, `ruleset`, `set_a`, `set_engine`, `set_backend` and `set_model`
+rebuild it because the search itself changed.
+
+## 4. The analysis object
+
+`info` carries one JSON object per line. Every field is optional except
+`engine`, `visits` and `best`; a front end must ignore fields it does not know.
+
+```json
+{
+  "engine": "mcts_nn",
+  "turn": "red",
+  "backend": "cuda",
+  "nn": "b4c32-s34760-d470705.bin",
+  "visits": 512,
+  "nodes": 984,
+  "depth": 0,
+  "proven": false,
+  "winrate": 0.5312,
+  "has_score": true,
+  "score": 1.234,
+  "best": "e5:3",
+  "elapsed_ms": 412,
+  "pv": ["e5:3", "d4:1"],
+  "moves": [
+    {"move": "e5:3", "winrate": 0.5312, "visits": 210, "score": 1.234}
+  ],
+  "cells": [
+    {"cell": "e5", "number": 3, "winrate": 0.5312, "visits": 210, "score": 1.234, "proven": false}
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `engine` | `random`, `pruning`, `mcts` or `mcts_nn` |
+| `turn` | side to move for this analysis (`red`/`black`); all values are from its point of view |
+| `backend` | which forward actually ran: `cpu` or `cuda` |
+| `nn` | network name, empty without one |
+| `visits`, `nodes` | search effort |
+| `proven` | the position is solved: win rate, score and best move are game-theoretic values |
+| `winrate` | win probability for the side to move, `[0,1]` |
+| `has_score` | `score` is real (terminal result or a trained score head) |
+| `score` | expected final score, points, side-to-move perspective, includes the A value |
+| `best` | `cell:number`, or `none` |
+| `pv` | principal variation, compact move tokens |
+| `moves` | candidate moves, best first |
+| `cells` | one entry per board cell with data; the UI draws these |
+
+A cell that is not in `cells` has no analysis. Nothing in this object is derived
+by the front end: if `has_score` is false there is no score, and the front end
+shows nothing rather than inventing one.
+
+## 5. Errors and the no-fallback rule
+
+Every command either does what it says or fails with `?`.
+
+* A wrong board size, an unknown command, a bad argument: `?`.
+* `set_backend cuda` on a CPU build: `?`. With `auto` the engine uses the GPU when
+  it works and reports `cpu` in the reply and in every analysis object.
+* `set_model` refuses a network trained for the other rule set.
+* `genmove`/`analyze` refuse to run when the selected engine cannot run (for
+  example `mcts_nn` without a model).
+* If the search cannot produce a move, the reply is `?`, never a made-up move.
+
+A front end may not substitute a local search, a heuristic move or an old
+analysis for a failed command. It shows the error.
+
+## 6. Versioning
+
+The major version is in `capabilities` (`proto=2`) and `protocol_version`.
+A front end that needs version 2 must refuse an engine that reports anything
+else, with a message naming both versions. Additive JSON fields do not change the
+version; a changed meaning, framing or command does.
+
+## 7. Conformance tests
+
+`protocol/tests/` contains a dependency-free client and two tests that only use
+this document:
+
+```
+python protocol/tests/protocol_smoke.py  <engine.exe> [model.bin]
+python protocol/tests/visit_budget_smoke.py <engine.exe> [model.bin]
+```
+
+They run as part of `ctest` and are the acceptance test for any engine — this one
+or one written elsewhere.

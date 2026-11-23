@@ -1,11 +1,18 @@
 # Build trees and packaged output
 build/
 build-cuda/
+build-tools/
 build_ui_only/
 build_engine_only/
 dist/
+# Python bytecode
+__pycache__/
+*.pyc
 # Training runs: models, self-play data and logs are big binaries produced by the
 # training scripts (and on the server), not source.  models/ stays tracked: the
-# tests load models/shuyi_resnet_v1.bin.
+# tests and the release package load files from it.
 runs/
 *.log
+# Scratch output of the headless UI probes
+engine_choice.txt
+ui_models.txt

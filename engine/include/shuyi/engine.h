@@ -121,6 +121,11 @@ struct SearchRequest {
     // limit is ignored.  A visit budget is machine independent, so a "10 ms"
     // run can no longer silently turn into an 11-simulation run on a slower CPU.
     int visits = 0;
+    // How often the search publishes a snapshot, in wall-clock milliseconds.
+    // This is a reporting rate, never a stopping condition: the search ends on
+    // the visit budget or on `stop`, so a slow machine streams fewer updates
+    // instead of searching less.
+    int reportIntervalMs = 100;
     const std::atomic<bool>* stop = nullptr;
     std::function<void(const Analysis&)> onUpdate;
 };
@@ -129,9 +134,17 @@ class Engine {
 public:
     virtual ~Engine() = default;
     virtual EngineKind kind() const = 0;
+    // False with a reason when this engine cannot run as configured (a network
+    // engine without a loadable model).  Callers must refuse the command instead
+    // of silently searching with an empty prior.
+    virtual bool ready(std::string* error) const {
+        if (error) error->clear();
+        return true;
+    }
     virtual void reset() {}
     virtual void onPlay(const Position&, Move) {}
-    virtual std::string infoTag() const { return {}; }
+    // Name of the loaded network, empty for an engine without one.
+    virtual std::string modelName() const { return {}; }
     virtual std::vector<PolicyVisit> rootPolicy() const { return {}; }
     virtual Analysis search(const Position& position, const SearchRequest& request) = 0;
 

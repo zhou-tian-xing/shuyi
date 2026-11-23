@@ -128,6 +128,40 @@ std::vector<std::string> EngineClient::drain() {
     return lines;
 }
 
+bool EngineClient::command(const std::string& line, std::string* reply, int timeoutMs) {
+    if (!send(line)) return false;
+    const DWORD deadline = GetTickCount() + static_cast<DWORD>(timeoutMs < 0 ? 0 : timeoutMs);
+    std::vector<std::string> deferred;
+    while (GetTickCount() < deadline) {
+        std::deque<std::string> pending;
+        {
+            std::lock_guard<std::mutex> lock(queueMutex_);
+            pending.swap(queue_);
+        }
+        for (std::string& text : pending) {
+            const bool final = text == "=" || text.rfind("= ", 0) == 0 || text.rfind("?", 0) == 0;
+            if (!final) {
+                deferred.push_back(std::move(text));
+                continue;
+            }
+            {
+                // Anything that was not part of this reply stays available to the
+                // UI timer, in its original order.
+                std::lock_guard<std::mutex> lock(queueMutex_);
+                for (auto it = deferred.rbegin(); it != deferred.rend(); ++it) {
+                    queue_.push_front(*it);
+                }
+            }
+            if (reply) *reply = std::move(text);
+            return true;
+        }
+        Sleep(2);
+    }
+    std::lock_guard<std::mutex> lock(queueMutex_);
+    for (auto it = deferred.rbegin(); it != deferred.rend(); ++it) queue_.push_front(*it);
+    return false;
+}
+
 void EngineClient::stop() {
     stopRequested_.store(true);
     if (running_.load() && stdinWrite_) {

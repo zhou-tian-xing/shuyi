@@ -2,7 +2,7 @@
 
 这份文档是给"租一台 2 小时 GPU 机器"准备的操作手册 + 预算模型 + 质量闸门。
 所有产生局面的步骤（自对弈、一层扫描、对局评估）都由同一个 C++/CUDA 二进制完成，
-训练由 `experimental/training/train_resnet.py` 在同一块 GPU 上完成，**流程里没有 Python MCTS，也没有 CPU 推理**。
+训练由 `training/train_resnet.py` 在同一块 GPU 上完成，**流程里没有 Python MCTS，也没有 CPU 推理**。
 
 ---
 
@@ -10,8 +10,8 @@
 
 | # | 错误 | 后果 | 现在的做法 |
 |---|------|------|-----------|
-| 1 | 引擎里根本没有 CUDA 后端，自对弈只能用 Python MCTS 顶 | 用 Python 的开销解释"GPU 慢"，架构性错误 | `engine/src/nn_cuda.cu` + `experimental/selfplay/selfplay_gpu.cpp`：C++ 树 + 批量 CUDA 推理 |
-| 2 | 用**时间**而不是**访问次数**做自对弈预算 | 10 ms/步 = 11 次模拟，目标熵 2.48≈均匀、最大概率 0.0865 **低于**均匀 0.090，两代数据不可学 | `--visits` 是唯一预算，`experimental/selfplay/selfplay_gpu.cpp` 里没有 `--time` |
+| 1 | 引擎里根本没有 CUDA 后端，自对弈只能用 Python MCTS 顶 | 用 Python 的开销解释"GPU 慢"，架构性错误 | `engine/src/nn_cuda.cu` + `tools/selfplay/selfplay_gpu.cpp`：C++ 树 + 批量 CUDA 推理 |
+| 2 | 用**时间**而不是**访问次数**做自对弈预算 | 10 ms/步 = 11 次模拟，目标熵 2.48≈均匀、最大概率 0.0865 **低于**均匀 0.090，两代数据不可学 | `--visits` 是唯一预算，`tools/selfplay/selfplay_gpu.cpp` 里没有 `--time` |
 | 3 | 以为"GPU 推理慢"，其实是我 kernel 只有峰值 7% | 误判瓶颈，方向全错 | 换 im2col + cuBLAS GEMM：b6c64 从 1158 → 4813 evals/s（本机 MX350） |
 | 4 | 在本机上把本机数字当项目数字，没有为租的机器准备 | 时间全花在错误的机器上 | 本文件 + `--plan`：先测，再按预算排生成数 |
 | 5 | 从退化教师（b2c16，98.3% 概率压在一个数字上）蒸馏/截断先验 | 目标按扫描顺序排列，不可学（arena 0.308） | gen0 只从随机对局学价值，不复用任何教师 |
@@ -31,7 +31,7 @@
 | 一层全宽价值扫描（gen1..K） | `--mode oneply` | GPU，每局面 729 次前向 |
 | MCTS 自对弈（gen K+1..） | `--mode selfplay --visits N` | GPU，每次模拟一次前向 |
 | 对局评估（换色） | `--mode match` | GPU |
-| 训练 | `experimental/training/train_resnet.py` | GPU（PyTorch，AMP） |
+| 训练 | `training/train_resnet.py` | GPU（PyTorch，AMP） |
 | 吞吐基准 | `--mode bench` | GPU |
 
 `--mode oneply` 的语义：把当前局面的**每个合法着法**都走一步，用价值网评估子局面，

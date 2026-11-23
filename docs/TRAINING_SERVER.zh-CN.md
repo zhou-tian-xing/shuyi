@@ -232,7 +232,7 @@ GPU 上约 1 分钟（首 epoch 有 CUDA 预热）。这次开局诊断 `corner=
 
 ## 6. 训练脚本细节
 
-`experimental/training/train_resnet.py` 相对第一版的关键变化：
+`training/train_resnet.py` 相对第一版的关键变化：
 
 - **数据分片**：`--data` 接受多个 `.bin`，按代拼成回放窗口；
 - **合法着法掩码**：policy softmax 只在“空格 + 该数字仍有剩余”的 729 个

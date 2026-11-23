@@ -88,7 +88,7 @@ L9 = 2|N9| - (被红 9 覆盖的 N9 格数)
 
 这里“覆盖”指该格附近有红 9。
 
-一个有限枚举引理（程序 `experimental/research/a9_lemma.cpp`，已在测试中运行）给出：
+一个有限枚举引理（程序 `tools/research/a9_lemma.cpp`，已在测试中运行）给出：
 
 1. 对全部 `C(81,3)=85320` 种三枚黑 9 的放法，`L9` 的最小值是 7；
 2. 使 `L9` 可能等于 7 的黑 9 放法只有 20 种；
@@ -173,7 +173,7 @@ max P = 73,   min P = -73
 5ae25986f67b9429e592b724b0b918de4d1db6c6fee8fd9c13cdc77ce2d2869b  data/score_witnesses.txt
 ```
 
-> 见证由 `experimental/research/komi_explore.cpp` 中的局部搜索发现，但搜索过程不参与证明。证明链是：
+> 见证由 `tools/research/komi_explore.cpp` 中的局部搜索发现，但搜索过程不参与证明。证明链是：
 > 上界由上面的有限引理给出；下界由换色性给出；每个中间值由文件中的具体棋盘给出，并由独立测试使用引擎重算。
 
 ## 4. 当前 `A=+1` 的显式平局

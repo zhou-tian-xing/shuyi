@@ -5,208 +5,173 @@
 
 ---
 
-## 1. 顶层：三块代码 + 三块数据
+## 1. 顶层：三个产品 + 两份开发资料
 
 ```
 数弈/
-├── engine/          C++ 引擎：规则、搜索、网络。可单独编译成静态库 + 行协议引擎
-├── ui/              Win32 前端（GDI），以及和引擎进程通信的客户端
-├── experimental/    自对弈、训练、评测、一次性研究工具（不参与 UI 发布）
-├── data/            共享测试夹具（终局见证等），引擎测试和实验工具都读它
-├── models/          手写/迁移的固定模型夹具 + 运行时默认模型
-├── runs/            训练与评测的输出（每代数据、模型、日志、JSON）
-├── docs/            文档：规则、协议、架构、评测方法、计划、历次运行报告
-├── build/           CMake 构建目录（MinGW，CPU）
-├── build-cuda/      CUDA 构建目录（MSVC + nvcc，自对弈用）
-└── CMakeLists.txt   唯一的构建入口
+├── core/            规则库：棋盘、着法合法性、计分、对称。两侧都只链接它，且只链接它
+├── engine/          shuyi_engine.exe：无头引擎（搜索/分析/走棋/bench/自对弈）+ 行协议
+├── ui/              shuyi.exe：Win32 界面。只管规则与调用，不含任何搜索
+├── protocol/        引擎协议（唯一的契约）+ 一致性测试
+├── tools/           开发工具：bench、证明检查、自对弈、锦标赛。不随发布
+├── training/        Python 训练流水线。不随发布
+├── release/         打包脚本（alpha 包由这里生成）
+├── data/            共享测试夹具（终局见证等）
+├── models/          随包发布的模型 + 测试夹具
+├── runs/            训练与评测输出（不入库）
+├── docs/            规则、架构、评测方法、计划、历次运行报告
+├── build/           CPU 构建目录（MinGW）
+└── build-cuda/      CUDA 构建目录（MSVC + nvcc）
 ```
 
-三块代码的边界是硬的，别混：
+依赖关系是硬的，别混：
 
-| 目录 | 可以依赖 | 不可以依赖 |
+| 目录 | 可以依赖 | 绝不可以依赖 |
 |---|---|---|
-| `engine/` | 只依赖自己 | 不许 `#include` UI 或 experimental 的东西；不许读 `runs/` |
-| `ui/` | `engine/` 的头（`shuyi/…`） | 不许直接调 experimental 的工具 |
-| `experimental/` | `engine/` 的头 | UI 不许依赖它；它的失败不能影响引擎测试 |
+| `core/` | 标准库 | 搜索引擎、网络、Win32、任何 I/O 策略 |
+| `engine/` | `core/` | `ui/`、`tools/`、`runs/`、Win32 |
+| `ui/` | `core/` | `engine/` 的搜索、网络、CUDA——**只能**通过协议通信 |
+| `tools/` | `core/`、`engine/` 的库 | 被产品反向依赖 |
 
-`models/`、`data/`、`runs/` 是三方共享的数据，不属于任何一块代码。
+`ui/` 链接 `core/` 是允许的（界面是规则与状态的权威）；`ui/` 链接 `shuyi_search` 是禁止的，
+那等于把引擎塞进界面包。CMake 里没有这个 target 可以链，别加回去。
 
 ---
 
-## 2. engine/ —— 规则与搜索
+## 2. core/ —— 规则
+
+```
+core/include/shuyi/
+├── rules.h          Ruleset 枚举（Classic / Blocking）、规则名与后缀、过手哨兵
+├── position.h       棋盘状态：落子/撤销/合法着法/终局/哈希/对称（kSymmetryCount=8）
+├── format.h         显示格式（访问数、胜率、Wilson 下界、平均分）
+└── io.h             UTF-8 路径与 argv（仓库路径含中文，必须走这里）
+core/src/position.cpp  落子/撤销/合法着法/计分/哈希/对称变换
+```
+
+改规则时：`position.cpp` 的合法着法与 `Position::play` 必须同时改，测试在
+`engine/tests/test_rules.cpp`（含对称性与邻接关系）。计分只有一个实现，别在别处重写。
+
+---
+
+## 3. engine/ —— 搜索与网络
 
 ```
 engine/include/shuyi/
-├── rules.h          Ruleset 枚举（Classic / Blocking）、规则名与后缀、过手哨兵
-├── position.h       棋盘状态：落子、撤销、合法着法、终局、哈希、阻挡判定（kBlockingReach）
-├── ai.h             剪枝引擎：SearchOptions（含 nodeLimit）、SearchResult、think/chooseMove
-├── ai_policy.h      "评估 + 排序"策略接口，规则特异的实现挂在这里
-├── mcts.h           （无）MCTS 在 src/mcts.cpp 里，接口在 engine.h 的 Engine
-├── engine.h         Engine 基类、EngineOptions、SearchRequest（visits 预算）、Analysis
-├── nn.h             策略价值网络：文件格式 SHUYINN3、特征平面、CPU 前向、NnOutput
-├── nn_cuda.h        CUDA 批量前向的接口（nn_cuda.cu 实现，也被 shuyi_engine 用）
+├── engine.h         Engine 基类、EngineOptions、SearchRequest（visits/reportIntervalMs）、Analysis
+├── ai.h             剪枝引擎：SearchOptions（nodeLimit）、SearchProgress、searchAlphaBeta
+├── ai_policy.h      "评估 + 排序"策略接口；规则特异的实现挂这里
+├── mcts.h           （无独立头）MCTS 在 src/mcts.cpp，接口即 Engine
+├── nn.h             策略价值网络：SHUYINN3 格式、特征平面、CPU 前向、NnOutput
+├── nn_cuda.h        CUDA 批量前向接口（nn_cuda.cu 实现）
 ├── tt.h             置换表
-├── format.h         显示用的数字格式（访问数、胜率、平均分）
-└── io.h             UTF-8 路径与 argv 处理（仓库路径含中文，必须走这里）
+└── protocol.h       行协议会话（命令解析、位置状态、单搜索线程）
 ```
 
 ```
 engine/src/
-├── position.cpp     落子/撤销/合法着法/计分/哈希
-├── ai.cpp           迭代加深 + aspiration + PVS 剪枝搜索（nodeLimit 在这里生效）
-├── ai_blocking.cpp  阻挡规则的评估与排序（挤压项、封锁数）——规则特异代码只放这里
-├── mcts.cpp         PUCT 树搜索（含强制过手节点、分数头回传、访问预算）
-├── engine.cpp       Engine 四种实现（random/pruning/mcts/mcts_nn）的适配层
-├── engine_main.cpp  行协议引擎（stdin/stdout）；`set_backend auto` 时挂上 CUDA 前向
-├── nn.cpp           模型文件读写 + CPU 前向
-├── nn_cuda.cu       im2col + cuBLAS 的 CUDA 前向（含分数头）
-└── tt.cpp           置换表
+├── ai.cpp           迭代加深 + aspiration + PVS（nodeLimit 在这里生效）
+├── ai_blocking.cpp  阻挡规则的评估与排序——规则特异代码只放这里
+├── mcts.cpp         PUCT 树搜索（强制过手、证明回传、对称轨道、访问预算）
+├── engine.cpp       四种 Engine 实现（random/pruning/mcts/mcts_nn）的适配层
+├── nn.cpp           网络加载与前向
+├── nn_cuda.cu       CUDA 批量前向
+├── tt.cpp           置换表
+├── protocol.cpp     命令集、错误处理、启动握手、bench/selfplay
+├── protocol_json.cpp  Analysis → JSON（协议第 4 节的唯一实现）
+└── main.cpp         stdin 循环
 ```
 
-```
-engine/tests/
-├── test_position.cpp  规则与局面基本行为
-├── test_rules.cpp     阻挡规则与强制过手（12 个用例）
-├── test_komi.cpp      A值/平局可达性（读 data/score_witnesses.txt 的 147 个终局）
-├── test_engine.cpp    搜索、置换表、网络、访问预算（testVisitBudget）
-├── protocol_smoke.py  行协议冒烟
-└── visit_budget_smoke.py  四种引擎都必须正好用完给定 visits（机器无关性）
-```
+改协议时：`protocol.cpp`（命令）和 `protocol_json.cpp`（字段）必须和
+`protocol/ENGINE_PROTOCOL.md` 一起改，然后跑 `protocol/tests/`。
 
-改引擎时的自查清单：
-
-1. `cmake --build build && cd build && ctest` 全绿；
-2. 改了模型/数据格式 → 同步 `nn.cpp` 的版本号、`experimental/training/train_resnet.py` 的写出端，
-   并且**清空 CUDA 构建目录**（旧 `.o` 会按旧布局读文件而 `--check` 照样通过）；
-3. 改了搜索预算语义 → 跑 `engine/tests/visit_budget_smoke.py`，评分表的前提就是它。
+**不要**加回这些（都删除过，原因写在 git 历史里）：
+- 树大小上限：撞上限时叶子会被当成终局，产生假的 100% 胜率；
+- `SHUYI_UI_BUILTIN_AI`：界面内嵌搜索，等于界面包里带引擎；
+- `set_backend` 的静默降级：`cuda` 失败必须 `?`，`auto` 必须在回复里报告实际后端；
+- `mcts_nn` 没有模型还能跑：现在 `ready()` 会拒绝。
 
 ---
 
-## 3. ui/ —— Win32 前端
+## 4. ui/ —— 界面
 
 ```
-ui/include/engine_client.h   子进程 + 行协议的客户端（启动、发送、非阻塞读）
-ui/src/engine_client.cpp     同上实现
-ui/src/ui_win32.cpp          全部界面：窗口、棋盘绘制、面板、菜单、AI 标记
-ui/tests/ui_menu_smoke.py    无界面回归：`shuyi.exe --dump-models` 导出的模型菜单
+ui/include/
+├── engine_client.h  子进程 + 管道 + 读线程 + `command()` 同步握手
+├── engine_view.h    分析视图结构 + `parseAnalysis()`（JSON → 视图）
+├── json.h           极简 JSON 解析器
+└── discovery.h      引擎候选路径与 `capabilities` 探测
+ui/src/
+├── ui_win32.cpp     窗口、菜单、绘制、规则状态、分析状态机
+├── engine_client.cpp 进程/管道/读线程
+├── engine_protocol.cpp  解析 info JSON、着法 token
+├── json.cpp         JSON 解析
+└── discovery.cpp    引擎发现
 ```
 
-`ui_win32.cpp` 一个文件装了整个窗口，按下面顺序找东西：
+界面里的三条硬规矩：
 
-| 想改什么 | 找什么 |
-|---|---|
-| 棋盘/棋子/标记的画法 | `drawBoard`、`drawStone`、`drawAnalysisMarks` |
-| 右侧面板的三栏（胜率/访问数/平均分） | `drawPanel`、`formatVisits` 等（在 engine/format.h） |
-| 菜单与快捷键 | `createMenuBar`、`WM_COMMAND` |
-| 模型二级菜单 | `scanModels`、`populateModelMenu`、`selectModel` |
-| 规则切换、A值 | `setRuleset`、`setAValue` |
-| 引擎进程与协议 | `startEngineProcess`、`sendEngine`、`handleEngineLine` |
-| 推理后端（CPU/GPU） | `set_backend auto`（`engine_main.cpp` 的 `attachEvaluator`）、`EngineOptions::nnOverride` |
-| 选哪个引擎进程 | `engineCandidates` / `chooseEnginePath` / `probeEngine`（协议 `capabilities`），`--dump-engine` 可无界面诊断 |
+1. **不计算**。没有引擎就显示错误并提示去“引擎 → 选择引擎程序…”，绝不自己走一步。
+2. **不猜**。引擎报错就显示错误；解析不了的分析数据也显示错误，不保留成空白棋盘。
+3. **协议版本硬校验**。`proto != 2` 直接拒绝并弹窗说明，不做“可能兼容”的尝试。
 
-两条硬规则：
-
-1. **模型目录要能在任意工作目录下找到**：菜单扫描 exe 所在目录、它的父目录（仓库根）、
-   当前目录，以及 `SHUYI_MODEL_DIRS`（分号分隔）。只按相对路径找会在从 `build/` 启动时漏掉
-   `runs/*/models`。
-2. **引擎进程按能力挑，不按构建挑**：UI 与引擎是分离进程，界面只负责"拉起最快的引擎"。
-   候选顺序见 `engineCandidates()`，用 `capabilities` 探测 `cuda=1`；`SHUYI_ENGINE` 可覆盖。
-2. **路径编码**：Win32 的 `*A` API 给的是 ANSI，引擎进程要 UTF-8（`Utf8Args` 会转）。
-   `ModelEntry` 因此同时存 `path`（ANSI）和 `enginePath`（UTF-8），别混用。
+启动顺序（`startEngineProcess`）：`boardsize` → `ruleset` → `set_a` → `set_model` →
+`set_engine` → `set_backend auto` → `set_visits`，每条都用 `EngineClient::command()`
+同步等回复，任何 `?` 都会中止启动并弹窗。
 
 ---
 
-## 4. experimental/ —— 自对弈、训练、评测
+## 5. protocol/、tools/、training/
 
 ```
-experimental/selfplay/
-├── selfplay_gpu.cpp   生产用自对弈：CUDA 批量前向 + 每 tick 每局一个叶子；也提供
-│                      --mode match（模型对打）、--mode serve（给 arena 当玩家）、--check
-├── selfplay.cpp       CPU 版自对弈（慢，用于无 GPU 的冒烟测试）
-├── match.cpp          两种引擎对打的轻量工具（早期，时间预算，已被 arena.py 取代）
-└── tournament.cpp     池内循环赛（早期，时间预算，已被 arena.py/elo.py 取代）
-
-experimental/research/
-├── a9_lemma.cpp       文档里的有限引理程序（黑 9 三枚 → 损失下界），测试会跑
-├── komi_explore.cpp   寻找终局分数见证（data/score_witnesses.txt 的来源）
-└── nnbench.cpp        单模型前向基准
-
-experimental/training/            （见该目录 README.md，那里是训练手册）
-├── pipeline.py        一代一代跑：随机→单层→MCTS→训练→arena→ELO
-├── train_resnet.py    训练器（PyTorch），模型格式的写出端
-├── arena.py           横评：异构玩家（random/pruning/mcts/mcts_nn/gpu）同池
-├── elo.py             Elo 拟合（Newton + bootstrap），可合并多份矩阵
-├── avalue.py          A值标定（模型自对弈扫 komi，logistic 求交点）
-├── cross_eval.py      线路横评 + 代数爬梯合并成一张表
-├── evalconfig.py      EVAL_VISITS：所有评测唯一的预算常量
-├── rule_probe.py      独立的计分实现（横评用它判终局，和引擎互校）
-├── target_stats.py    目标分布健康检查（闸门）
-├── model_migrate.py   旧模型头迁移（只改头，不动权重）
-├── summarize_run.py   manifest → markdown 表
-├── pull.py            断点续拉服务器产物
-├── ssh.py / remote*.py / *.sh   服务器部署与运维
-└── README.md          训练手册：原则、数据来源、闸门、横评、规则隔离、改进记录
-
-experimental/tests/selfplay_smoke.py   CPU 自对弈冒烟（ctest 调用）
+protocol/ENGINE_PROTOCOL.md   协议全文（命令表、JSON 字段表、错误与版本规则）
+protocol/tests/engine_client.py  Python 客户端（也供训练脚本使用）
+protocol/tests/protocol_smoke.py 命令/流式/预算/错误行为的一致性测试
+protocol/tests/visit_budget_smoke.py  预算与确定性
+tools/research/               证明检查、终局探针、bench、一次性研究
+tools/selfplay/               自对弈、锦标赛、对局工具
+training/                     训练流水线（pipeline.py 是入口）、评测（arena/elo）、文档
 ```
 
-`experimental/` 里有些脚本是**历史遗留**（`gpu_selfplay.py`、`oneply_selfplay.py`、
-`komi_probe.py`、`diag_target.py`、`diagnose_openings.py`、`fix_values.py`、
-`verify_rules.py`、`check_layout.py`）：它们记录当时的排查过程，C++ 版本已经取代了其中的主流程。
-新写的东西不要再依赖它们；哪天确认没用了就删，别让它们继续散落在目录里。
+`tools/` 与 `training/` 永远不进发布包；`release/make_alpha.py` 只拷 `ui/`、`engine/`、
+`models/`、`protocol/` 的产物。
 
 ---
 
-## 5. 数据、模型、输出
-
-| 路径 | 是什么 | 谁读它 |
-|---|---|---|
-| `data/score_witnesses.txt` | 147 个终局见证（分数 −73…+73），SHA-256 记在规则文档里 | `test_komi.cpp`、`komi_explore.cpp` |
-| `models/shuyi_resnet_v1.bin` / `_v2.bin` | 手工构造/迁移的固定夹具 | 单测、协议冒烟、默认模型 |
-| `models/experimental/` | 早期实验模型 | 手工 |
-| `runs/<ruleset>/<run>/gen_XXX/` | 每代：`selfplay/shard_000.bin`、训练日志、`candidate.bin` | `pipeline.py` 续跑、人看 |
-| `runs/<ruleset>/<run>/models/` | 每代命名模型 `b4c32-s..-d..-blk.bin` | arena、ELO、UI 菜单 |
-| `runs/arena/`、`runs/avalue/`、`runs/elo/` | 评测矩阵、A值标定、对局记录 | `elo.py`、文档里的表 |
-| `docs/reports/*_run/` | 历史运行留下的模型与曲线（只读参考） | 文档、旧表复现 |
-
-**`runs/` 不是代码**：它随时可以被重新生成，但服务器是按小时计费的，所以在租用机器上跑出来的
-东西一定要先 `pull.py` 拉回本地（默认路径就是 `runs/`）。
-
----
-
-## 6. 构建与测试
+## 6. 构建与打包
 
 ```bash
-# CPU（MinGW / Linux 均可）
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j 8
-cd build && ctest --output-on-failure          # 8 项
+# 开发者：核心 + 引擎 + 界面 + 测试
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build -j 8
+cd build && ctest --output-on-failure
 
-# CUDA（Windows + MSVC；nvcc 不能写中文路径，所以用 junction C:\shuyi_src）
-cmake -S C:/shuyi_src -B C:/shuyi_cuda_build -G Ninja -DSHUYI_CUDA=ON \
-      -DCMAKE_BUILD_TYPE=Release -DCUDAToolkit_ROOT=E:/CUDA/v12.4
+# 只有引擎 / 只有界面（两个产品各自独立）
+cmake -S engine -B build-engine -DSHUYI_CUDA=ON
+cmake -S ui     -B build-ui
+
+# 开发工具（默认不编）
+cmake -S .    -B build -DSHUYI_BUILD_TOOLS=ON
+cmake -S tools -B build-tools
+
+# alpha 发布包
+python release/make_alpha.py --engine build-cuda/shuyi_engine.exe \
+    --ui build-cuda/shuyi.exe --model models/b4c32-s34760-d470705.bin
 ```
 
-测试清单（`ctest` 名称 → 断言什么）：
-
-| 名称 | 断言 |
-|---|---|
-| `shuyi_tests` | 规则、局面、A值、搜索、网络、**访问预算** |
-| `shuyi_match_smoke` | 两种引擎能打完一局 |
-| `shuyi_tournament_smoke` | 循环赛能产出 Elo 表 |
-| `shuyi_a9_lemma` | 文档里的有限引理（Windows） |
-| `shuyi_protocol` | 行协议握手与非法输入 |
-| `shuyi_selfplay_smoke` | CPU 自对弈能产出数据 |
-| `shuyi_visit_budget` | 四种引擎都按 visits 停，且两次运行一致 |
-| `shuyi_ui_menu` | 模型二级菜单列出了所有模型、tag 与 id 正确 |
+CUDA 构建在中文路径下要先建 junction（`C:\shuyi_src` → 本仓库），nvcc 不接受中文路径。
 
 ---
 
-## 7. 改任何东西之前
+## 7. 改什么去哪里找
 
-1. **先看 `experimental/training/README.md` 的原则**：ELO 是唯一标准（不是 val loss）、
-   random 钉 0、顺次训练、评测预算固定为 `EVAL_VISITS` 且不许用时间。
-2. 规则特异的代码只放 `ai_blocking.cpp` / `rules.h` / `position.cpp` 的阻挡分支，
-   不要在搜索骨架里加 `if (ruleset == Blocking)`。
-3. 改了格式（模型/数据/协议）三处一起改：写出端、读入端、测试；并清空 CUDA 构建目录。
-4. 文档跟着改：本文件的表格 + 根 `README.md` 的目录结构 + 训练手册的改进记录。
+| 想改 | 文件 |
+|---|---|
+| 规则（合法着法、计分、终局） | `core/src/position.cpp`、`engine/tests/test_rules.cpp` |
+| 搜索行为（PUCT、预算、证明、对称） | `engine/src/mcts.cpp` |
+| α-β 搜索引擎 | `engine/src/ai.cpp`、`engine/src/ai_blocking.cpp` |
+| 网络格式/特征 | `engine/src/nn.cpp`、`training/train_resnet.py`（必须同步） |
+| 协议命令或字段 | `engine/src/protocol.cpp`、`engine/src/protocol_json.cpp`、`protocol/ENGINE_PROTOCOL.md` |
+| 界面绘制/交互 | `ui/src/ui_win32.cpp` |
+| 界面如何解析分析 | `ui/src/engine_protocol.cpp`、`protocol/tests/protocol_smoke.py` |
+| 引擎发现/启动 | `ui/src/discovery.cpp`、`startEngineProcess()` |
+| 发布包内容 | `release/make_alpha.py` |

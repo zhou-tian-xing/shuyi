@@ -25,7 +25,7 @@
 
 **做法**
 
-1. `experimental/training/pipeline.py --blocks 6 --channels 96`（只改参数；数据格式与引擎不用动，
+1. `training/pipeline.py --blocks 6 --channels 96`（只改参数；数据格式与引擎不用动，
    模型文件自带 shape）。
 2. 先跑 **4~8 代** 的 b6c96 链，和当前 b4c32 链在**同一评测口径**（512 visits）下直接对比。
 3. 若 8 代后 Elo 仍在涨，继续；若 3 代内"对前代 < 55%"，再考虑 b8c128。
@@ -92,7 +92,7 @@
 ## 5. 执行清单（下一次上机）
 
 1. 本机：`cmake --build build && ctest`（8/8，已通过）。
-2. 服务器：`bash experimental/training/server_setup.sh` → 编译 + 单测 + `--check` + 吞吐基准；
+2. 服务器：`bash training/server_setup.sh` → 编译 + 单测 + `--check` + 吞吐基准；
    再用 `pipeline.py --plan --blocks 6 --channels 96` 打出**实测**预算表
    （上面的 12 倍是推算，实测可能更好或更差，以 `--plan` 为准）。
 3. 起跑：`--blocks 6 --channels 96 --games-per-gen 1000 --visits 1024 --replay-gens 2`，

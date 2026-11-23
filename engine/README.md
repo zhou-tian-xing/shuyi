@@ -1,104 +1,61 @@
-# engine/ — 规则、搜索、网络
+# engine/ — 无头引擎（一个独立产品）
 
-这是引擎库（`shuyi_core`）和行协议引擎进程（`shuyi_engine`）。**它不认识 UI，也不认识训练脚本。**
+这个目录就是引擎产品：搜索、网络、行协议进程。**它不认识 UI，也不认识训练脚本。**
+它把规则当作依赖（`../core`），除此之外没有任何内部依赖。
 
 ```
+../core/include/shuyi/
+  rules.h         规则枚举 Classic / Blocking、规则名与模型后缀、过手哨兵
+  position.h      棋盘状态：落子、撤销、合法着法、终局、哈希、对称
+  format.h        显示格式（访问数、胜率、Wilson 下界、平均分）
+  io.h            UTF-8 路径与 argv
+
 include/shuyi/
-  rules.h         规则枚举 Classic / Blocking、规则名与模型后缀、过手哨兵（kPassCell/kPassNumber）
-  position.h      棋盘状态：落子、撤销、合法着法、searchMoves()、终局、哈希、阻挡判定
-  ai.h            剪枝搜索：SearchOptions（nodeLimit 在这里）、SearchResult、think / chooseMove
+  engine.h        Engine 基类、EngineOptions、SearchRequest（visits/interval）、Analysis
+  ai.h            剪枝搜索：SearchOptions（nodeLimit）、SearchResult、searchAlphaBeta
   ai_policy.h     "评估 + 排序"策略接口；规则特异的实现由 ai_blocking.cpp 提供
-  engine.h        Engine 基类、EngineOptions、SearchRequest（visits 预算）、Analysis
   nn.h            策略价值网络：SHUYINN3 文件格式、特征平面、CPU 前向、分数头
   nn_cuda.h       CUDA 批量前向接口
   tt.h            置换表
-  format.h        显示格式（访问数 1.2k/12k、胜率、平均分）
-  io.h            UTF-8 路径与 argv（仓库路径含中文，所有文件读写都走这里）
+  protocol.h      行协议会话：命令解析、位置状态、单搜索线程
 
 src/
-  position.cpp    落子/撤销/合法着法/计分/Zobrist
   ai.cpp          迭代加深 + aspiration window + PVS；nodeLimit 在这里生效
-  ai_blocking.cpp 阻挡规则的评估（挤压项）与排序（封锁数）——规则特异代码只放这里
-  mcts.cpp        PUCT 树搜索：强制过手节点、分数头回传、固定 visits 预算
+  ai_blocking.cpp 阻挡规则的评估与排序——规则特异代码只放这里
+  mcts.cpp        PUCT 树搜索：强制过手、证明回传、对称轨道、访问预算
   engine.cpp      四种 Engine 实现（random / pruning / mcts / mcts_nn）
-  engine_main.cpp 行协议进程：UI 和 arena 都通过 stdin/stdout 驱动它
   nn.cpp          模型读写 + CPU 前向
   nn_cuda.cu      im2col + cuBLAS 的 CUDA 前向（含分数头）
   tt.cpp          置换表
-
-tests/
-  test_position.cpp / test_rules.cpp / test_komi.cpp / test_engine.cpp
-  protocol_smoke.py        行协议冒烟
-  visit_budget_smoke.py    四种引擎都必须正好用完 visits（评分的前提）
+  protocol.cpp    命令集、严格错误、启动握手、bench / selfplay
+  protocol_json.cpp  Analysis → JSON
+  main.cpp        stdin 循环
+tests/            规则/搜索的 C++ 测试
 ```
+
+## 构建（不需要界面）
+
+```bash
+cmake -S engine -B build-engine -DCMAKE_BUILD_TYPE=Release
+cmake --build build-engine
+# CUDA 12.4：
+cmake -S engine -B build-engine-cuda -DSHUYI_CUDA=ON -DCUDAToolkit_ROOT=<cuda>
+```
+
+产物是一个 `shuyi_engine.exe`。把它和任意前端放在一起、或在界面里指定路径，就得到完整功能。
 
 ## 三条不能破的规则
 
-1. **评估预算只能按 visits。** `EngineOptions::visits`（`SearchRequest::visits`）是唯一预算；
-   剪枝引擎把它解释成**节点数**（`SearchOptions::nodeLimit`，完全不看墙钟），
-   MCTS 解释成模拟次数。默认值就是 **512**，因为 0 会被前端当成"按墙钟"，
-   而 analyze 模式的墙钟是 1 小时——访问数能涨到几千万。要回到墙钟必须显式 `set_visits 0`。
-   回归测试：`tests/visit_budget_smoke.py`。
-   `info visits=` 只有两种情况下小于预算：局面被**证明**了，或者树撞到
-   `mctsMaxTreeEdges`（4M 条边）——后者现在会**直接结束本次搜索**，绝不把剩下的预算
-   悄悄换成 rollout（旧代码在撞限时把未终局局面当终局算，空盘 35000 visits 就会伪造出
-   一个 100% 的点，见 `testTreeCapIsNotTerminal`）。
-2. **对称性：等价着法只搜一次。** 棋盘在 8 个等距变换（恒等、2 个轴对称、2 个对角线轴、
-   90/180/270 旋转）下不变，两套规则都只看"本身 + 四邻"，所以
-   **每个局面直接检测一次**（`Position::symmetryMask()`，8×81 次比较），不依赖从父节点
-   推导。`symmetryMask()` 非恒等时，展开只给每个轨道留一个可搜索代表（先验最高的那个），
-   其余边 `searchable=0` 并把 `representative` 指向代表。报告时等价格子用代表边的数字，
-   `rootPolicy()` 让它们共享访问数。
-   根宽度按预算定（`max(32, visits/16)`，`EngineOptions::mctsRootChildren` 只用于墙钟模式），
-   所以长分析会开满所有轨道，整盘都有数字。
-3. **规则要隔离。** 搜索骨架里没有 `if (ruleset == Blocking)`；阻挡规则只在
-   `ai_blocking.cpp` + `position.cpp` 的阻挡分支 + `rules.h` 里出现。
-   看走眼的最快办法：`grep -rn "Blocking" src/`，应该只命中 position.cpp 和 ai_blocking.cpp。
-4. **格式变化要三处同时改**：写出端（`nn.cpp` / `experimental/training/train_resnet.py`）、
-   读入端（`nn.cpp` / 数据读取）、测试。改完**清空 CUDA 构建目录**——旧的 `.o` 会按旧布局
-   读文件，而 `--check` 依然"通过"（踩过三次）。
+1. **评估预算只能按 visits。** `SearchRequest::visits` 是唯一预算；剪枝引擎把它解释成**节点数**
+   （完全不看墙钟），MCTS 解释成模拟次数。默认 512。`visits 0` 表示分析不限量（直到 `stop`），
+   落子则退回墙钟——因为落子必须回来。
+2. **没有隐藏的停止条件。** 搜索只会因为预算、墙钟或 `stop` 结束。**不要**加树大小上限：
+   曾经的上限在 3.5 万 visits 时把未终局叶子当终局，产生了假的 100% 胜率。
+3. **无法执行就报错。** `cuda` 不可用、模型缺失、规则集不符、着法非法，一律 `?`；
+   不允许静默降级成 CPU、随机走子或旧分析。`auto` 是显式选项，并且必须报告实际后端。
 
-## 构建与测试
+## 协议
 
-```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release   # 在仓库根
-cmake --build build -j 8
-cd build && ctest --output-on-failure
-```
-
-只跑引擎相关的测试：`ctest -R "shuyi_tests|protocol|visit_budget"`。
-
-## 行协议（给 UI 和 arena 用的最小集合）
-
-```
-boardsize 9
-ruleset classic|blocking        # 只在第一步之前
-set_engine random|pruning|mcts|mcts_nn
-set_model <path>                # 仅 mcts_nn
-set_visits N                    # 固定预算；N>0 时忽略 set_time（analyze 模式也遵守）
-set_time MS                     # 仅交互用（不用于评测）
-set_a <komi>
-play red|black <vertex> <n> | play <side> pass
-genmove red|black               # 先回 "=" 应答，再回 "= <vertex> <n>" 或 "= pass"
-analyze red|black               # 异步 info 行
-capabilities                    # engine=... cuda=0|1 proto=1 visits=1 rulesets=...
-```
-
-`info` 行的 MCTS 部分：`visits=` `nodes=` `hasscore=` `proven=` `score=` `winrate=`
-`best=` `moves=` `cells=`。两个字段容易误读：
-
-1. `hasscore=1` 才表示 `score=` 是真的：它只能来自**已解算的终局**（或模型的分数头）。
-   没有分数头又没搜到终局时是 0，界面显示 `--`。不要再用胜率线性映射出目差，
-   空盘会算出 −15 目。
-2. `proven=1` 表示这个局面**已被求解**：`winrate`/`score`/`best` 是规则的硬结果，
-   不是估计；此时 `visits` 会小于预算（搜到答案就停）。`cells=` 的第 6 个字段
-   （`cell:n:winrate:visits:avgscore:proven`）是逐点的证明标志，界面据此用精确值
-   而不是置信下界排序——1 次访问的已解算必胜点不该被 40 次访问的 55% 压下去。
-
-终局处理（`mcts.cpp` 的 `updateProof`）：终局叶子按规则 proven；一手让对手 proven 输
-就是本方的 proven 胜；只有**未被宽度剪枝**（`complete_`）且全部着法 proven 才能判负/和。
-目差只在精确时公布：根全解 → 极小极大目差；根解但目差未定 → 引擎实际会走的那手的精确
-目差；否则 `--`。
-
-完整协议见 [../docs/ENGINE_PROTOCOL.md](../docs/ENGINE_PROTOCOL.md)，
-实现说明见 [../docs/ENGINE_ARCHITECTURE.zh-CN.md](../docs/ENGINE_ARCHITECTURE.zh-CN.md)。
+[`../protocol/ENGINE_PROTOCOL.md`](../protocol/ENGINE_PROTOCOL.md) 是唯一契约：命令表、
+`info` JSON 字段表、流式语义、错误规则、版本规则。改命令或字段时三处一起改：
+`src/protocol.cpp`、`src/protocol_json.cpp`、协议文档；然后跑 `protocol/tests/`。

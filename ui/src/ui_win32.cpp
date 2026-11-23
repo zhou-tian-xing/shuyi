@@ -6,13 +6,12 @@
 #include <commctrl.h>
 #include <commdlg.h>
 
-#if defined(SHUYI_UI_BUILTIN_AI)
-#include "shuyi/ai.h"
-#endif
 #include "shuyi/format.h"
 #include "shuyi/position.h"
 #include "shuyi/io.h"
+#include "discovery.h"
 #include "engine_client.h"
+#include "engine_view.h"
 
 #include <algorithm>
 #include <array>
@@ -70,7 +69,7 @@ constexpr int ID_SETTINGS_CANCEL = 6002;
 // Simulations per analysis and per move are settings (default 512).  A visit
 // budget is the only machine-independent unit: 512 visits is 512 visits on the
 // laptop and on the GPU, so two runs of the same position are comparable.  The
-// default matches the evaluation budget in experimental/training/evalconfig.py.
+// default matches the evaluation budget in training/evalconfig.py.
 constexpr int kDefaultVisits = 512;
 // Window class of the settings popup (registered in wWinMain).
 constexpr const wchar_t* kSettingsClass = L"ShuyiSettingsWindow";
@@ -79,53 +78,6 @@ constexpr UINT WM_APP_RESET = WM_APP + 1;
 
 enum class Mode { Pvp, HumanRed, HumanBlack };
 enum class EngineChoice { Off, Pruning, Mcts, MctsNn };
-
-struct AnalysisCandidateView {
-    Move move{};
-    double winrate = 0.5;
-    int visits = 0;
-    double averageScore = 0.0;
-};
-
-struct CellAnalysisView {
-    Move move{};
-    double winrate = 0.5;
-    int visits = 0;
-    double averageScore = 0.0;
-    bool hasData = false;
-    // The engine solved this move's subtree: winrate and score are exact, so a
-    // low visit count does not turn them into a guess.
-    bool proven = false;
-    // A network without a score head cannot fill the third row; the mark then
-    // shows "--" instead of a misleading 0.0.
-    bool hasScore = false;
-};
-
-struct EngineAnalysisView {
-    bool valid = false;
-    // Whether averageScore is a real score (terminal result or score head).
-    bool hasScore = false;
-    // The position is solved: winrate, score and best move are exact results.
-    bool proven = false;
-    // "cuda" or "cpu": which forward the engine is actually using.
-    std::string backend;
-    std::string kind;
-    Move best{};
-    int depth = 0;
-    long long nodes = 0;
-    int window = 0;
-    int windowResearches = 0;
-    int pvsResearches = 0;
-    int visits = 0;
-    double winrate = 0.5;
-    int score = 0;
-    double averageScore = 0.0;
-    std::string pv;
-    std::string nn;
-    std::vector<AnalysisCandidateView> candidates;
-    std::array<CellAnalysisView, kCells> cells{};
-    std::array<bool, kCells> hasCell{};
-};
 
 HWND g_hwnd = nullptr;
 HMENU g_menu = nullptr;
@@ -143,6 +95,7 @@ struct ModelEntry {
     std::string enginePath;  // UTF-8, what set_model receives
     std::wstring label;      // "run-name/file.bin", unique in the menu
     int ruleset = 0;         // 0 classic, 1 blocking, -1 unknown
+    int steps = 0;           // training steps from "-s<steps>-", 0 when unknown
 };
 std::vector<ModelEntry> g_modelList;
 std::string g_nnModelPath;
@@ -226,20 +179,11 @@ COLORREF mixColor(COLORREF a, COLORREF b, double t) {
                mix(GetBValue(a), GetBValue(b)));
 }
 
-COLORREF heatColor(double winrate) {
-    const double raw = std::clamp(winrate, 0.0, 1.0);
-    // Expand around 50% a little: 56% should already be visibly green, while
-    // 50% remains the neutral board color.
-    const double t = std::clamp(0.5 + (raw - 0.5) * 1.7, 0.0, 1.0);
-    COLORREF heat = t < 0.5 ? mixColor(kHeatLow, kBoard, t * 2.0)
-                            : mixColor(kBoard, kHeatHigh, (t - 0.5) * 2.0);
-    return mixColor(kBoard, heat, 0.78);
-}
 
 void refresh(bool immediate = false);
 void maybeAiMove();
 void setAValue(int value);
-void builtInAiMove();
+void needEngine(const wchar_t* detail);
 void syncEngineChecks();
 
 // ---------------------------------------------------------------------------
@@ -417,103 +361,14 @@ void clearEngineAnalysis() {
     g_engineAnalysis = EngineAnalysisView{};
 }
 
-bool parseEngineMoveToken(const std::string& token, Move& move) {
-    const std::size_t colon = token.find(':');
-    if (colon == std::string::npos) return false;
-    int cell = 0;
-    if (!parseSquare(token.substr(0, colon), cell)) return false;
-    try {
-        const int number = std::stoi(token.substr(colon + 1));
-        if (number < 1 || number > 9) return false;
-        move = Move(cell, number);
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
+// The engine sends one JSON object per `info` line.  An unparseable line is an
+// error on screen, never a silently blank board.
 void applyEngineAnalysis(const std::string& payload) {
-    std::map<std::string, std::string> fields;
-    std::istringstream input(payload);
-    std::string token;
-    while (input >> token) {
-        const std::size_t equal = token.find('=');
-        if (equal != std::string::npos) fields[token.substr(0, equal)] = token.substr(equal + 1);
-    }
     EngineAnalysisView view;
-    view.kind = fields.count("engine") ? fields["engine"] : "";
-    if (!parseEngineMoveToken(fields["best"], view.best)) return;
-    view.valid = true;
-    try {
-        view.depth = fields.count("depth") ? std::stoi(fields["depth"]) : 0;
-        view.nodes = fields.count("nodes") ? std::stoll(fields["nodes"]) : 0;
-        view.window = fields.count("window") ? std::stoi(fields["window"]) : 0;
-        view.windowResearches = fields.count("wres") ? std::stoi(fields["wres"]) : 0;
-        view.pvsResearches = fields.count("pvs") ? std::stoi(fields["pvs"]) : 0;
-        view.visits = fields.count("visits") ? std::stoi(fields["visits"]) : 0;
-        view.winrate = fields.count("winrate") ? std::stod(fields["winrate"]) : 0.5;
-        view.averageScore = fields.count("score") ? std::stod(fields["score"]) : 0.0;
-        view.score = static_cast<int>(std::lround(view.averageScore));
-    } catch (...) {
+    std::string error;
+    if (!parseAnalysis(payload, view, &error)) {
+        g_engineMessage = L"引擎分析数据无法解析：" + widen(error);
         return;
-    }
-    view.hasScore = fields.count("hasscore") && fields["hasscore"] == "1";
-    view.proven = fields.count("proven") && fields["proven"] == "1";
-    view.backend = fields.count("backend") ? fields["backend"] : std::string();
-    view.pv = fields.count("pv") ? fields["pv"] : "";
-    view.nn = fields.count("nn") ? fields["nn"] : "";
-    if (fields.count("moves")) {
-        std::istringstream moves(fields["moves"]);
-        std::string item;
-        while (std::getline(moves, item, ',')) {
-            std::vector<std::string> parts;
-            std::istringstream itemStream(item);
-            std::string part;
-            while (std::getline(itemStream, part, ':')) parts.push_back(part);
-            if (parts.size() < 2) continue;
-            AnalysisCandidateView candidate;
-            if (!parseEngineMoveToken(parts[0] + ":" + parts[1], candidate.move)) continue;
-            try {
-                candidate.winrate = parts.size() >= 3 ? std::stod(parts[2]) : 0.5;
-                candidate.visits = parts.size() >= 4 ? std::stoi(parts[3]) : 0;
-                candidate.averageScore = parts.size() >= 5 ? std::stod(parts[4]) : 0.0;
-            } catch (...) {
-                continue;
-            }
-            view.candidates.push_back(candidate);
-        }
-    }
-    if (fields.count("cells")) {
-        std::istringstream cells(fields["cells"]);
-        std::string item;
-        while (std::getline(cells, item, ',')) {
-            std::vector<std::string> parts;
-            std::istringstream itemStream(item);
-            std::string part;
-            while (std::getline(itemStream, part, ':')) parts.push_back(part);
-            if (parts.size() < 2) continue;
-            int cell = 0;
-            if (!parseSquare(parts[0], cell)) continue;
-            CellAnalysisView info;
-            try {
-                info.move = Move(cell, std::stoi(parts[1]));
-                info.winrate = parts.size() >= 3 ? std::stod(parts[2]) : 0.5;
-                info.visits = parts.size() >= 4 ? std::stoi(parts[3]) : 0;
-                info.averageScore = parts.size() >= 5 ? std::stod(parts[4]) : 0.0;
-            } catch (...) {
-                continue;
-            }
-            info.hasData = info.visits > 0;
-            // Sixth field: the engine solved this subtree, so the numbers are
-            // exact no matter how few visits it took.
-            info.proven = parts.size() >= 6 && parts[5] == "1";
-            // Only show a score when the engine says it has a real one (exact
-            // terminal result or a trained score head).  There is no linear
-            // win-rate-to-score fallback any more -- it produced nonsense.
-            info.hasScore = parts.size() >= 5 && view.hasScore;
-            view.cells[cell] = info;
-            view.hasCell[cell] = true;
-        }
     }
     g_engineAnalysis = std::move(view);
     g_engineMessage = g_enginePending ? L"引擎思考中…" : L"分析中…";
@@ -754,8 +609,22 @@ std::string modelLabelFor(const std::string& relative) {
 
 // Authoritative: the ruleset is a byte in the model header, so read it instead
 // of guessing from the file name (gen_000.bin says nothing).
-int readModelRuleset(const std::string& path) {
-    std::FILE* file = std::fopen(path.c_str(), "rb");  // ANSI path
+// Training steps encoded in a checkpoint name: b4c32-s34760-d470705.bin -> 34760.
+int modelStepsFromName(const std::string& name) {
+    const std::size_t at = name.find("-s");
+    if (at == std::string::npos) return 0;
+    std::size_t i = at + 2;
+    long long value = 0;
+    while (i < name.size() && name[i] >= '0' && name[i] <= '9') {
+        value = value * 10 + (name[i] - '0');
+        if (value > 1000000000LL) value = 1000000000LL;
+        ++i;
+    }
+    return i == at + 2 ? 0 : static_cast<int>(value);
+}
+
+int readModelRuleset(const std::string& utf8Path) {
+    std::FILE* file = shuyi::fopenUtf8(utf8Path, "rb");
     if (!file) return -1;
     unsigned char header[36] = {};
     const std::size_t got = std::fread(header, 1, sizeof(header), file);
@@ -781,7 +650,8 @@ void addModelsInDirectory(const std::string& dir, const std::string& relative,
         entry.path = dir + "/" + findData.cFileName;
         entry.enginePath = ansiToUtf8(entry.path);
         entry.label = widenAnsi(modelLabelFor(relative + "/" + findData.cFileName));
-        entry.ruleset = readModelRuleset(entry.path);
+        entry.ruleset = readModelRuleset(entry.enginePath);
+        entry.steps = modelStepsFromName(findData.cFileName);
         out.push_back(std::move(entry));
     } while (FindNextFileA(find, &findData));
     FindClose(find);
@@ -845,24 +715,21 @@ const wchar_t* modelRulesetHint(const ModelEntry& entry) {
     return L"未知";
 }
 
-// Fallback when nothing has been picked from the menu yet.
+// Fallback when nothing has been picked from the menu yet: the model with the
+// most training steps that was trained for the ruleset currently in force.  A
+// model from the other rule set is never selected -- the engine would refuse it,
+// and silently running the wrong network is worse than having none.
 std::string defaultModelPath() {
     char buffer[MAX_PATH]{};
     const DWORD length = GetEnvironmentVariableA("SHUYI_NN_MODEL", buffer, MAX_PATH);
     if (length > 0 && length < MAX_PATH) return ansiToUtf8(std::string(buffer, length));
     if (g_modelList.empty()) scanModels();
-    const auto findByName = [&](const char* needle) -> std::string {
-        for (const ModelEntry& entry : g_modelList) {
-            const std::string label(entry.label.begin(), entry.label.end());
-            if (label.find(needle) != std::string::npos) return entry.enginePath;
-        }
-        return std::string();
-    };
-    for (const char* needle : {"b10c128", "shuyi_resnet_v2.bin", "shuyi_resnet_v1.bin"}) {
-        const std::string hit = findByName(needle);
-        if (!hit.empty()) return hit;
+    const ModelEntry* best = nullptr;
+    for (const ModelEntry& entry : g_modelList) {
+        if (entry.ruleset != static_cast<int>(g_ruleset)) continue;
+        if (!best || entry.steps > best->steps) best = &entry;
     }
-    return g_modelList.empty() ? std::string("models/shuyi_resnet_v1.bin") : g_modelList.front().enginePath;
+    return best ? best->enginePath : std::string();
 }
 
 void populateModelMenu() {
@@ -921,9 +788,6 @@ void selectModel(int index) {
 //   引擎 -> 选择引擎程序...                  -> point the UI at it
 // Everything else (discovery, preferring a CUDA build) is a convenience fallback
 // for the case where nothing has been chosen yet.
-// ---------------------------------------------------------------------------
-std::wstring engineClientDirectory();
-
 std::string narrowUtf8(const std::wstring& text) {
     if (text.empty()) return std::string();
     const int length = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, nullptr, 0, nullptr, nullptr);
@@ -979,7 +843,20 @@ void loadSettings() {
                 g_playVisits = std::clamp(std::atoi(line.substr(12).c_str()), 1, 50000000);
             } else if (line.rfind("a_value=", 0) == 0) {
                 g_aValue = std::clamp(std::atoi(line.substr(8).c_str()), -40, 40);
+            } else if (line.rfind("ruleset=", 0) == 0) {
+                Ruleset parsed = g_ruleset;
+                if (parseRuleset(trimAscii(line.substr(8)), parsed)) g_ruleset = parsed;
             }
+        }
+    }
+    // A shipped package writes `engine=shuyi_engine.exe`: a relative path is
+    // resolved against this executable, not against wherever it was launched from.
+    if (!g_enginePath.empty()) {
+        const bool absolute = (g_enginePath.size() > 1 && g_enginePath[1] == L':') ||
+                              g_enginePath[0] == L'\\' || g_enginePath[0] == L'/';
+        if (!absolute) {
+            const std::wstring dir = engineClientDirectory();
+            if (!dir.empty()) g_enginePath = dir + L"/" + g_enginePath;
         }
     }
     g_engineAuto = g_enginePath.empty();
@@ -1000,6 +877,9 @@ void saveSettings() {
         text += static_cast<char>(10);
         text += "a_value=" + std::to_string(g_aValue);
         text += static_cast<char>(10);
+        text += "ruleset=";
+        text += rulesetName(g_ruleset);
+        text += static_cast<char>(10);
         std::fwrite(text.data(), 1, text.size(), handle);
         std::fclose(handle);
     }
@@ -1007,149 +887,50 @@ void saveSettings() {
 }
 
 // ---------------------------------------------------------------------------
-// Which engine process to drive
-//
-// The UI and the engine are separate processes speaking one line protocol, so
-// the window must not care which build produced the engine -- it should simply
-// spawn the fastest one available.  Candidates are probed with `capabilities`:
-// a CUDA build answers cuda=1, and that is the one we want.  Order:
-//   SHUYI_ENGINE  (explicit override, wins outright)
-//   next to this exe
-//   ../build-cuda, ../build-cuda/Release, ../build, ../build/Release
-//   the current directory
-// ---------------------------------------------------------------------------
-std::wstring engineClientDirectory();
-
-std::vector<std::wstring> g_enginePathsTried;  // diagnostics for --dump-engine
-
-std::vector<std::wstring> engineCandidates() {
-    std::vector<std::wstring> paths;
-    const auto push = [&](const std::wstring& path) {
-        if (path.empty()) return;
-        g_enginePathsTried.push_back(path);
-        for (const std::wstring& seen : paths) {
-            if (_wcsicmp(seen.c_str(), path.c_str()) == 0) return;
-        }
-        if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) paths.push_back(path);
-    };
-    char env[MAX_PATH * 2]{};
-    const DWORD envLength = GetEnvironmentVariableA("SHUYI_ENGINE", env, sizeof(env));
-    std::wstring override;
-    if (envLength > 0 && envLength < sizeof(env)) override = widenAnsi(std::string(env, envLength));
-    if (!override.empty()) push(override);
-
-    const std::wstring exeDir = engineClientDirectory();
-    const std::wstring engine = L"\\shuyi_engine.exe";
-    push(exeDir + engine);
-    for (const wchar_t* sub : {L"\\..\\build-cuda", L"\\..\\build-cuda\\Release",
-                               L"\\..\\build", L"\\..\\build\\Release"}) {
-        push(exeDir + sub + engine);
-    }
-    char cwd[MAX_PATH]{};
-    if (GetCurrentDirectoryA(MAX_PATH, cwd) > 0) {
-        const std::wstring cwdDir = widenAnsi(std::string(cwd));
-        push(cwdDir + engine);
-        for (const wchar_t* sub : {L"\\build-cuda", L"\\build"}) push(cwdDir + sub + engine);
-    }
-    return paths;
-}
-
-std::wstring engineClientDirectory() {
-    char buffer[MAX_PATH]{};
-    const DWORD length = GetModuleFileNameA(nullptr, buffer, MAX_PATH);
-    if (length == 0 || length >= MAX_PATH) return std::wstring();
-    std::string path(buffer, length);
-    const std::size_t slash = path.find_last_of("/\\");
-    const std::string dir = slash == std::string::npos ? std::string() : path.substr(0, slash);
-    return widenAnsi(dir);   // GetModuleFileNameA gave us the ANSI path
-}
-
-struct EngineProbe {
-    bool answered = false;
-    std::string backend;   // "cuda" or "cpu"
-    std::string proto;     // protocol major version, "" when the engine is old
-    // The engine accepts `set_visits`, so the UI can budget simulations instead
-    // of milliseconds.
-    bool visitBudget = false;
-    std::string raw;       // the whole capabilities line
-};
-
-// Spawn, ask `capabilities`, hang up.  Cheap enough to do before every start and
-// it is how an engine from another project is recognised.
-EngineProbe probeEngine(const std::wstring& path) {
-    EngineProbe info;
-    EngineClient probe;
-    if (!probe.start(path, nullptr)) return info;
-    probe.send("capabilities");
-    std::string reply;
-    for (int attempt = 0; attempt < 40 && reply.empty(); ++attempt) {
-        for (const std::string& line : probe.drain()) {
-            if (line.rfind("= engine=", 0) == 0) reply = line;
-        }
-        if (reply.empty()) Sleep(25);
-    }
-    probe.stop();
-    if (reply.empty()) return info;
-    info.answered = true;
-    info.raw = reply;
-    info.backend = reply.find("cuda=1") != std::string::npos ? "cuda" : "cpu";
-    info.visitBudget = reply.find("visits=1") != std::string::npos;
-    const std::size_t at = reply.find("proto=");
-    if (at != std::string::npos) {
-        std::size_t end = at + 6;
-        while (end < reply.size() && reply[end] != ' ') ++end;
-        info.proto = reply.substr(at + 6, end - (at + 6));
-    }
-    return info;
-}
-
-// The protocol this front end speaks.
-constexpr int kUiProtocolVersion = 1;
+// The two programs are separate products, so the protocol version is the only
+// compatibility promise.  A different version is refused instead of half-working.
+constexpr int kUiProtocolVersion = 2;
 
 bool checkProtocol(const EngineProbe& probe, const std::wstring& path) {
     if (!probe.answered) {
         MessageBoxW(g_hwnd, (L"这个程序没有回应 capabilities，看起来不是数弈引擎：\n" + path).c_str(),
-                    L"引擎", MB_OK | MB_ICONWARNING);
+                    L"引擎", MB_OK | MB_ICONERROR);
         return false;
-    }
-    if (probe.proto.empty()) {
-        // Old engine: usable, but some fields (backend/hasscore) will be missing.
-        g_engineMessage = L"引擎协议版本未知（旧引擎），部分信息可能缺失";
-        return true;
     }
     if (probe.proto != std::to_string(kUiProtocolVersion)) {
         MessageBoxW(g_hwnd,
-                    (L"引擎协议版本为 " + widen(probe.proto) + L"，本界面支持 " +
-                     std::to_wstring(kUiProtocolVersion) + L"。\n两者可能不完全兼容。")
+                    (L"引擎的协议版本是 " + widen(probe.proto.empty() ? "?" : probe.proto) +
+                     L"，本界面需要 " + std::to_wstring(kUiProtocolVersion) +
+                     L"。\n两者是独立程序，必须使用同一协议版本。")
                         .c_str(),
-                    L"引擎", MB_OK | MB_ICONWARNING);
+                    L"引擎", MB_OK | MB_ICONERROR);
+        return false;
     }
     return true;
 }
 
-// Fallback when the user has not chosen an engine yet: first CUDA-capable
-// candidate, else the first that answers at all.
+// The engine the user chose, else the first discovered binary that speaks the
+// current protocol.  No answer means no engine: the window does not guess.
 std::wstring chooseEnginePath() {
-    const std::vector<std::wstring> candidates = engineCandidates();
-    std::wstring fallback;
-    for (const std::wstring& path : candidates) {
+    std::wstring cpuBuild;
+    for (const std::wstring& path : engineCandidates()) {
         const EngineProbe probe = probeEngine(path);
+        if (!probe.answered || probe.proto != std::to_string(kUiProtocolVersion)) continue;
+        // Several compatible engines: the GPU one is the one to run.
         if (probe.backend == "cuda") return path;
-        if (probe.answered && fallback.empty()) fallback = path;
+        if (cpuBuild.empty()) cpuBuild = path;
     }
-    if (!fallback.empty()) return fallback;
-    return candidates.empty() ? std::wstring() : candidates.front();
+    return cpuBuild;
 }
 
 bool startEngineProcess() {
     if (g_engineChoice == EngineChoice::Off) return false;
     stopEngineProcess();
     std::wstring error;
-    // 1. the engine the user chose; 2. discovery as a convenience fallback.
     std::wstring enginePath = g_enginePath;
     if (enginePath.empty()) enginePath = chooseEnginePath();
     if (enginePath.empty()) {
-        g_engineMessage = L"没有指定引擎：引擎菜单 → 选择引擎程序…";
+        g_engineMessage = L"没有找到可用的引擎：引擎菜单 → 选择引擎程序…";
         g_engineChoice = EngineChoice::Off;
         return false;
     }
@@ -1164,29 +945,49 @@ bool startEngineProcess() {
         return false;
     }
     g_enginePathUsed = enginePath;
-    g_engineReady = true;
-    sendEngine("boardsize 9");
-    sendEngine(std::string("ruleset ") + rulesetName(g_ruleset));
-    sendEngine("set_a " + std::to_string(g_aValue));
-    sendEngine(std::string("set_engine ") + engineChoiceName(g_engineChoice));
-    // A fixed simulation budget, never a wall clock: the same position must give
-    // the same numbers on a slow laptop and on a GPU box.  The time limit below
-    // is only a fallback for an engine that does not advertise `visits=1`.
-    if (probe.visitBudget) {
-        sendEngine("set_visits " + std::to_string(g_analysisVisits));
-    } else {
-        sendEngine("set_time 650");
-    }
-    // GPU inference when the engine build has it; silently CPU otherwise.
-    sendEngine("set_backend auto");
+
+    // A rejected command has to stop the start-up: otherwise the window would
+    // sit on an empty analysis and the real cause would never be visible.
+    std::wstring failure;
+    const auto run = [&](const std::string& line) {
+        if (!failure.empty()) return;
+        std::string reply;
+        if (!g_engineClient.command(line, &reply, 8000)) {
+            failure = L"引擎没有回应 " + widen(line);
+        } else if (!reply.empty() && reply[0] == '?') {
+            failure = L"引擎拒绝 " + widen(line) + L"：\n" + widen(reply.substr(1));
+        }
+    };
+    run("boardsize 9");
+    run(std::string("ruleset ") + rulesetName(g_ruleset));
+    run("set_a " + std::to_string(g_aValue));
     if (g_engineChoice == EngineChoice::MctsNn) {
         if (g_nnModelPath.empty()) g_nnModelPath = defaultModelPath();
-        sendEngine("set_model " + g_nnModelPath);
+        // The model must be accepted before the engine that needs it is selected.
+        run("set_model " + g_nnModelPath);
     }
+    run(std::string("set_engine ") + engineChoiceName(g_engineChoice));
+    run("set_backend auto");
+    if (probe.visitBudget) {
+        run("set_visits " + std::to_string(g_analysisVisits));
+    } else {
+        run("set_time 650");
+    }
+    if (!failure.empty()) {
+        stopEngineProcess();
+        g_engineChoice = EngineChoice::Off;
+        g_engineMessage = failure;
+        MessageBoxW(g_hwnd, failure.c_str(), L"引擎", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    g_engineReady = true;
     const std::wstring engineFile = g_engineClient.path();
     const std::size_t slash = engineFile.find_last_of(L"\\/");
-    g_engineMessage = L"引擎已启动：" + (slash == std::wstring::npos ? engineFile
-                                                                  : engineFile.substr(slash + 1));
+    const std::wstring shortName =
+        slash == std::wstring::npos ? engineFile : engineFile.substr(slash + 1);
+    g_engineMessage = L"引擎已启动：" + shortName +
+                      (probe.backend == "cuda" ? L" (CUDA)" : L" (CPU)");
     syncEnginePosition();
     return true;
 }
@@ -1418,40 +1219,54 @@ void handleEngineLine(const std::string& line) {
     }
     if (line.rfind("= done", 0) == 0) {
         // The analysis ran out of budget on its own.  The numbers stay on screen
-        // and the tree stays in the engine, so Space can extend it without a limit.
+        // and the tree stays in the engine, so Space can extend it without a
+        // limit.
         g_analysisOn = false;
         g_analysisFinished = true;
-        if (!g_enginePending) {
-            g_engineMessage = L"已达访问上限（空格继续，不再限量）";
-            refresh();
-        }
+        g_engineMessage = L"已达访问上限（空格继续，不再限量）";
+        refresh();
+        return;
+    }
+    if (line.rfind("= stopped", 0) == 0) {
+        // We asked for this; the last snapshot is still the best information.
         return;
     }
     if (!line.empty() && line[0] == '?') {
         const bool wasPending = g_enginePending;
         g_engineMessage = L"引擎错误：" + widen(line.substr(1));
         g_enginePending = false;
-        if (wasPending && aiToMove()) {
-            builtInAiMove();
-            if (g_engineReady) syncEnginePosition();
-        }
-        refresh();
+        g_thinking = false;
+        if (wasPending) refresh();
         return;
     }
     if (line.rfind("= ", 0) != 0) return;
     const std::string payload = line.substr(2);
     if (!g_enginePending) return;
+    if (payload == "pass") {
+        // The engine found no placement: let the rules settle the forced pass
+        // and keep the engine in step.
+        g_enginePending = false;
+        g_engineMessage = L"引擎过手（无合法落点）";
+        settleForcedPasses();
+        refresh();
+        return;
+    }
     std::istringstream input(payload);
     std::string vertex;
     int number = 0;
     input >> vertex >> number;
     int cell = 0;
-    if (!parseSquare(vertex, cell) || number < 1 || number > 9) return;
+    if (!parseSquare(vertex, cell) || number < 1 || number > 9) {
+        g_enginePending = false;
+        g_engineMessage = L"引擎返回了无法识别的着法：" + widen(payload);
+        refresh();
+        return;
+    }
     const Move move(cell, number);
     if (!g_position.isLegal(move)) {
         g_enginePending = false;
-        g_engineMessage = L"引擎返回非法着法";
-        maybeAiMove();
+        g_engineMessage = L"引擎返回非法着法：" + widen(payload);
+        refresh();
         return;
     }
     g_enginePending = false;
@@ -1459,13 +1274,12 @@ void handleEngineLine(const std::string& line) {
     g_position.play(move);
     sendEngine("play " + std::string(mover == Player::Red ? "red" : "black") + " " +
                squareName(move.cell) + " " + std::to_string(number));
+    g_thinking = false;
     if (humanToMove()) g_selected = firstAvailable(g_position.sideToMove());
     g_engineMessage = L"引擎已落子";
     settleForcedPasses();
     if (g_position.gameOver()) {
         g_analysisOn = false;
-        clearEngineAnalysis();
-    } else if (!g_analysisOn) {
         clearEngineAnalysis();
     }
     if (g_analysisOn && !g_position.gameOver()) startEngineAnalysis();
@@ -2222,38 +2036,12 @@ void selectNumber(int number) {
     refresh();
 }
 
-void builtInAiMove() {
-    if (!aiToMove() || g_thinking) return;
-#if !defined(SHUYI_UI_BUILTIN_AI)
-    // No engine, no search: a front end is not supposed to compute.  The user
-    // has to pick an engine program in the 引擎 menu.
-    MessageBoxW(g_hwnd,
-                L"当前没有可用的引擎。\n\n界面自己不算棋：请在“引擎”菜单里用"
-                L"“选择引擎程序…”指定一个实现了行协议的引擎（例如 shuyi_engine.exe）。",
-                L"需要引擎", MB_OK | MB_ICONINFORMATION);
-    return;
-#else
-    g_thinking = true;
-    refresh(true);
-
-    SearchOptions options;
-    options.timeLimitMs = 650;
-    options.maxDepth = 12;
-    options.seed = 0x9E3779B97F4A7C15ULL ^
-                   (static_cast<std::uint64_t>(g_position.ply()) << 32) ^
-                   static_cast<std::uint64_t>(g_position.rawScore() + 1000);
-    const Move move = chooseMove(g_position, options);
+// The window contains no search.  When it is the engine's turn and none is
+// running, say so once instead of playing a move nobody asked for.
+void needEngine(const wchar_t* detail) {
     g_thinking = false;
-    if (move.valid() && g_position.isLegal(move)) {
-        g_position.play(move);
-    } else {
-        const auto legal = g_position.legalMoves();
-        if (!legal.empty()) g_position.play(legal.front());
-    }
-    settleForcedPasses();
-    if (humanToMove()) g_selected = firstAvailable(g_position.sideToMove());
-    refresh(true);
-#endif  // SHUYI_UI_BUILTIN_AI
+    g_engineMessage = detail ? detail : L"没有可用的引擎：引擎菜单 → 选择引擎程序…";
+    refresh();
 }
 
 void maybeAiMove() {
@@ -2269,7 +2057,7 @@ void maybeAiMove() {
         refresh(true);
         return;
     }
-    builtInAiMove();
+    needEngine(L"没有可用的引擎：引擎菜单 → 选择引擎程序…");
 }
 
 void handleBoardClick(int cell) {
@@ -2638,11 +2426,9 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             g_analysisOn = false;
             if (g_engineClient.running()) sendEngine("stop");
             clearEngineAnalysis();
-            g_engineMessage = L"引擎已停止";
-            if (wasPending && aiToMove()) {
-                builtInAiMove();
-                if (g_engineReady) syncEnginePosition();
-            }
+            g_engineMessage = wasPending ? L"已停止思考：轮到的这手需要重新让引擎走（引擎菜单）"
+                                         : L"引擎已停止";
+            g_thinking = false;
             refresh();
             return 0;
         }
@@ -2694,9 +2480,8 @@ bool dumpEngineChoice(const std::string& path) {
                      GetFileAttributesW(guess.c_str()) == INVALID_FILE_ATTRIBUTES ? 0 : 1);
         std::fputc(10, file);
     }
-    g_enginePathsTried.clear();
     std::vector<std::wstring> candidates = engineCandidates();
-    for (const std::wstring& tried : g_enginePathsTried) {
+    for (const std::wstring& tried : enginePathsTried()) {
         char utf8[MAX_PATH * 2] = "";
         WideCharToMultiByte(CP_UTF8, 0, tried.c_str(), -1, utf8, sizeof(utf8), nullptr, nullptr);
         std::fprintf(file, "try %d %s",
@@ -2759,6 +2544,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
     SetProcessDPIAware();
     g_dpi = queryDpi();
     loadSettings();
+    // The position starts from the persisted rule set instead of the compiled-in
+    // default, so a package can ship "blocking" by shipping its shuyi-ui.ini.
+    g_position.setRuleset(g_ruleset);
 
     if (commandLine && std::wstring(commandLine).find(L"--dump-engine") != std::wstring::npos) {
         std::wstring argument = commandLine;
@@ -2834,6 +2622,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
     ShowWindow(g_hwnd, showCommand);
     UpdateWindow(g_hwnd);
     PostMessageW(g_hwnd, WM_APP_RESET, 0, 0);
+
+    // If an engine is discoverable next to the window, load it now so analysis is
+    // one keypress away.  If there is none, the window still starts: the 引擎 menu
+    // is where an engine gets chosen, and nothing pretends to compute.
+    if (!chooseEnginePath().empty()) {
+        g_engineChoice = EngineChoice::MctsNn;
+        if (!startEngineProcess()) {
+            g_engineChoice = EngineChoice::Off;
+            g_engineReady = false;
+        }
+        syncEngineChecks();
+    }
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {

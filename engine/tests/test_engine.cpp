@@ -316,8 +316,8 @@ void testEngineKinds() {
             }
         }
         if (kind == EngineKind::MctsNn) {
-            CHECK(engine->infoTag().rfind("nn=", 0) == 0);
-            CHECK(engine->infoTag() != "nn=none");
+            CHECK(!engine->modelName().empty());
+            CHECK(engine->modelName() != "none");
         }
 
         Position next = position;

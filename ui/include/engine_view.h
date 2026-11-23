@@ -1,0 +1,70 @@
+// The analysis a front end displays, and the parser that fills it from the
+// engine's JSON.
+//
+// One object per `info` line.  The view keeps exactly what the window draws:
+// the global verdict plus one entry per board cell.  Anything the engine does
+// not send stays empty -- no value here is invented by the UI.
+#pragma once
+
+#include "shuyi/position.h"
+
+#include <array>
+#include <string>
+#include <vector>
+
+namespace shuyi {
+
+struct AnalysisCandidateView {
+    Move move{};
+    double winrate = 0.5;
+    int visits = 0;
+    double averageScore = 0.0;
+};
+
+struct CellAnalysisView {
+    Move move{};
+    double winrate = 0.5;
+    int visits = 0;
+    double averageScore = 0.0;
+    bool hasData = false;
+    // The engine solved this move's subtree: win rate and score are exact, so a
+    // small visit count does not turn them into a guess.
+    bool proven = false;
+    // A network without a score head cannot fill the third row; the mark then
+    // shows "--" instead of a misleading 0.0.
+    bool hasScore = false;
+};
+
+struct EngineAnalysisView {
+    bool valid = false;
+    bool hasScore = false;
+    bool proven = false;
+    std::string backend;
+    std::string kind;
+    std::string turn;
+    std::string nn;
+    Move best{};
+    int depth = 0;
+    long long nodes = 0;
+    int window = 0;
+    int windowResearches = 0;
+    int pvsResearches = 0;
+    int visits = 0;
+    double winrate = 0.5;
+    int score = 0;
+    double averageScore = 0.0;
+    long long elapsedMs = 0;
+    std::string pv;
+    std::vector<AnalysisCandidateView> candidates;
+    std::array<CellAnalysisView, kCells> cells{};
+    std::array<bool, kCells> hasCell{};
+};
+
+// "c8:3" (the engine's compact form), "c8 3" (the protocol's move reply) or
+// "pass".  Returns an invalid Move when the text is not a move.
+Move parseMoveToken(const std::string& text);
+
+// Parses the JSON object of an `info` line (without the `info ` prefix).
+bool parseAnalysis(const std::string& json, EngineAnalysisView& out, std::string* error);
+
+} // namespace shuyi

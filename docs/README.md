@@ -20,7 +20,7 @@
 
 ## 训练与评测
 
-训练手册在代码旁边：[../experimental/training/README.md](../experimental/training/README.md)
+训练手册在代码旁边：[../training/README.md](../training/README.md)
 （原则、数据来源、闸门、横评、规则隔离、改进记录）。这里只放计划和历史报告。
 
 | 文档 | 内容 |

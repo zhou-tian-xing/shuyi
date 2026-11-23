@@ -1,14 +1,30 @@
 # 数弈（Shuyi）
 
-9×9 的数字落子棋：**C++17 规则/搜索引擎 + 原生 Win32/GDI 界面**。界面与引擎是两个进程，
-走 GTP 风格的行协议；不依赖浏览器或任何 Web 运行时。训练侧是 C++/CUDA 自对弈 + PyTorch 训练器。
+9×9 的数字落子棋：**无头引擎 + 原生 Win32/GDI 界面**，两个独立程序、一条行协议、互不链接。
+不依赖浏览器或任何 Web 运行时。训练侧是 C++/CUDA 自对弈 + PyTorch 训练器。
 
 ![数弈原生界面与 MCTS 分析](docs/screenshot.png)
+
+## 仓库就是三个产品 + 两份开发资料
+
+| 目录 | 是什么 | 单独构建 |
+|---|---|---|
+| [`core/`](core/) | 规则库：棋盘、着法合法性、计分、对称变换。**唯一**被两侧链接的东西 | `cmake -S core -B build-core` |
+| [`engine/`](engine/) | `shuyi_engine.exe`：无头 NN-MCTS 引擎（搜索/分析/走棋/bench/自对弈），行协议服务 | `cmake -S engine -B build-engine -DSHUYI_CUDA=ON` |
+| [`ui/`](ui/) | `shuyi.exe`：Win32 界面，只管规则与调用；不含任何搜索 | `cmake -S ui -B build-ui` |
+| [`protocol/`](protocol/) | 两者之间**唯一的契约**，外加协议一致性测试 | — |
+| [`tools/`](tools/) | 开发工具（bench、证明检查、自对弈、锦标赛），**不随任何发布** | `cmake -S tools -B build-tools` |
+| [`training/`](training/) | Python 训练流水线 | — |
+
+界面和引擎是独立产品：可以分别编译、分别打包、分别下载；界面通过“选择引擎程序…”指向任意
+实现了 [protocol/ENGINE_PROTOCOL.md](protocol/ENGINE_PROTOCOL.md) 的引擎。修 bug 时改动天然
+局限在一边。
 
 ## 维护者从哪开始
 
 - [docs/MAINTAINERS.zh-CN.md](docs/MAINTAINERS.zh-CN.md)：**文件地图**——每个文件在哪、干什么、改它要注意什么；
-- [experimental/training/README.md](experimental/training/README.md)：训练手册（原则、闸门、评测口径、改进记录）；
+- [protocol/ENGINE_PROTOCOL.md](protocol/ENGINE_PROTOCOL.md)：引擎协议（命令 + JSON 流式分析）；
+- [training/README.md](training/README.md)：训练手册（原则、闸门、评测口径、改进记录）；
 - [docs/plans/NEXT_STEPS.zh-CN.md](docs/plans/NEXT_STEPS.zh-CN.md)：下一步思路（容量、终局精确值、训练量）。
 
 ## 当前状态（2026-11-23）
@@ -16,7 +32,7 @@
 | 项目 | 状态 |
 |---|---|
 | 规则 | 两套并行：**现行规则**与**阻挡规则**（异色大子禁止相邻）。规则是运行时参数，数据/模型/界面全部隔离 |
-| 引擎 | `random` / `pruning`(α-β) / `mcts` / `mcts_nn` 四种；`shuyi_engine` 为行协议进程 |
+| 引擎 | `random` / `pruning`(α-β) / `mcts` / `mcts_nn` 四种；`shuyi_engine` 为持久化行协议进程，100 ms 流式推送分析 |
 | 模型 | 阻挡规则 6 代（b4c32，每代约 7.8 万局面）；现行规则另有历史模型 |
 | 评测 | 统一 **512 visits/步**，random 锚定 0；最强模型 `b4c32-s34760-d470705` = **+1520** |
 | A值 | 现行规则约 −0.2；阻挡规则 **+1.26**（SE 0.22，模型自对弈标定） |
@@ -25,20 +41,28 @@
 ## 快速开始
 
 ```bash
-# 构建（MinGW / MSVC / Linux 均可）
+# 开发者一把梭：核心 + 引擎 + 界面（工具默认不编）
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j 8
-cd build && ctest --output-on-failure        # 8 项测试
+cd build && ctest --output-on-failure        # 协议一致性 + 规则/搜索 + 界面
 
-# 开界面：引擎菜单里选 剪枝 / MCTS / MCTS+网络（子菜单列出扫描到的全部模型）
+# 开界面：同目录有 shuyi_engine.exe 就会自动加载，空格开始/停止分析
 build/shuyi.exe
 
-# 直接驱动引擎（行协议）
-printf 'boardsize 9\nruleset blocking\nset_engine mcts_nn\nset_model runs/blocking/blk1/models/b4c32-s34760-d470705.bin\nset_visits 512\ngenmove red\n' | build/shuyi_engine
+# 直接驱动引擎（行协议；可带命令 id，分析按 100 ms 流式返回 JSON）
+printf 'ruleset blocking\nset_model models/b4c32-s34760-d470705.bin\nset_engine mcts_nn\nset_visits 512\n1 analyze red 512 interval 100\n' | build/shuyi_engine
 ```
 
-CUDA（自对弈产数据用）：`-DSHUYI_CUDA=ON -DCUDAToolkit_ROOT=<cuda>`。
+CUDA 引擎：`cmake -S engine -B build-engine -DSHUYI_CUDA=ON -DCUDAToolkit_ROOT=<cuda>`。
 Windows 上 nvcc 不能写中文路径，因此用 junction：`cmake -S C:/shuyi_src -B C:/shuyi_cuda_build ...`。
+
+发布 alpha 包（界面 + CUDA 引擎 + 最新模型 + 说明，0.6 MB）：
+
+```bash
+python release/make_alpha.py --engine build-cuda/shuyi_engine.exe \
+    --ui build-cuda/shuyi.exe --model models/b4c32-s34760-d470705.bin
+```
+
 
 ## 规则一句话
 
@@ -51,7 +75,7 @@ Windows 上 nvcc 不能写中文路径，因此用 junction：`cmake -S C:/shuyi
 
 ## 当前强度（阻挡规则，komi +1.26，统一 512 visits/步）
 
-`experimental/training/arena.py` + `elo.py`，random 锚定 0，115 局：
+`training/arena.py` + `elo.py`，random 锚定 0，115 局：
 
 | 参赛者 | 每步预算 | ELO | ±90% | 战绩 |
 |---|---|---:|---|---|
@@ -83,13 +107,17 @@ A=+1 时 46.7% ⇒ **公平 A = +1.26**。也就是说**阻挡规则下先手是
 ## 目录结构
 
 ```
-engine/        规则 + 搜索 + 网络（静态库 + 行协议引擎）；只依赖自己
-ui/            Win32 界面 + 引擎进程客户端；只依赖 engine 的头
-experimental/  自对弈（C++/CUDA）、训练与评测脚本、一次性研究工具
+core/          规则库：棋盘、合法性、计分、对称。两侧唯一共享的东西
+engine/        shuyi_engine.exe：搜索 + 网络 + 行协议（一个独立产品）
+ui/            shuyi.exe：Win32 界面，只管规则与调用（一个独立产品）
+protocol/      两个程序之间唯一的契约 + 一致性测试
+tools/         开发工具：proof_check / endgame_probe / nnbench / 自对弈 / 锦标赛（不发布）
+training/      训练流水线、评测（arena/elo）、训练手册（不发布）
+release/       alpha 打包脚本
 data/          共享夹具：147 个终局分数见证
-models/        固定模型夹具（v1/v2）+ 运行时默认模型
-runs/          训练与评测输出：<ruleset>/<run>/gen_XXX/、models/、arena/、avalue/
-docs/          规则 / 协议 / 架构 / 评测方法；plans/ 计划；reports/ 历次运行报告
+models/        随包发布的模型 + 测试夹具（v1/v2）
+runs/          训练与评测输出（不入库）
+docs/          规则 / 架构 / 评测方法；plans/ 计划；reports/ 历次运行报告
 ```
 
 每个文件在哪、干什么，看 [docs/MAINTAINERS.zh-CN.md](docs/MAINTAINERS.zh-CN.md)；
@@ -99,7 +127,7 @@ docs/          规则 / 协议 / 架构 / 评测方法；plans/ 计划；reports
 
 1. **棋力只认 ELO**，不看 val loss（历史上 val_policy 降了 1 分而棋力没涨）。
 2. **ELO 永远以 `random = 0` 为基准**；高胜率用相对 ELO + 置信区间表达。
-3. **评测预算固定为 visits**（`experimental/training/evalconfig.py` 的 `EVAL_VISITS = 512`），
+3. **评测预算固定为 visits**（`training/evalconfig.py` 的 `EVAL_VISITS = 512`），
    同一张表里所有参赛者必须是同一个数，**不许用时间预算**；`elo.py` 会拒绝合并不同预算的矩阵。
 
 模型命名沿用 KataGo 形式：`b{blocks}c{channels}-s{steps}-d{data}`（步数 = 累计优化步，

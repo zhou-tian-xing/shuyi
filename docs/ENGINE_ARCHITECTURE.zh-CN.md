@@ -104,7 +104,7 @@ edgePrior[]       NN 先验 / 均匀先验
   以缩短短时限下的 NN 评估成本。
 - 权重从外部文件加载，缺失时引擎仍可启动并明确报告 `nn=none`，不会静默假装有 NN。
 - `shuyi_selfplay` 用 MCTS 自对弈生成数据：根节点 Dirichlet 噪声、根访问分布作为
-  policy target、终局胜负作为 value target；`experimental/training/train_resnet.py` 训练并导出 C++
+  policy target、终局胜负作为 value target；`training/train_resnet.py` 训练并导出 C++
   二进制权重。
 - `info` 行携带 `nn=文件名`，模型版本/数据版本可随文件名区分。
 
@@ -177,7 +177,7 @@ info engine=mcts visits=20000 winrate=0.57 best=e5:7 moves=e5:7:0.57:9000,c4:3:0
   `models/shuyi_resnet_v1.bin` 是 16×2；服务器训练脚本默认 32×4，
   导出格式相同。
 - 根节点支持 Dirichlet 噪声；`shuyi_selfplay` 以根访问分布为 policy target、
-  终局胜负为 value target 生成 v2 数据，`experimental/training/train_resnet.py` 用 PyTorch
+  终局胜负为 value target 生成 v2 数据，`training/train_resnet.py` 用 PyTorch
   训练并导出 C++ 可直接推理的二进制权重；`training/pipeline.py` 负责
   15 代自对弈、训练、双模型晋升的编排。
 - 当前默认融合为 `0.5 * policy + 0.5 * uniform`、纯 value head

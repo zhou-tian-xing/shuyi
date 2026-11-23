@@ -75,7 +75,7 @@ public:
         search.useTt = true;
         search.ttSizeMb = options_.ttSizeMb;
         search.stop = request.stop;
-        search.reportIntervalMs = 100;
+        search.reportIntervalMs = request.reportIntervalMs;
         search.aspirationWindow = options_.aspirationWindow;
         search.usePvs = options_.usePvs;
 

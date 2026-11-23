@@ -1,151 +1,57 @@
-# ui/ — Win32 前端
+# ui/ — Win32 前端（一个独立产品）
 
-原生 GDI 窗口，**不依赖浏览器**。UI 自己不算棋：它启动 `shuyi_engine.exe` 子进程，
-通过行协议（stdin/stdout）驱动，异步读取 `info` 行。
-
-```
-include/engine_client.h   子进程 + 管道客户端：start / send / drain / stop
-src/engine_client.cpp     同上实现（reader 线程 → 队列，UI 100 ms 定时器消费）
-src/ui_win32.cpp          整个窗口：绘制、面板、菜单、AI 标记、规则与 A值
-tests/ui_menu_smoke.py    无界面检查模型二级菜单（ctest: shuyi_ui_menu）
-```
-
-## 怎么找东西（`ui_win32.cpp` 一个文件装完）
-
-| 想改什么 | 函数 |
-|---|---|
-| 棋盘格线、坐标、棋子（方形圆角） | `drawBoard`、`drawStone` |
-| 最后一手金框、分析标记 | `drawAnalysisMarks`（细边 + 按棋盘色混合的染色） |
-| 右侧面板三栏（胜率 / 访问数 / 预期平均分） | `drawPanel`、`formatVisits`（在 engine/format.h） |
-| 菜单、快捷键 | `createMenuBar`、`WM_COMMAND` |
-| 模型二级菜单 | `scanModels`、`populateModelMenu`、`selectModel`、`populateModelMenu` |
-| 规则切换 / A值 | `setRuleset`、`setAValue`、`syncRulesetChecks` |
-| 引擎进程与协议 | `startEngineProcess`、`sendEngine`、`handleEngineLine`、`syncEnginePosition` |
-
-## 引擎进程：UI 自己找最快的那个
-
-界面和引擎是两个进程，只靠行协议说话，所以**界面是哪份构建无所谓**——重要的是它拉起来的
-那个 `shuyi_engine.exe` 是不是快的。启动时按下面的顺序找引擎，并用 `capabilities` 探测：
+原生 GDI 窗口，**不依赖浏览器，也不含任何搜索**。界面是规则与状态的权威：它维护棋局、
+校验着法、绘制棋盘；一切计算都发给 `shuyi_engine.exe` 子进程，通过行协议（stdin/stdout）
+接收 100 ms 一次的分析流。
 
 ```
-SHUYI_ENGINE                       # 显式指定，优先
-<exe 目录>/shuyi_engine.exe
-<exe 目录>/../build-cuda/shuyi_engine.exe   # 以及 /Release
-<exe 目录>/../build/shuyi_engine.exe       # 以及 /Release
-<当前目录>/{,build-cuda,build}/shuyi_engine.exe
+include/engine_client.h    子进程 + 管道 + 读线程 + 同步握手 command()
+include/engine_view.h      分析视图 + parseAnalysis()（JSON → 视图）
+include/json.h             极简 JSON 解析器
+include/discovery.h        引擎候选路径 + capabilities 探测
+src/ui_win32.cpp           窗口、菜单、绘制、规则状态、分析状态机
+src/engine_client.cpp      进程/管道/读线程
+src/engine_protocol.cpp    解析 info JSON、着法 token
+src/json.cpp               JSON 解析
+src/discovery.cpp          引擎发现
+tests/ui_menu_smoke.py     无界面检查模型菜单（ctest: shuyi_ui_menu）
+tests/engine_choice_smoke.py 无界面检查“用户选的引擎优先”（ctest: shuyi_engine_choice）
 ```
 
-探测用协议命令 `capabilities`，引擎回答 `engine=shuyi_engine cuda=1|0 rulesets=...`：
-
-- **有任何一个候选回答 `cuda=1`，就用它**（这就是"引擎得是快的"）；
-- 否则用第一个能正常回答的（CPU）；
-- 启动后再发 `set_backend auto`，`info` 行回报 `backend=cuda|cpu`，窗口标题显示 `(GPU)`/`(CPU)`。
-
-所以：**MinGW 编的 CPU 版界面 + MSVC/CUDA 编的引擎** 是正常组合，不需要"用 CUDA 版界面"。
-把 CUDA 构建放在 `<repo>/build-cuda`（本机是指向 `C:\shuyi_cuda_build` 的 junction），
-界面就会自动挑到它；也可以 `set SHUYI_ENGINE=...` 指定任意引擎（包括远程挂载的）。
-
-`shuyi.exe --dump-engine out.txt` 会把"试了哪些路径、每个候选回答什么、最后选了谁"
-写出来，不需要开窗口就能诊断：
-
-```
-try 1 F:\...\build-cuda\shuyi_engine.exe
-cuda  F:\...\build-cuda\shuyi_engine.exe
-cpu   F:\...\build\shuyi_engine.exe
-chosen=F:\...\build-cuda\shuyi_engine.exe
-```
-
-回归测试：`ui/tests/engine_choice_smoke.py`（ctest: `shuyi_engine_choice`）。
-
-### 实测（b4c32，512 visits 一步 genmove）
-
-| 引擎 | 耗时 | 备注 |
-|---|---:|---|
-| CPU，旧卷积实现 | 18.6 s | 36 ms/次前向，已修 |
-| CPU，现实现（MinGW） | 2.1 s | 4.2 ms/次 |
-| CPU，现实现（MSVC + `/arch:AVX2`） | 4.0 s | 不开 AVX2 是 5.7~6.1 s |
-| **CUDA（自动选中）** | **0.26~0.41 s** | 与 CPU 版本同一着法、同一节点数 |
-
-MSVC 构建建议加 `-DSHUYI_NATIVE_SIMD=ON`（给 `/arch:AVX2`）；MinGW 上实测反而略慢，
-所以这个开关默认是关的，按机器实测决定。
-
-## 分析标记：最优点按"置信下界"排，不按裸胜率
-
-棋盘上的标记（胜率 / 访问数 / 预期平均分）排序用 `winRateLowerBound(winrate, visits)`
-（Wilson 95% 下界，在 `engine/include/shuyi/format.h`，有单测）：
-
-- 搜了 1 次、胜率 100% 的格子 → 0.21；搜了 200 次、胜率 55% → 0.49；
-- 所以 `best` = **下界最大的空格**，颜色也按下界的差着色（红→绿），访问数低于最优 5%
-  的格子不画；
-- 平局（差 < `kMarkTieMargin`）保留上一帧的最优格。
-
-这样既"综合了搜索量和胜率"，也不会出现"两个格子来回闪"的现象——访问数只会增长，
-排名因此单调稳定。
-
-**例外：已解算的格子用精确胜率。** 引擎在 `cells=` 里给每个点带一个证明标志
-（第 6 个字段）。`proven=1` 的点是规则的硬结果，1 次访问也是真的，所以它按精确胜率
-排序、不受 5% 访问数门槛限制；同样是已解算且胜负相同，则比精确目差（输也要少输）。
-状态栏会显示"已解算"，此时 `访问` 数小于预算属于**正常**（搜到答案就停了）。
-
-**显示的数字和排名用同一个值**：非 `proven` 的点显示 Wilson 95% 下界，所以
-"1 次访问、赢了"不会再被印成 100%（那是 21%）；只有 `proven=1` 才显示精确的 100%。
-以前标记里印原始平均值，一次幸运采样就长成"100%"，和"已解算"看起来一模一样。
-
-**排名前 8 的点永远画出来**（`kMarkAlwaysShow`）。搜索收敛时一个点可能吃掉九成访问，
-只按"5% 门槛"过滤会让棋盘上只剩一个标记——那看起来像引擎证明了唯一解，其实只是
-把预算花在了一个点上。等价点（同一对称轨道）由引擎直接给出相同数字，所以棋盘的
-对称位置会显示完全一样的胜率/访问数/目差。
-
-界面对引擎只下一个预算：`kUiVisits = 512`（`set_visits`），从不按毫秒。
-`capabilities` 里没有 `visits=1` 的老引擎才退回 `set_time 650`。引擎那边
-`visits` 可能小于预算（局面被证明，或树撞到 4M 条边的上限），这是正常行为。
-
-## 模型菜单：必须能在任何工作目录下找到所有模型
-
-`引擎(&E) → MCTS + 网络` 子菜单会列出**扫描到的全部模型**，条目形如
-`blk1/gen_005.bin  [阻挡]`（`[现行]`/`[阻挡]` 从模型文件头里的 ruleset 字节读，不靠文件名猜）。
-
-扫描根目录依次是：**exe 所在目录**、**它的父目录（仓库根）**、**当前工作目录**，以及
-`SHUYI_MODEL_DIRS`（分号分隔）里给的目录。每个根下**递归**找名为 `models` 的目录，
-收里面的 `*.bin`（跳过 `build*`、`.*`、`__pycache__`）。
-
-> 这条是修过的 bug：以前只按相对路径找 `models/` 和 `runs/*/models`，而从 `build/`
-> 启动时工作目录是 `build/`，于是只显示 `build/models` 的两个夹具模型，训练出来的网络全都不见了。
-> 回归测试 `ui/tests/ui_menu_smoke.py` 会检查菜单里同时出现两种规则的模型。
-
-菜单底部有 `重新扫描模型目录`，跑完新的训练不用重启 UI。
-
-## 路径编码（中文仓库）
-
-仓库叫"数弈"，所以路径里带中文。Win32 的 `*A` API 返回的是 **ANSI**，
-而引擎进程收到的参数要 **UTF-8**（`shuyi::Utf8Args` 在进程启动时转）。因此：
-
-- `ModelEntry` 同时存 `path`（ANSI，给 Win32 / `fopen`）和 `enginePath`（UTF-8，给 `set_model`）；
-- 写文件走 `shuyi::fopenUtf8`（见 `engine/include/shuyi/io.h`）；
-- `wWinMain` 的命令行是 UTF-16，转 UTF-8 再解析（`--dump-models` 的路径就这么来的）。
-
-## 无界面自测
+## 构建（不需要引擎源码）
 
 ```bash
-build/shuyi.exe --dump-models out.txt   # 把菜单条目写出来，不需要开窗口
+cmake -S ui -B build-ui -DCMAKE_BUILD_TYPE=Release
+cmake --build build-ui
 ```
 
-输出格式：第一行 `models=N`，之后每行 `<菜单 id>\t<标签>`，最后是 `重新扫描模型目录` 的 id。
-`ui/tests/ui_menu_smoke.py` 就是靠它做回归的。
+界面只链接 `../core`（规则）。它**不认识** `shuyi_search`：CMake 里没有这个依赖，
+加回去就等于把引擎塞进界面包。
 
-## 操作
+## 引擎从哪来
 
-数字键 1–9 选数字；点击棋盘落子；F2 新局；Ctrl+Z 悔棋；`[` `]` 调 A值。
+界面只是启动一个子进程，所以重要的是那个程序说不说协议，而不是它是谁编译的。顺序：
 
-**空格 = 分析的开始 / 停止 / 继续**（F3 是同一个命令）：
+1. `SHUYI_ENGINE` 环境变量；
+2. `shuyi-ui.ini` 里的 `engine=`（相对路径按本 exe 所在目录解析）；
+3. 自动探测：exe 同目录 → `../build-cuda` → `../build` → 当前目录，取第一个
+   `capabilities` 回 `proto=2` 的程序；多个可用时优先 `cuda=1`。
 
-1. 第一次按：按设置里的"分析访问上限"搜（默认 512），到上限引擎自己停，回
-   `= done visits=…`，界面标"已达访问上限"。
-2. 再按（停下来或到上限之后）：**不限量**继续同一棵树（`analyze red 0`），直到再按一次。
-3. 停止**不清屏**：数字留在棋盘上，那是这个局面目前最好的信息。
+探测到之后用 `capabilities` 做**硬校验**：`proto != 2` 直接拒绝并弹窗说明，不做“可能兼容”。
+启动时每条命令都同步等回复（`EngineClient::command`），任何 `?` 都会中止启动并弹窗，
+不会带着半个配置继续跑。
 
-`引擎 → 设置…` 里能改：分析访问上限（0 = 不限）、落子访问上限、A值。三项都写进
-`shuyi-ui.ini`，下次启动照旧。改 A值会重建引擎（A值改变终局胜负，旧树不能再信）；
-只改访问上限不会丢树。
+## 三条硬规矩
 
-完整说明见 [../docs/RULES.zh-CN.md](../docs/RULES.zh-CN.md)。
+1. **不计算**：没有引擎就提示去“引擎 → 选择引擎程序…”，绝不自己走一步。
+2. **不猜**：引擎报错、分析 JSON 解析失败，都显示错误，不拿旧数据或空白冒充结果。
+3. **口径一致**：棋盘上的标记、右侧摘要、悬停面板都用“已解算则精确值，否则 Wilson 95% 下界”；
+   目差只在引擎确实有分数时显示，没有就 `--`。
+
+## 快捷键与设置
+
+* **空格**：开始分析 / 停止分析（不清屏）。达到访问上限后自动停下，再按空格不计上限、
+  继续同一棵树；F3 是别名。
+* **引擎 → 设置…**：分析访问上限、落子访问上限、A值（存 `shuyi-ui.ini`，并下发引擎）。
+* **引擎 → 引擎信息…**：当前引擎程序、协议版本、后端（CUDA/CPU）、模型。
+* `--dump-engine` / `--dump-models` 是测试用的无界面探针（`ui/tests/` 使用）。
