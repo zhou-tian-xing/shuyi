@@ -169,9 +169,10 @@ public:
             int visits = 0;
             input >> visits;
             if (visits < 0) return {false, "visits must be >= 0"};
-            stopAndJoin();
+            // Only the default budget changes: rebuilding the engine here would
+            // throw the search tree away, which is exactly what a front end needs
+            // to keep when it extends an analysis.
             options_.visits = visits;
-            makeCurrentEngine(kind_);
             return {true, visits > 0 ? std::to_string(visits) : std::string("off")};
         }
         if (command == "set_a") {
@@ -273,20 +274,28 @@ public:
             std::string color;
             input >> color;
             Player player;
-            if (!parsePlayer(color, player)) return {false, "usage: genmove red|black"};
+            if (!parsePlayer(color, player)) return {false, "usage: genmove red|black [visits]"};
             if (player != position_.sideToMove()) return {false, "wrong side to move"};
             if (position_.gameOver()) return {false, "game is over"};
-            startSearch(false);
+            // Optional per-command budget.  A front end uses it to extend a
+            // finished analysis without touching the default or the tree.
+            int visits = options_.visits;
+            if (!(input >> visits)) visits = options_.visits;
+            if (visits < 0) return {false, "visits must be >= 0"};
+            startSearch(false, visits);
             return {true, ""};
         }
         if (command == "analyze") {
             std::string color;
             input >> color;
             Player player;
-            if (!parsePlayer(color, player)) return {false, "usage: analyze red|black"};
+            if (!parsePlayer(color, player)) return {false, "usage: analyze red|black [visits]"};
             if (player != position_.sideToMove()) return {false, "wrong side to move"};
             if (position_.gameOver()) return {false, "game is over"};
-            startSearch(true);
+            int visits = options_.visits;
+            if (!(input >> visits)) visits = options_.visits;
+            if (visits < 0) return {false, "visits must be >= 0"};
+            startSearch(true, visits);
             return {true, ""};
         }
         return {false, "unknown command: " + command};
@@ -411,7 +420,7 @@ private:
         sendLine(info.str());
     }
 
-    void startSearch(bool analysisMode) {
+    void startSearch(bool analysisMode, int searchVisits) {
         stopAndJoin();
         if (!engine_) return;
         const Position position = position_;
@@ -419,7 +428,6 @@ private:
         const std::string tag = engine->infoTag();
         const bool pruning = kind_ == EngineKind::Pruning;
         const int searchTime = options_.timeLimitMs;
-        const int searchVisits = options_.visits;
         stop_.store(false, std::memory_order_relaxed);
         running_.store(true, std::memory_order_relaxed);
         worker_ = std::thread([this, position, engine, analysisMode, pruning, tag, searchTime,
@@ -460,6 +468,11 @@ private:
                 } else {
                     sendLine("? no legal move");
                 }
+            } else if (last.valid) {
+                // Tell the front end that the analysis ended by itself instead of
+                // by `stop`: it can then extend the same tree without the budget.
+                sendLine(std::string("= done visits=") + std::to_string(last.visits) +
+                         " proven=" + (last.proven ? "1" : "0"));
             }
             running_.store(false, std::memory_order_relaxed);
         });

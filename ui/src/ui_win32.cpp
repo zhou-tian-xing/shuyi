@@ -60,9 +60,20 @@ constexpr int ID_ENGINE_AUTO = 5008;
 constexpr int ID_ENGINE_INFO = 5009;
 constexpr int ID_ANALYZE = 5005;
 constexpr int ID_ENGINE_STOP = 5006;
+constexpr int ID_SETTINGS = 5010;
 constexpr int ID_MODEL_RESCAN = 6090;
 constexpr int ID_MODEL_BASE = 6100;  // + model index
 constexpr int ID_MODEL_LIMIT = 6400; // exclusive upper bound, below nothing else
+constexpr int ID_SETTINGS_OK = 6001;
+constexpr int ID_SETTINGS_CANCEL = 6002;
+
+// Simulations per analysis and per move are settings (default 512).  A visit
+// budget is the only machine-independent unit: 512 visits is 512 visits on the
+// laptop and on the GPU, so two runs of the same position are comparable.  The
+// default matches the evaluation budget in experimental/training/evalconfig.py.
+constexpr int kDefaultVisits = 512;
+// Window class of the settings popup (registered in wWinMain).
+constexpr const wchar_t* kSettingsClass = L"ShuyiSettingsWindow";
 
 constexpr UINT WM_APP_RESET = WM_APP + 1;
 
@@ -153,6 +164,14 @@ EngineClient g_engineClient;
 EngineChoice g_engineChoice = EngineChoice::Off;
 EngineAnalysisView g_engineAnalysis;
 bool g_analysisOn = false;
+// The last analysis spent its whole budget: the next Space continues the same
+// tree without a limit instead of starting over at the configured budget.
+bool g_analysisFinished = false;
+bool g_analysisUnlimited = false;
+// Budgets, editable in the settings window and persisted in shuyi-ui.ini.  0
+// means "no limit" (the search runs until Space is pressed again).
+int g_analysisVisits = kDefaultVisits;
+int g_playVisits = kDefaultVisits;
 bool g_enginePending = false;
 std::wstring g_engineMessage = L"外部引擎未启用";
 bool g_engineReady = false;
@@ -219,6 +238,7 @@ COLORREF heatColor(double winrate) {
 
 void refresh(bool immediate = false);
 void maybeAiMove();
+void setAValue(int value);
 void builtInAiMove();
 void syncEngineChecks();
 
@@ -530,6 +550,9 @@ void notifyEnginePlay(Move move, Player mover) {
     if (!g_engineClient.running()) return;
     sendEngine("stop");
     g_enginePending = false;
+    // A new position: the previous "budget spent, continue without limit" state no
+    // longer applies.
+    g_analysisFinished = false;
     if (isPass(move)) {
         sendEngine(std::string("play ") + (mover == Player::Red ? "red" : "black") + " pass");
     } else {
@@ -540,28 +563,56 @@ void notifyEnginePlay(Move move, Player mover) {
     if (g_analysisOn && !g_position.gameOver()) startEngineAnalysis();
 }
 
-void startEngineAnalysis() {
+// Start (or extend) the analysis of the current position.  `visits == 0` means
+// no limit: the search keeps growing the same tree until Space stops it.  The
+// previous display is deliberately kept until the first new info line arrives, so
+// the marks do not blink on every refresh.
+void startEngineAnalysis(int visits) {
     if (g_engineChoice == EngineChoice::Off || !g_engineClient.running() || g_position.gameOver()) return;
     g_enginePending = false;
     sendEngine("stop");
-    clearEngineAnalysis();
     g_analysisOn = true;
-    sendEngine("analyze " + std::string(g_position.sideToMove() == Player::Red ? "red" : "black"));
-    g_engineMessage = L"分析中…";
+    g_analysisFinished = false;
+    g_analysisUnlimited = visits <= 0;
+    sendEngine("analyze " + std::string(g_position.sideToMove() == Player::Red ? "red" : "black") +
+               " " + std::to_string(std::max(0, visits)));
+    g_engineMessage = visits > 0 ? (L"分析中（上限 " + std::to_wstring(visits) + L" 访问，空格停止）")
+                                 : L"分析中（不限访问，空格停止）";
     refresh();
 }
+
+void startEngineAnalysis() { startEngineAnalysis(g_analysisVisits); }
 
 void stopEngineAnalysis() {
     g_analysisOn = false;
     if (g_engineClient.running()) sendEngine("stop");
-    clearEngineAnalysis();
-    g_engineMessage = L"分析已停止";
+    g_engineMessage = g_analysisFinished ? L"已达访问上限（空格继续，不再限量）"
+                                         : L"分析已暂停（空格继续，树保留）";
     refresh();
+}
+
+// Space handler: start, stop, or continue past the limit.  Stopping keeps the
+// numbers on screen -- they are still the best information about this position.
+void toggleAnalysis() {
+    if (g_position.gameOver()) return;
+    if (g_analysisOn) {
+        stopEngineAnalysis();
+        return;
+    }
+    if (!g_engineReady || g_engineChoice == EngineChoice::Off) {
+        g_engineMessage = L"先用 引擎 菜单选一个引擎";
+        refresh();
+        return;
+    }
+    // Continuing after a finished (budget-limited) run ignores the budget: the
+    // visit limit is a stopping point, not a cap on what may be searched.
+    startEngineAnalysis(g_analysisFinished ? 0 : g_analysisVisits);
 }
 
 void syncEnginePosition() {
     if (!g_engineClient.running()) return;
     g_enginePending = false;
+    g_analysisFinished = false;
     sendEngine("stop");
     clearEngineAnalysis();
     sendEngine("clear_board");
@@ -922,6 +973,12 @@ void loadSettings() {
             if (!line.empty() && line.back() == static_cast<char>(13)) line.pop_back();
             if (line.rfind("engine=", 0) == 0) {
                 g_enginePath = widenUtf8(trimAscii(line.substr(7)));
+            } else if (line.rfind("analysis_visits=", 0) == 0) {
+                g_analysisVisits = std::clamp(std::atoi(line.substr(16).c_str()), 0, 50000000);
+            } else if (line.rfind("play_visits=", 0) == 0) {
+                g_playVisits = std::clamp(std::atoi(line.substr(12).c_str()), 1, 50000000);
+            } else if (line.rfind("a_value=", 0) == 0) {
+                g_aValue = std::clamp(std::atoi(line.substr(8).c_str()), -40, 40);
             }
         }
     }
@@ -936,6 +993,12 @@ void saveSettings() {
         text += static_cast<char>(10);
         text += "engine=";
         text += narrowUtf8(g_enginePath);
+        text += static_cast<char>(10);
+        text += "analysis_visits=" + std::to_string(g_analysisVisits);
+        text += static_cast<char>(10);
+        text += "play_visits=" + std::to_string(g_playVisits);
+        text += static_cast<char>(10);
+        text += "a_value=" + std::to_string(g_aValue);
         text += static_cast<char>(10);
         std::fwrite(text.data(), 1, text.size(), handle);
         std::fclose(handle);
@@ -1043,12 +1106,6 @@ EngineProbe probeEngine(const std::wstring& path) {
 // The protocol this front end speaks.
 constexpr int kUiProtocolVersion = 1;
 
-// Simulations per move and per analysis refresh.  A visit budget is the only
-// machine-independent unit: 512 visits is 512 visits on the laptop and on the
-// GPU, so two runs of the same position are comparable.  This matches the
-// evaluation budget in experimental/training/evalconfig.py on purpose.
-constexpr int kUiVisits = 512;
-
 bool checkProtocol(const EngineProbe& probe, const std::wstring& path) {
     if (!probe.answered) {
         MessageBoxW(g_hwnd, (L"这个程序没有回应 capabilities，看起来不是数弈引擎：\n" + path).c_str(),
@@ -1116,7 +1173,7 @@ bool startEngineProcess() {
     // the same numbers on a slow laptop and on a GPU box.  The time limit below
     // is only a fallback for an engine that does not advertise `visits=1`.
     if (probe.visitBudget) {
-        sendEngine("set_visits " + std::to_string(kUiVisits));
+        sendEngine("set_visits " + std::to_string(g_analysisVisits));
     } else {
         sendEngine("set_time 650");
     }
@@ -1132,6 +1189,140 @@ bool startEngineProcess() {
                                                                   : engineFile.substr(slash + 1));
     syncEnginePosition();
     return true;
+}
+
+// ---------------------------------------------------------------- settings ---
+//
+// A visit budget, not a wall clock: "512 visits" means the same search on the
+// laptop and on the GPU.  Both numbers are persisted in shuyi-ui.ini and sent to
+// the engine when it starts (and whenever they change).
+HWND g_settingsWnd = nullptr;
+HWND g_settingsAnalysisEdit = nullptr;
+HWND g_settingsPlayEdit = nullptr;
+HWND g_settingsAValueEdit = nullptr;
+
+void closeSettings(bool apply) {
+    if (!g_settingsWnd) return;
+    if (apply) {
+        wchar_t buffer[32]{};
+        const auto readInt = [&](HWND edit, int fallback, int low, int high) {
+            if (!edit) return fallback;
+            GetWindowTextW(edit, buffer, 32);
+            wchar_t* end = nullptr;
+            const long value = std::wcstol(buffer, &end, 10);
+            if (end == buffer) return fallback;
+            return static_cast<int>(std::clamp<long>(value, low, high));
+        };
+        const int analysis = readInt(g_settingsAnalysisEdit, g_analysisVisits, 0, 50000000);
+        const int play = readInt(g_settingsPlayEdit, g_playVisits, 1, 50000000);
+        const int aValue = readInt(g_settingsAValueEdit, g_aValue, -40, 40);
+        g_analysisVisits = analysis;
+        g_playVisits = play;
+        saveSettings();
+        if (g_engineClient.running()) {
+            sendEngine("set_visits " + std::to_string(g_analysisVisits));
+        }
+        if (aValue != g_aValue) setAValue(aValue);
+        g_engineMessage = L"设置已保存（分析 " + std::to_wstring(g_analysisVisits) + L" / 落子 " +
+                          std::to_wstring(g_playVisits) + L" 访问）";
+    }
+    EnableWindow(g_hwnd, TRUE);
+    DestroyWindow(g_settingsWnd);
+    g_settingsWnd = nullptr;
+    g_settingsAnalysisEdit = g_settingsPlayEdit = g_settingsAValueEdit = nullptr;
+    SetForegroundWindow(g_hwnd);
+    refresh();
+}
+
+LRESULT CALLBACK settingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+    case WM_ERASEBKGND: {
+        RECT client{};
+        GetClientRect(hwnd, &client);
+        fillRectColor(reinterpret_cast<HDC>(wParam), client, kPanel);
+        return 1;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == ID_SETTINGS_OK) {
+            closeSettings(true);
+            return 0;
+        }
+        if (LOWORD(wParam) == ID_SETTINGS_CANCEL || LOWORD(wParam) == IDCANCEL) {
+            closeSettings(false);
+            return 0;
+        }
+        return 0;
+    case WM_CLOSE:
+        closeSettings(false);
+        return 0;
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+void openSettings() {
+    if (g_settingsWnd) {
+        SetForegroundWindow(g_settingsWnd);
+        return;
+    }
+    RECT main{};
+    GetWindowRect(g_hwnd, &main);
+    const int width = scale(420);
+    const int height = scale(228);
+    const int x = main.left + ((main.right - main.left) - width) / 2;
+    const int y = main.top + ((main.bottom - main.top) - height) / 2;
+    g_settingsWnd = CreateWindowExW(WS_EX_DLGMODALFRAME, kSettingsClass, L"设置",
+                                    WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, width, height, g_hwnd,
+                                    nullptr, g_instance, nullptr);
+    if (!g_settingsWnd) return;
+
+    const auto label = [&](const wchar_t* text, int top) {
+        CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE | SS_LEFT, scale(16), top,
+                        scale(170), scale(20), g_settingsWnd, nullptr, g_instance, nullptr);
+    };
+    const auto edit = [&](int top, int value) {
+        wchar_t text[24]{};
+        std::swprintf(text, 24, L"%d", value);
+        HWND box = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", text,
+                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, scale(196),
+                                   top - scale(2), scale(150), scale(24), g_settingsWnd, nullptr,
+                                   g_instance, nullptr);
+        SendMessageW(box, WM_SETFONT, reinterpret_cast<WPARAM>(g_fontUi), TRUE);
+        return box;
+    };
+
+    const int rowHeight = scale(34);
+    int top = scale(20);
+    label(L"分析访问上限（0 = 不限）", top);
+    g_settingsAnalysisEdit = edit(top, g_analysisVisits);
+    top += rowHeight;
+    label(L"落子访问上限", top);
+    g_settingsPlayEdit = edit(top, g_playVisits);
+    top += rowHeight;
+    label(L"A值（目数，可为负）", top);
+    g_settingsAValueEdit = edit(top, g_aValue);
+    top += rowHeight + scale(6);
+    label(L"空格：开始 / 停止 / 超限后继续搜索", top);
+
+    const int buttonTop = height - scale(58);
+    HWND ok = CreateWindowExW(0, L"BUTTON", L"确定",
+                              WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, scale(196),
+                              buttonTop, scale(72), scale(28), g_settingsWnd,
+                              reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_SETTINGS_OK)),
+                              g_instance, nullptr);
+    HWND cancel = CreateWindowExW(0, L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                  scale(274), buttonTop, scale(72), scale(28), g_settingsWnd,
+                                  reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_SETTINGS_CANCEL)),
+                                  g_instance, nullptr);
+    for (HWND child : {ok, cancel}) SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(g_fontUi), TRUE);
+    for (HWND child : {g_settingsAnalysisEdit, g_settingsPlayEdit, g_settingsAValueEdit})
+        SendMessageW(child, EM_SETSEL, 0, -1);
+
+    EnableWindow(g_hwnd, FALSE);
+    ShowWindow(g_settingsWnd, SW_SHOW);
+    SetForegroundWindow(g_settingsWnd);
+    SetFocus(g_settingsAnalysisEdit);
 }
 
 // 选择引擎程序…: a plain file dialog.  Any program that speaks the protocol is
@@ -1225,6 +1416,17 @@ void handleEngineLine(const std::string& line) {
         if (g_analysisOn || g_enginePending) applyEngineAnalysis(line.substr(5));
         return;
     }
+    if (line.rfind("= done", 0) == 0) {
+        // The analysis ran out of budget on its own.  The numbers stay on screen
+        // and the tree stays in the engine, so Space can extend it without a limit.
+        g_analysisOn = false;
+        g_analysisFinished = true;
+        if (!g_enginePending) {
+            g_engineMessage = L"已达访问上限（空格继续，不再限量）";
+            refresh();
+        }
+        return;
+    }
     if (!line.empty() && line[0] == '?') {
         const bool wasPending = g_enginePending;
         g_engineMessage = L"引擎错误：" + widen(line.substr(1));
@@ -1275,16 +1477,7 @@ void drainEngineLines() {
     for (const std::string& line : g_engineClient.drain()) handleEngineLine(line);
 }
 
-void toggleAnalysis() {
-    if (g_engineChoice == EngineChoice::Off) {
-        MessageBoxW(g_hwnd, L"请先在“引擎”菜单中选择剪枝、MCTS 或 MCTS+NN。",
-                    L"引擎分析", MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-    if (g_enginePending) return;
-    if (g_analysisOn) stopEngineAnalysis();
-    else startEngineAnalysis();
-}
+// (the Space handler `toggleAnalysis` is defined next to startEngineAnalysis)
 
 void syncRulesetChecks() {
     if (!g_rulesetMenu) return;
@@ -1725,7 +1918,7 @@ void drawEngineAnalysis(HDC dc, const PanelRects& rects) {
         return;
     }
     if (!g_engineAnalysis.valid) {
-        drawTextAt(dc, g_analysisOn ? L"等待分析数据…" : L"按 F3 开始分析",
+        drawTextAt(dc, g_analysisOn ? L"等待分析数据…" : L"按空格开始分析",
                    left, y, width, scale(20), g_fontSmall, kMuted,
                    DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         return;
@@ -1739,8 +1932,14 @@ void drawEngineAnalysis(HDC dc, const PanelRects& rects) {
     y += scale(23);
     std::wstring metric;
     if (analysis.kind.rfind("mcts", 0) == 0) {
+        // Same number the marks show: the exact value when solved, the Wilson
+        // lower bound otherwise.  Printing a raw average here made the panel and
+        // the board disagree about the same position.
+        const double shown = analysis.proven
+                                 ? analysis.winrate
+                                 : winRateLowerBound(analysis.winrate, analysis.visits);
         metric = L"访问 " + std::to_wstring(analysis.visits) + L" · 胜率 " +
-                 std::to_wstring(static_cast<int>(std::lround(analysis.winrate * 100.0))) +
+                 std::to_wstring(static_cast<int>(std::lround(shown * 100.0))) +
                  L"% · 均分 " + signedDecimal(analysis.averageScore);
         // A solved position stops searching on purpose: say so instead of
         // looking like a search that ran out of budget.
@@ -1758,6 +1957,16 @@ void drawEngineAnalysis(HDC dc, const PanelRects& rects) {
     drawTextAt(dc, metric, left, y, width, scale(20), g_fontSmall, kMuted,
                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     y += scale(21);
+    // Say why the search is idle: the numbers stay on screen after Space stops it,
+    // so the panel has to explain what the next Space will do.
+    if (!g_analysisOn) {
+        const wchar_t* hint = g_analysisFinished ? L"已达访问上限 · 空格继续（不限量，树保留）"
+                                                 : L"已暂停 · 空格继续（树保留）";
+        drawTextAt(dc, hint, left, y, width, scale(20), g_fontSmall,
+                   g_analysisFinished ? kGold : kMuted,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        y += scale(20);
+    }
 
     if (analysis.kind.rfind("mcts", 0) == 0 && !analysis.candidates.empty()) {
         const int rows = std::min<int>(4, static_cast<int>(analysis.candidates.size()));
@@ -2055,7 +2264,8 @@ void maybeAiMove() {
         clearEngineAnalysis();
         sendEngine("stop");
         sendEngine("genmove " +
-                   std::string(g_position.sideToMove() == Player::Red ? "red" : "black"));
+                   std::string(g_position.sideToMove() == Player::Red ? "red" : "black") + " " +
+                   std::to_string(std::max(1, g_playVisits)));
         refresh(true);
         return;
     }
@@ -2220,8 +2430,10 @@ void createMenuBar(HWND hwnd) {
     AppendMenuW(engine, MF_STRING, ID_ENGINE_AUTO, L"自动探测引擎");
     AppendMenuW(engine, MF_STRING, ID_ENGINE_INFO, L"引擎信息…");
     AppendMenuW(engine, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(engine, MF_STRING, ID_ANALYZE, L"分析当前局面\tF3");
+    AppendMenuW(engine, MF_STRING, ID_ANALYZE, L"分析当前局面（空格）\tF3");
     AppendMenuW(engine, MF_STRING, ID_ENGINE_STOP, L"停止引擎搜索");
+    AppendMenuW(engine, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(engine, MF_STRING, ID_SETTINGS, L"设置（搜索量 / A值）…");
 
     AppendMenuW(aValue, MF_STRING, ID_A_PLUS, L"A值 +1\t]");
     AppendMenuW(aValue, MF_STRING, ID_A_MINUS, L"A值 −1\t[");
@@ -2358,7 +2570,9 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             resetGame();
             return 0;
         }
-        if (wParam == VK_F3) {
+        // Space is the analysis switch: start, stop (keeping the numbers) and
+        // continue past the visit limit.  F3 stays as an alias.
+        if (wParam == VK_SPACE || wParam == VK_F3) {
             toggleAnalysis();
             return 0;
         }
@@ -2417,6 +2631,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
         case ID_ANALYZE: toggleAnalysis(); return 0;
+        case ID_SETTINGS: openSettings(); return 0;
         case ID_ENGINE_STOP: {
             const bool wasPending = g_enginePending;
             g_enginePending = false;
@@ -2593,6 +2808,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
     windowClass.hbrBackground = nullptr;
     windowClass.lpszClassName = L"ShuyiNativeWindow";
     if (!RegisterClassExW(&windowClass)) return 1;
+
+    // Second class for the settings popup: it must not run the board painting
+    // code, so it has its own tiny window procedure.
+    WNDCLASSEXW settingsClass = windowClass;
+    settingsClass.lpfnWndProc = settingsProc;
+    settingsClass.style = CS_HREDRAW | CS_VREDRAW;
+    settingsClass.lpszClassName = kSettingsClass;
+    if (!RegisterClassExW(&settingsClass)) return 1;
 
     RECT windowRect{0, 0, scale(1120), scale(820)};
     AdjustWindowRectEx(&windowRect, WS_OVERLAPPEDWINDOW, TRUE, 0);
