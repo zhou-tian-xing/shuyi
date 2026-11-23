@@ -28,6 +28,10 @@ CHANNELS="${CHANNELS:-32}"
 # Empty -> the pipeline picks the measured value per rule set (blocking
 # +1.3, classic -0.5).  A hard-coded default here silently overrode that.
 KOMI="${KOMI:-}"
+# Empty -> the pipeline default (classic).  A blocking run MUST set this: the
+# trainer refuses data from the other rule set, so the failure is loud, but it
+# wastes a launch.
+RULESET="${RULESET:-}"
 ARENA_GAMES="${ARENA_GAMES:-160}"
 BATCH_GAMES="${BATCH_GAMES:-128}"
 # A as a network input (model format v4).  Needs SYSELF4 data, which every run
@@ -63,6 +67,9 @@ if [ "$A_COND" = "1" ]; then
     if [ -n "$A_ANCHOR" ]; then
         EXTRA+=(--a-anchor "$A_ANCHOR")
     fi
+fi
+if [ -n "$RULESET" ]; then
+    EXTRA+=(--ruleset "$RULESET")
 fi
 if [ -n "$KOMI" ]; then
     EXTRA+=(--komi "$KOMI")

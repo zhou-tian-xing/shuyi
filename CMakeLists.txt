@@ -20,7 +20,15 @@ project(shuyi LANGUAGES CXX)
 
 option(SHUYI_CUDA "Build the CUDA backend of the engine" OFF)
 option(SHUYI_BUILD_ENGINE "Build shuyi_engine" ON)
-option(SHUYI_BUILD_UI "Build the Win32 front end" ON)
+# The front end is a Win32 program and refuses to configure anywhere else, so the
+# default follows the platform: a Linux server can run plain `cmake -S . -B build`
+# for the engine and tools instead of hitting a configure error.
+if(WIN32)
+    set(SHUYI_UI_DEFAULT ON)
+else()
+    set(SHUYI_UI_DEFAULT OFF)
+endif()
+option(SHUYI_BUILD_UI "Build the Win32 front end" ${SHUYI_UI_DEFAULT})
 option(SHUYI_BUILD_TOOLS "Build developer tools (not part of any release)" OFF)
 
 enable_testing()

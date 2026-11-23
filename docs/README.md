@@ -15,7 +15,7 @@
 | 文档 | 内容 |
 |---|---|
 | [../protocol/ENGINE_PROTOCOL.md](../protocol/ENGINE_PROTOCOL.md) | 协议 v2：命令、JSON 流式分析、错误与版本规则 |
-| [ENGINE_ARCHITECTURE.zh-CN.md](ENGINE_ARCHITECTURE.zh-CN.md) | 数据结构、搜索流程、MCTS、网络与 CUDA 后端 |
+| [ENGINE_ARCHITECTURE.zh-CN.md](ENGINE_ARCHITECTURE.zh-CN.md) | 数据结构、搜索流程、MCTS、网络与 CUDA 后端；§10 为 5000v 分支因子实测 |
 | [ELO_METHODOLOGY.zh-CN.md](ELO_METHODOLOGY.zh-CN.md) | 评测协议与 Elo 拟合（含"预算必须按 visits"的硬规则） |
 
 ## 训练与评测

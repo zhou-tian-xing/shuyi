@@ -712,7 +712,9 @@ def main(argv=None):
     def draw_a(epoch):
         if not args.a_cond:
             return
-        rng = np.random.default_rng(np.uint64(args.seed) * 7919 + epoch)
+        # Plain Python ints: np.uint64 * int upcasts to float64 on numpy 1.x,
+        # and default_rng refuses a float seed.
+        rng = np.random.default_rng(int(args.seed) * 7919 + int(epoch))
         draw = rng.uniform(-args.a_range, args.a_range, len(data)).astype(np.float32)
         if args.a_anchor_fraction > 0.0:
             at_anchor = rng.random(len(data)) < args.a_anchor_fraction
