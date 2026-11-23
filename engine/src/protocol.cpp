@@ -190,7 +190,7 @@ bool ProtocolSession::applyBackend(std::string* error) {
 #endif
 }
 
-bool ProtocolSession::rebuild(EngineKind kind, std::string* error) {
+bool ProtocolSession::rebuild(EngineKind kind, std::string* error, bool requireReady) {
     stopAndJoin();
     std::unique_ptr<Engine> fresh = makeEngine(kind, options_);
     if (!fresh) {
@@ -198,7 +198,7 @@ bool ProtocolSession::rebuild(EngineKind kind, std::string* error) {
         return false;
     }
     std::string reason;
-    if (!fresh->ready(&reason)) {
+    if (requireReady && !fresh->ready(&reason)) {
         if (error) *error = reason;
         return false;
     }
@@ -329,7 +329,7 @@ void ProtocolSession::handle(const std::string& raw) {
             applyBackend(&ignored);
             return respond(false, error);
         }
-        if (!rebuild(kind_, &error)) return respond(false, error);
+        if (!rebuild(kind_, &error, false)) return respond(false, error);
         return respond(true, backendUsed_);
     }
     if (command == "set_model") {
@@ -386,8 +386,11 @@ void ProtocolSession::handle(const std::string& raw) {
         stopAndJoin();
         options_.aValue = value;
         std::string error;
-        if (!rebuild(kind_, &error)) return respond(false, error);
-        return respond(true, std::to_string(value));
+        if (!rebuild(kind_, &error, false)) return respond(false, error);
+        // 1.26 rather than 1.260000: the reply is echoed by front ends.
+        std::ostringstream formatted;
+        formatted << value;
+        return respond(true, formatted.str());
     }
     if (command == "set_window") {
         int halfWidth = 0;
@@ -396,7 +399,7 @@ void ProtocolSession::handle(const std::string& raw) {
         stopAndJoin();
         options_.aspirationWindow = halfWidth;
         std::string error;
-        if (!rebuild(kind_, &error)) return respond(false, error);
+        if (!rebuild(kind_, &error, false)) return respond(false, error);
         return respond(true, std::to_string(halfWidth));
     }
     if (command == "set_pvs") {
@@ -409,7 +412,7 @@ void ProtocolSession::handle(const std::string& raw) {
         stopAndJoin();
         options_.usePvs = enabled;
         std::string error;
-        if (!rebuild(kind_, &error)) return respond(false, error);
+        if (!rebuild(kind_, &error, false)) return respond(false, error);
         return respond(true, enabled ? "on" : "off");
     }
     if (command == "play") {
@@ -526,7 +529,9 @@ void ProtocolSession::cmdSetEngine(std::string& name) {
     EngineKind kind;
     if (!parseEngineName(lower(name), kind)) return respond(false, "unknown engine: " + name);
     std::string error;
-    if (!rebuild(kind, &error)) return respond(false, error);
+    // Selecting an engine is not running it: `mcts_nn` may be selected before its
+    // model arrives, and only a search without a model is an error.
+    if (!rebuild(kind, &error, false)) return respond(false, error);
     respond(true, engineName(kind));
 }
 

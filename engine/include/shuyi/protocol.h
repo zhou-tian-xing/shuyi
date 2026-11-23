@@ -37,7 +37,12 @@ private:
     void respond(bool ok, const std::string& text) { respond(id_, ok, text); }
 
     // engine lifecycle
-    bool rebuild(EngineKind kind, std::string* error);
+    // `requireReady` is false for commands that only configure the search (A
+    // value, window, PVS, engine selection): selecting `mcts_nn` before its model
+    // has arrived is a legal state, and only searching without a model is an
+    // error.  `set_model` does require it, because accepting a model that cannot
+    // load would hide the failure until the next move.
+    bool rebuild(EngineKind kind, std::string* error, bool requireReady = true);
     bool applyBackend(std::string* error);   // cpu / cuda / auto -> evaluator
     bool ensureReady(std::string* error) const;
     void stopAndJoin();

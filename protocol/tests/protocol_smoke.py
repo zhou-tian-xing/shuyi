@@ -50,6 +50,17 @@ def main(argv):
         check(not engine.command("frobnicate").ok, "unknown command must fail")
         check(not engine.command("set_backend quantum").ok, "bad backend must fail")
 
+        # Configuring the search before a model exists is legal; only *searching*
+        # without one is an error.  (A front end selects the engine first and sets
+        # the model right after, so refusing `set_engine` or `set_a` here would
+        # make a normal start-up impossible.)
+        engine.command("ruleset blocking")
+        check(engine.command("set_a 1").ok, "set_a must work before a model is loaded")
+        check(engine.command("set_engine mcts_nn").ok, "selecting mcts_nn without a model")
+        reply = engine.command("analyze red 16")
+        check(not reply.ok and "model" in reply.text,
+              f"searching mcts_nn without a model must fail clearly: {reply}")
+
         # A model trained for the other rule set is refused before it is used.
         engine.command("ruleset blocking")
         reply = engine.command(f"set_model {model}")

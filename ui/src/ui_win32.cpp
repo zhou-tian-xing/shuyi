@@ -787,7 +787,20 @@ void setEngineChoice(EngineChoice choice);
 
 void selectModel(int index) {
     if (index < 0 || index >= static_cast<int>(g_modelList.size())) return;
-    g_nnModelPath = g_modelList[index].enginePath;
+    const ModelEntry& entry = g_modelList[index];
+    // A network trained for the other rule set is not a valid choice: the engine
+    // would refuse it later, so say it here while the reason is obvious.
+    if (entry.ruleset >= 0 && entry.ruleset != static_cast<int>(g_ruleset)) {
+        MessageBoxW(g_hwnd,
+                    (L"这个模型是用“" + std::wstring(entry.ruleset == 1 ? L"阻挡" : L"现行") +
+                     L"规则”训练的，当前局面是“" +
+                     std::wstring(g_ruleset == Ruleset::Blocking ? L"阻挡" : L"现行") +
+                     L"规则”。\n\n请先在 规则 菜单切换规则（只能在新局前切换），再选模型。")
+                        .c_str(),
+                    L"模型与规则不匹配", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    g_nnModelPath = entry.enginePath;
     setEngineChoice(EngineChoice::MctsNn);
 }
 
@@ -985,6 +998,16 @@ bool startEngineProcess() {
         run("set_visits " + std::to_string(g_analysisVisits));
     } else {
         run("set_time 650");
+    }
+    if (failure.empty() && g_engineChoice == EngineChoice::MctsNn) {
+        // `set_model` + `set_engine` both succeeded, but "ready" is the engine's
+        // own answer to "can you search with this network": ask it, once.
+        std::string capabilities;
+        if (!g_engineClient.command("capabilities", &capabilities, 3000) ||
+            capabilities.find("model=1") == std::string::npos) {
+            failure = L"引擎没有加载到模型：\n" + widen(g_nnModelPath) +
+                      L"\n\n请在 引擎 → MCTS + 网络 里选择与当前规则一致的模型。";
+        }
     }
     if (!failure.empty()) {
         stopEngineProcess();

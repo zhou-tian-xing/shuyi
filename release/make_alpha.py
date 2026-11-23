@@ -61,7 +61,12 @@ README = """数弈 alpha
 * shuyi.exe            Win32 界面（规则与显示；不含搜索）
 * shuyi_engine.exe     NN-MCTS 引擎，CUDA 12.4 构建；没有可用 GPU 时自动用 CPU
 * models/*.bin         最新阻挡规则网络
+* DESIGN.md            引擎设计、网络形状、训练思路、现有训练量与已知短板
+* RULES.zh-CN.md       规则全文
 * ENGINE_PROTOCOL.md   引擎协议（行协议 + JSON 分析流）
+* BUILD.txt            这次构建的 commit、时间与三个文件的校验和
+
+这是给开发者之间分享的包：DESIGN.md 里有完整的"为什么这么设计"。
 """
 
 INI = """# shuyi-ui.ini — 界面设置
@@ -75,6 +80,36 @@ a_value=1
 # 规则集：classic / blocking。模型必须与它一致，否则引擎会拒绝加载。
 ruleset=blocking
 """
+
+
+def buildInfo(args):
+    """What exactly was built, so a bug report can name a binary."""
+    import datetime
+    import hashlib
+    import subprocess
+
+    def git(*rest):
+        try:
+            return subprocess.run(["git", *rest], cwd=REPO, capture_output=True, text=True,
+                                  timeout=10).stdout.strip()
+        except Exception:  # noqa: BLE001 - a package must build without git too
+            return "unknown"
+
+    def digest(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+    lines = [
+        "数弈 alpha build",
+        f"commit   {git('rev-parse', '--short', 'HEAD')}",
+        f"date     {datetime.datetime.now().isoformat(timespec='seconds')}",
+        f"engine   {args.engine.name}  sha256:{digest(args.engine)}"
+        "  (CUDA 12.4 build; CPU forward when no GPU is available)",
+        f"ui       {args.ui.name}  sha256:{digest(args.ui)}",
+        f"model    {args.model.name}  sha256:{digest(args.model)}",
+        "",
+        "Rebuild: see release/make_alpha.py in the source repository.",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def main(argv):
@@ -99,8 +134,13 @@ def main(argv):
     shutil.copy2(args.engine, stage / "shuyi_engine.exe")
     shutil.copy2(args.model, stage / "models" / args.model.name)
     shutil.copy2(REPO / "protocol" / "ENGINE_PROTOCOL.md", stage / "ENGINE_PROTOCOL.md")
+    shutil.copy2(REPO / "docs" / "RULES.zh-CN.md", stage / "RULES.zh-CN.md")
+    # The design/training notes are part of the package: this alpha is meant to be
+    # handed to other developers, so "how it works" travels with it.
+    shutil.copy2(REPO / "release" / "ALPHA_NOTES.md", stage / "DESIGN.md")
     (stage / "shuyi-ui.ini").write_text(INI, encoding="utf-8")
     (stage / "README.txt").write_text(README, encoding="utf-8")
+    (stage / "BUILD.txt").write_text(buildInfo(args), encoding="utf-8")
 
     archive = args.out / f"{NAME}.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zip_file:
