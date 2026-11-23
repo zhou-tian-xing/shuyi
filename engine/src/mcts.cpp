@@ -123,6 +123,7 @@ public:
 
     Analysis search(const Position& position, const SearchRequest& request) override {
         ensureRoot(position);
+        treeCapped_ = false;
         if (position.gameOver()) return snapshot();
         if (options_.rootDirichletAlpha > 0.0 && !rootNoiseApplied_ && edgeCount_.size() > 0 &&
             edgeCount_[root_] > 1) {
@@ -138,6 +139,11 @@ public:
             if (request.stop && request.stop->load(std::memory_order_relaxed)) break;
             simulate(position);
             ++simulated;
+            // The tree hit its memory cap: stop instead of quietly switching the
+            // remaining visits to rollouts.  Silently degrading the evaluation
+            // mid-analysis is how a stale build ended up reporting a solid 100%
+            // win at ~35k visits.
+            if (treeCapped_) break;
             // The position is solved with its exact margin: further visits cannot
             // change the result, so the rest of the budget stays unspent on
             // purpose.  A solved value with an unfinished margin keeps searching,
@@ -198,20 +204,17 @@ private:
         rootKey_ = 0;
         rootValid_ = false;
         rootNoiseApplied_ = false;
+        treeCapped_ = false;
     }
 
     void ensureRoot(const Position& position) {
         // rootKey_ = 0 is also the *empty board's* key, so an explicit validity
         // flag is needed: without it the root of a fresh tree looked like it
-        // already matched an empty board and kept the identity symmetry mask.
+        // already matched an empty board.
         if (!rootValid_ || rootKey_ != position.key()) {
             resetTree();
             rootKey_ = position.key();
             rootValid_ = true;
-            // The tree is only worth exploring once per symmetry class: on an
-            // empty or symmetric board half of the root moves are exact copies of
-            // each other.
-            symmetry_[root_] = position.symmetryMask();
         }
     }
 
@@ -491,11 +494,12 @@ private:
                 bool* hasScore = nullptr) {
         if (edgeCount_[node] != 0 || terminal_[node] || deadEnd_[node]) return false;
         if (edges_.size() >= options_.mctsMaxTreeEdges) {
-            // Keep the tree bounded during very long analysis sessions.  The
-            // node then behaves like a rollout leaf instead of allocating new
-            // children forever -- but it is NOT terminal, so its static score
-            // must never be reported as a hard result.
+            // The tree is out of memory budget.  Flag it so the search stops after
+            // this simulation: a half-expanded leaf must never be scored as if the
+            // game were over, and the remaining visits must not silently turn into
+            // rollouts.
             deadEnd_[node] = 1;
+            treeCapped_ = true;
             return false;
         }
         std::vector<float> priors;
@@ -504,6 +508,10 @@ private:
         double value = 0.0;
         bool hasValue = false;
         bool complete = false;
+        // Detect the symmetry of *this* position.  Deriving it from the parent's
+        // group plus the move is a nice shortcut but it is one more invariant to
+        // trust; the direct check is 8 x 81 comparisons and cannot be wrong.
+        symmetry_[node] = position.symmetryMask();
         std::vector<Move> moves = selectExpansionMoves(node, position, symmetry_[node], priors,
                                                        searchable, representatives, &value, &hasValue,
                                                        scoreOut, hasScore, &complete);
@@ -584,11 +592,8 @@ private:
             const int untried = chooseUntried(node);
             if (untried >= 0) {
                 Edge& edge = edges_[untried];
-                const std::uint8_t childSymmetry =
-                    static_cast<std::uint8_t>(symmetry_[node] &
-                                              Position::stabilizer(edge.move.cell, symmetry_[node]));
                 position.play(edge.move);
-                const int child = newNode(node, edge.move, position.gameOver(), childSymmetry);
+                const int child = newNode(node, edge.move, position.gameOver());
                 edge.child = child;
                 path.push_back({node, untried, child});
                 node = child;
@@ -980,6 +985,8 @@ private:
     int root_ = 0;
     std::uint64_t rootKey_ = 0;
     bool rootValid_ = false;
+    // The tree reached mctsMaxTreeEdges during this search; stop cleanly.
+    bool treeCapped_ = false;
     bool rootNoiseApplied_ = false;
 };
 

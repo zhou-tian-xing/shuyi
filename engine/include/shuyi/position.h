@@ -122,8 +122,6 @@ struct Position {
     // Bit `s` set when symmetry `s` maps this position onto itself (bit 0 is the
     // identity and is always set).
     std::uint8_t symmetryMask() const;
-    // Subgroup of `mask` that leaves `cell` where it is.
-    static std::uint8_t stabilizer(int cell, std::uint8_t mask);
     // Number of cells in the orbit of `cell` under `mask`.
     static int orbitSize(int cell, std::uint8_t mask);
 

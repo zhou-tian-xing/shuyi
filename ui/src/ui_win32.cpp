@@ -1591,7 +1591,11 @@ void drawAnalysisMarks(HDC dc, const Layout& layout) {
         const RECT mark{cx - radius, cy - radius, cx + radius, cy + radius};
         roundRect(dc, mark, corner, mixColor(kBoard, colour, 0.62), colour, std::max(1, scale(1)));
         int y = cy + textTop;
-        drawTextAt(dc, formatWinRate(info.winrate), cx - radius, y, radius * 2, rowHeight,
+        // Show the same number the ranking uses: a solved cell shows its exact
+        // value, an estimate shows the Wilson lower bound.  A single lucky sample
+        // must not be printed as "100%" -- that reads like a proof, and the engine
+        // has no proof there (only `proven` is a proof).
+        drawTextAt(dc, formatWinRate(cellScore(info)), cx - radius, y, radius * 2, rowHeight,
                    g_fontSmall, RGB(28, 32, 38));
         y += rowHeight;
         drawTextAt(dc, formatVisits(info.visits), cx - radius, y, radius * 2, rowHeight,
@@ -1889,12 +1893,16 @@ void drawStatus(HDC dc, const Layout& layout) {
     if (!g_position.gameOver() && g_hoverCell >= 0 && g_engineAnalysis.valid &&
         g_engineAnalysis.hasCell[g_hoverCell]) {
         const auto& info = g_engineAnalysis.cells[g_hoverCell];
+        // Same convention as the marks: exact value when solved, Wilson lower
+        // bound otherwise, so a 1-visit sample never reads as a certainty.
+        const double shown = info.proven ? info.winrate : winRateLowerBound(info.winrate, info.visits);
         left = L"格 " + widen(squareName(g_hoverCell)) + L" · 数字 " +
                std::to_wstring(static_cast<int>(info.move.number)) + L" · 胜率 " +
-               std::to_wstring(static_cast<int>(std::lround(info.winrate * 100.0))) +
+               std::to_wstring(static_cast<int>(std::lround(shown * 100.0))) +
                L"% · 访问 " + std::to_wstring(info.visits) + L" · 均分 " +
                signedDecimal(info.averageScore);
         if (!info.hasData) left += L"（未搜索）";
+        if (info.proven) left += L"（已解算）";
     } else if (g_thinking) {
         left = L"电脑思考中，请稍候…";
     } else if (g_position.gameOver()) {

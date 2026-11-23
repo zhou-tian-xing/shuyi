@@ -39,11 +39,16 @@ tests/
    MCTS 解释成模拟次数。默认值就是 **512**，因为 0 会被前端当成"按墙钟"，
    而 analyze 模式的墙钟是 1 小时——访问数能涨到几千万。要回到墙钟必须显式 `set_visits 0`。
    回归测试：`tests/visit_budget_smoke.py`。
-2. **对称性：等价着法只搜一次。** 棋盘在 8 个等距变换下不变，两套规则都只看"本身 + 四邻"，
-   所以 `Position::symmetryMask()` 非恒等时，展开只给每个轨道留一个可搜索代表
-   （先验最高的那个），其余边 `searchable=0` 并把 `representative` 指向代表。
-   报告时等价格子用代表边的数字，`rootPolicy()` 让它们共享访问数。
-   节点自带对称群掩码，子节点是 `父群 ∩ 固定该着法的子群`，不重复扫棋盘。
+   `info visits=` 只有两种情况下小于预算：局面被**证明**了，或者树撞到
+   `mctsMaxTreeEdges`（4M 条边）——后者现在会**直接结束本次搜索**，绝不把剩下的预算
+   悄悄换成 rollout（旧代码在撞限时把未终局局面当终局算，空盘 35000 visits 就会伪造出
+   一个 100% 的点，见 `testTreeCapIsNotTerminal`）。
+2. **对称性：等价着法只搜一次。** 棋盘在 8 个等距变换（恒等、2 个轴对称、2 个对角线轴、
+   90/180/270 旋转）下不变，两套规则都只看"本身 + 四邻"，所以
+   **每个局面直接检测一次**（`Position::symmetryMask()`，8×81 次比较），不依赖从父节点
+   推导。`symmetryMask()` 非恒等时，展开只给每个轨道留一个可搜索代表（先验最高的那个），
+   其余边 `searchable=0` 并把 `representative` 指向代表。报告时等价格子用代表边的数字，
+   `rootPolicy()` 让它们共享访问数。
 3. **规则要隔离。** 搜索骨架里没有 `if (ruleset == Blocking)`；阻挡规则只在
    `ai_blocking.cpp` + `position.cpp` 的阻挡分支 + `rules.h` 里出现。
    看走眼的最快办法：`grep -rn "Blocking" src/`，应该只命中 position.cpp 和 ai_blocking.cpp。

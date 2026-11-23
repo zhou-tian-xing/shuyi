@@ -146,18 +146,7 @@ std::uint8_t Position::symmetryMask() const {
     return mask;
 }
 
-std::uint8_t Position::stabilizer(int cell, std::uint8_t mask) {
-    std::uint8_t out = 0;
-    for (int symmetry = 0; symmetry < kSymmetryCount; ++symmetry) {
-        if ((mask >> symmetry) & 1u) {
-            if (transformCell(cell, symmetry) == cell) out = static_cast<std::uint8_t>(out | (1u << symmetry));
-        }
-    }
-    return out;
-}
-
-int Position::orbitSize(int cell, std::uint8_t mask) {
-    int size = 0;
+int Position::orbitSize(int cell, std::uint8_t mask) {    int size = 0;
     for (int symmetry = 0; symmetry < kSymmetryCount; ++symmetry) {
         if (((mask >> symmetry) & 1u) == 0) continue;
         bool seen = false;

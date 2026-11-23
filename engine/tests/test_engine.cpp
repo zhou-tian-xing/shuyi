@@ -77,6 +77,33 @@ void testEndgameExactScore() {
     CHECK(finish.hasScore);
 }
 
+// The tree-size cap must end the search cleanly.  It used to reuse the "terminal"
+// flag, so every leaf refused by the cap was scored with rawScore() as if the game
+// were over: at ~35k visits on an empty board (where the old 1.5M edge cap was
+// hit) a corner cell then reported an exact 100% win on an unsolved position.
+void testTreeCapIsNotTerminal() {
+    const std::string headless = std::string(SHUYI_SOURCE_DIR) + "/models/shuyi_resnet_v1.bin";
+    EngineOptions options = optionsFor(24680);
+    options.nnModelPath = headless;
+    options.nnValueBlend = 1.0;
+    options.mctsMaxTreeEdges = 4000;  // reached within a few hundred visits
+    auto engine = makeEngine(EngineKind::MctsNn, options);
+    Position opening;
+    SearchRequest request;
+    request.timeLimitMs = 0;
+    request.visits = 20000;
+    const Analysis analysis = engine->search(opening, request);
+    CHECK(analysis.valid);
+    CHECK(opening.isLegal(analysis.best));
+    // The cap stops the search instead of silently degrading it, so the budget is
+    // not spent -- and nothing is claimed to be solved.
+    CHECK(analysis.visits < request.visits);
+    CHECK(!analysis.proven);
+    for (const CellAnalysis& info : analysis.cells) {
+        CHECK(!info.proven);
+    }
+}
+
 // A solved position must return the exact result with the right sign, and it
 // must stop spending visits once it is solved.  This is the regression test for
 // the sign of the terminal value as it travels back up the tree: a loss that
@@ -489,6 +516,7 @@ int runEngineTests() {
     testDirichletRoot();
     testNnModel();
     testEndgameExactScore();
+    testTreeCapIsNotTerminal();
     testTerminalProof();
     testSymmetryReport();
     testVisitBudget();

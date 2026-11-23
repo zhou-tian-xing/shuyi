@@ -314,9 +314,6 @@ void testBoardSymmetry() {
     CHECK(Position::orbitSize(index(4, 0), all) == 4);
     CHECK(Position::orbitSize(index(2, 2), all) == 4);
     CHECK(Position::orbitSize(index(2, 0), all) == 8);
-    // A stabiliser only keeps the symmetries that fix the cell.
-    CHECK(Position::stabilizer(index(4, 4), all) == all);
-    CHECK(Position::stabilizer(index(0, 0), all) == ((1u << 0) | (1u << 4)));
 }
 
 void testRulesetNames() {

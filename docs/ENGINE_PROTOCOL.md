@@ -36,7 +36,7 @@ stdout 只用于协议；诊断信息写 stderr（UI 客户端会重定向到 NU
 | `set_time 650` | 每手搜索时间（ms）；没有 `set_visits` 时才是预算 |
 | `set_a 1` | 设置 A值；会重建引擎 |
 | `set_model models/shuyi_resnet_v1.bin` | 设置 ResNet 权重（文件头携带通道/块数）；空路径表示不使用 |
-| `set_backend cpu\|cuda\|auto` | 选择前向后端；构建里没有 CUDA 时静默落到 CPU |
+| `set_backend cpu\|cuda\|auto` | 选择前向后端（默认 `auto`）；没有 CUDA 时静默落到 CPU |
 | `set_window 24` | 设置剪枝 aspiration 窗口半宽；0 表示完整窗口 |
 | `set_pvs on\|off` | 开关剪枝 PVS 零窗口侦察 |
 | `play red e5 5` | 红方在 `e5` 放数字 5 |
@@ -67,7 +67,9 @@ info engine=mcts_nn nn=b4c32-s34760-d470705.bin backend=cuda hasscore=1 proven=0
   cells=a1:1:0.52:30:1.0:0,...,i9:4:0.48:20:-0.4:0
 ```
 
-- `visits`：实际完成的模拟数。等于预算；**除非** `proven=1`（解算了就提前停）。
+- `visits`：实际完成的模拟数。等于预算；**除非** `proven=1`（解算了就提前停），
+  或者树撞到 `mctsMaxTreeEdges`（4M 条边，约 200 MB）——那时本次搜索**直接结束**，
+  不会把剩下的预算换成别的评估方式。
 - `hasscore`：`score` 是否是真分数。为 1 时它只能来自两种来源：已解算的终局，
   或模型自带的分数头。为 0 时界面显示 `--`。**禁止**再用胜率线性映射出目差。
 - `proven`：这个局面已被规则求解，`winrate`/`score`/`best` 是硬结果而不是估计。

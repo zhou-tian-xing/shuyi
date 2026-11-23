@@ -45,7 +45,10 @@ struct EngineOptions {
     int mctsNnRootChildren = 16; // MCTS-NN root width cap (CPU inference)
     int aspirationWindow = 24;
     bool usePvs = true;
-    std::size_t mctsMaxTreeEdges = 1500000;
+    // Hard cap on tree edges (memory guard).  Reaching it ends the search with the
+    // visits spent so far instead of degrading the evaluation; 4M edges is roughly
+    // 200 MB of host memory, which covers a 100k-visit analysis on this game.
+    std::size_t mctsMaxTreeEdges = 4000000;
     double mctsC = 1.2;
     double mctsPuct = 1.7;
     double nnPriorBlend = 0.5; // 1 = pure policy, 0 = uniform

@@ -473,7 +473,10 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<bool> running_{false};
     bool quit_ = false;
-    std::string backend_ = "cpu";   // requested backend: cpu / cuda / auto
+    // Requested backend: cpu / cuda / auto.  Auto by default: an engine built with
+    // CUDA must use the GPU without waiting for the front end to ask, otherwise a
+    // front end that never sends `set_backend` silently runs on one CPU core.
+    std::string backend_ = "auto";
     std::mutex outputMutex_;
 };
 
