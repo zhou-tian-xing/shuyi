@@ -49,6 +49,8 @@ tests/
    推导。`symmetryMask()` 非恒等时，展开只给每个轨道留一个可搜索代表（先验最高的那个），
    其余边 `searchable=0` 并把 `representative` 指向代表。报告时等价格子用代表边的数字，
    `rootPolicy()` 让它们共享访问数。
+   根宽度按预算定（`max(32, visits/16)`，`EngineOptions::mctsRootChildren` 只用于墙钟模式），
+   所以长分析会开满所有轨道，整盘都有数字。
 3. **规则要隔离。** 搜索骨架里没有 `if (ruleset == Blocking)`；阻挡规则只在
    `ai_blocking.cpp` + `position.cpp` 的阻挡分支 + `rules.h` 里出现。
    看走眼的最快办法：`grep -rn "Blocking" src/`，应该只命中 position.cpp 和 ai_blocking.cpp。

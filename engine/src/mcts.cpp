@@ -134,6 +134,11 @@ public:
         auto lastReport = started - std::chrono::milliseconds(1000);
         const int timeLimit = std::max(0, request.timeLimitMs);
         const int visitLimit = std::max(0, request.visits);
+        // Size the root from the budget: every root move costs one network forward,
+        // so a short search opens a few dozen of them and a long analysis opens
+        // every symmetry orbit (the whole board gets numbers instead of a handful
+        // of marks).  A clock-based search keeps the configured ceiling.
+        rootWidthCap_ = visitLimit > 0 ? std::max(32, visitLimit / 16) : options_.mctsRootChildren;
         int simulated = 0;
         do {
             if (request.stop && request.stop->load(std::memory_order_relaxed)) break;
@@ -387,7 +392,7 @@ private:
             return moves;
         }
 
-        const int maxChildren = std::max(1, node == root_ ? options_.mctsRootChildren
+        const int maxChildren = std::max(1, node == root_ ? rootWidthCap_
                                                           : options_.mctsMaxChildren);
         if (static_cast<int>(moves.size()) <= maxChildren) {
             if (complete) *complete = true;
@@ -983,6 +988,8 @@ private:
     std::vector<std::uint8_t> symmetry_;
     std::vector<Edge> edges_;
     int root_ = 0;
+    // Root width for the current search, derived from the visit budget.
+    int rootWidthCap_ = 64;
     std::uint64_t rootKey_ = 0;
     bool rootValid_ = false;
     // The tree reached mctsMaxTreeEdges during this search; stop cleanly.
@@ -997,13 +1004,9 @@ std::unique_ptr<Engine> makeMctsEngine(const EngineOptions& options, bool useNn)
 }
 
 std::unique_ptr<Engine> makeMctsNnEngine(const EngineOptions& options) {
-    EngineOptions adjusted = options;
-    // NN inference is much more expensive than a random rollout.  A smaller
-    // root width keeps short time controls from spending every visit on the
-    // root's children.  Self-play can raise this when it has a larger budget.
-    adjusted.mctsRootChildren =
-        std::min(adjusted.mctsRootChildren, std::max(1, adjusted.mctsNnRootChildren));
-    return std::make_unique<MctsEngine>(adjusted, true);
+    // The root is sized from the visit budget inside search(), so there is no
+    // separate NN width cap any more.
+    return std::make_unique<MctsEngine>(options, true);
 }
 
 } // namespace shuyi

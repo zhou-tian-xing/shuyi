@@ -37,12 +37,14 @@ struct EngineOptions {
     int ttSizeMb = 16;
     int maxDepth = 12;
     int mctsMaxChildren = 48;
+    // Root width ceiling when searching against a clock (a visit budget sizes the
+    // root itself: one network forward per root move, so a 512-visit search opens
+    // 32 of them and a 35k-visit analysis opens every symmetry orbit).
     int mctsRootChildren = 64;
     // With this many plies left the tree stops pruning its width: exact terminal
     // results are worth more than any network estimate, and a pruned tree may
     // never reach them.  0 disables.
     int mctsFullWidthPlies = 6;
-    int mctsNnRootChildren = 16; // MCTS-NN root width cap (CPU inference)
     int aspirationWindow = 24;
     bool usePvs = true;
     // Hard cap on tree edges (memory guard).  Reaching it ends the search with the

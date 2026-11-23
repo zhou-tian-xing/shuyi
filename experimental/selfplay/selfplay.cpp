@@ -239,7 +239,6 @@ int main(int argc, char** argv) {
             engineOptions.visits = options.visits;
             engineOptions.aValue = 1.0;
             engineOptions.mctsRootChildren = options.rootChildren;
-            engineOptions.mctsNnRootChildren = options.rootChildren;
             engineOptions.rootDirichletAlpha = options.dirichletAlpha;
             engineOptions.rootNoiseWeight = options.noiseWeight;
             engineOptions.nnModelPath = options.modelPath;

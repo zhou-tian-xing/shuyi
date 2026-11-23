@@ -131,7 +131,6 @@ std::unique_ptr<Engine> create(EngineKind kind, const Options& options, const st
     engineOptions.ttSizeMb = 16;
     engineOptions.mctsMaxChildren = 32;
     engineOptions.mctsRootChildren = 64;
-    engineOptions.mctsNnRootChildren = options.rootChildren;
     engineOptions.nnModelPath = model;
     return makeEngine(kind, engineOptions);
 }
