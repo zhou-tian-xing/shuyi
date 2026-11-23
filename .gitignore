@@ -4,9 +4,8 @@ build-cuda/
 build_ui_only/
 build_engine_only/
 dist/
-# Training runs: models, self-play data and logs are big binaries, kept out of
-# git on purpose (they live on the server and in runs/ on this machine).
+# Training runs: models, self-play data and logs are big binaries produced by the
+# training scripts (and on the server), not source.  models/ stays tracked: the
+# tests load models/shuyi_resnet_v1.bin.
 runs/
-*.bin
-# Local scratch
 *.log
