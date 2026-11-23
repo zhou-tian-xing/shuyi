@@ -39,6 +39,11 @@ A_ANCHOR="${A_ANCHOR:-}"
 # may list several shard files, globs or directories (space separated).
 INIT_MODEL="${INIT_MODEL:-}"
 INIT_DATA="${INIT_DATA:-}"
+# Empty -> the pipeline defaults (lr 2e-3 is a from-scratch rate: a warm start
+# needs something like 5e-4 or it throws the old weights away).
+LR="${LR:-}"
+ELO_EVERY="${ELO_EVERY:-}"
+ELO_VISITS="${ELO_VISITS:-}"
 
 BIN="$BUILD/shuyi_selfplay_gpu"
 [ -x "$BIN" ] || { echo "build first: bash training/server_setup.sh" >&2; exit 1; }
@@ -61,6 +66,15 @@ if [ "$A_COND" = "1" ]; then
 fi
 if [ -n "$KOMI" ]; then
     EXTRA+=(--komi "$KOMI")
+fi
+if [ -n "$LR" ]; then
+    EXTRA+=(--lr "$LR")
+fi
+if [ -n "$ELO_EVERY" ]; then
+    EXTRA+=(--elo-every "$ELO_EVERY")
+fi
+if [ -n "$ELO_VISITS" ]; then
+    EXTRA+=(--elo-visits "$ELO_VISITS")
 fi
 if [ -n "$INIT_MODEL" ]; then
     if [ -z "$INIT_DATA" ]; then

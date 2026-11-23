@@ -726,6 +726,11 @@ def main(argv=None):
             shards = replay_shards(run_dir, gen, args.replay_gens) or [shard]
             if args.dry_run:
                 shards = [shard]
+            # A warm start has no self-play shard of its own, so the data it
+            # trained on would leave the replay window immediately.  Keep it for
+            # as long as the window would have kept generation 0.
+            if args.init_model and gen <= args.replay_gens:
+                shards = expand_shards(args.init_data) + shards
         log(f"generation {gen}: training on {len(shards)} shard(s)")
 
         if mode == "warm":
