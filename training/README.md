@@ -160,6 +160,21 @@ python training/elo.py --report runs/arena/blocking512/table.json --anchor rando
 
 ## 6. 改进记录
 
+### 2026-11-23 · 产品化拆分：ui / engine / core / protocol
+
+1. **仓库按产品拆分**：`core/`（规则，两侧唯一共享）、`engine/`（无头引擎）、`ui/`（界面，
+   不含搜索）、`protocol/`（唯一契约）、`tools/`（开发工具，不发布）、`training/`（本流水线）。
+   引擎和界面各自有 CMake 工程，可以单独构建、单独打包、单独下载；界面链接 `core/`，
+   不再链接 `shuyi_search`。
+2. **协议 v2**：持久化进程 + 命令驱动 + 按 interval 流式推送 `info` JSON。命令可带 id，
+   应答原样带回，乱序不会认错；`analyze` 自己结束时回 `= done`，被 `stop` 时回 `= stopped`。
+3. **静默降级全部删除**：`cuda` 不可用直接报错；模型与规则集不符拒绝加载；`mcts_nn` 缺模型
+   拒绝搜索；界面在没有引擎时不再自己走棋（内置 AI 与 `SHUYI_UI_BUILTIN_AI` 已删除）。
+4. **树大小上限彻底移除**（CPU/CUDA 两侧）：它会在 3.5 万 visits 时把未终局叶子当终局，
+   产生 100% 的假胜率。停止条件只剩预算、墙钟、`stop`。
+5. **alpha 包**：`release/make_alpha.py` 生成 `dist/shuyi-alpha.zip`（界面 + CUDA 引擎 +
+   最新阻挡模型 + 协议 + 说明，0.6 MB），包里没有训练脚本、工具或源码。
+
 ### 2026-11-22 · srv1 实跑后的修正
 
 1. **顺次训练**：链条无条件前进（第 N+1 代打第 N 代的数据、从第 N 代权重续训），

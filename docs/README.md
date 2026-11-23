@@ -14,7 +14,7 @@
 
 | 文档 | 内容 |
 |---|---|
-| [ENGINE_PROTOCOL.md](ENGINE_PROTOCOL.md) | 行协议：命令、应答、`info` 字段 |
+| [../protocol/ENGINE_PROTOCOL.md](../protocol/ENGINE_PROTOCOL.md) | 协议 v2：命令、JSON 流式分析、错误与版本规则 |
 | [ENGINE_ARCHITECTURE.zh-CN.md](ENGINE_ARCHITECTURE.zh-CN.md) | 数据结构、搜索流程、MCTS、网络与 CUDA 后端 |
 | [ELO_METHODOLOGY.zh-CN.md](ELO_METHODOLOGY.zh-CN.md) | 评测协议与 Elo 拟合（含"预算必须按 visits"的硬规则） |
 
