@@ -27,21 +27,26 @@
 | 项 | 数值 |
 | --- | ---: |
 | 代数 | **6** |
-| 每代对局 | **3,038**（≈158,000 局面） |
-| 每代 epoch | 19（训练集 ≈ 284,000 局面，含回放） |
-| 每代优化步 | **10,102** |
-| 每代耗时 | 95 分钟（自对弈 87、训练 4、arena 3） |
-| 合计 | 18,228 局 / 948,000 局面 / 60,612 步 / 10.0 小时 |
+| 每代对局 | **2,177**（≈113,000 局面） |
+| 每代 epoch | 27（训练集 ≈ 204,000 局面，含回放） |
+| 每代优化步 | **10,287** |
+| 每代耗时 | 91 分钟（自对弈 82、训练 4、arena 4） |
+| 合计 | 13,062 局 / 679,000 局面 / 61,722 步 / 9.6 小时 |
 
-对照上一轮：**每代数据 ×8、每代步数 ×7、总步数 ×21**。
+对照上一轮：**每代数据 ×6、每代步数 ×7、总步数 ×21**。
+
+这些数字是脚本在机器上实测后重算的，不是我拍的表：这台 3080 的自对弈是
+**0.455 局/s**（1024 visits、batch 32），比上一台 3080 记的 0.58 慢。探针必须用
+**运行时的 batch**——用 8 局一批测出来是 0.25，会把整个会话按"半速的卡"定规模。
 
 ## 2. 一条命令
 
 ```bash
 cd /root/shuyi
-HOURS=10 \
-MODEL=runs/training/b6c96-nopass-20261124b/models/b6c96-s25920-d258451.bin \
+HOURS=9.6 \
+MODEL=models/b6c96-s25920-d258451.bin \
 RUN_NAME=b6c96-nopass-20261125a \
+SHUYI_PYTHON=/home/vipuser/miniconda3/bin/python \
 bash training/run_session.sh
 ```
 
@@ -104,3 +109,17 @@ python training/ssh.py get /root/shuyi/runs/training/<run>/manifest.json runs/tr
 - 不蒸馏：每一代只用上一代自己下的棋（上一轮的 375 局是自对弈，这次只是把量补上）；
 - 不为了"多跑几代"把每代砍回几百局——那是这轮要修的问题本身；
 - 不用 val loss 判断强弱，只看 arena 和之后的 ELO 梯子。
+
+## 8. 开箱时踩到的两个坑（已修，记录）
+
+1. **探针的 batch 和运行不一致**：探针用 `--batch-games 8` 测出 0.25 局/s，运行时是
+   batch 32（0.455 局/s），等于把整个会话按"半速的卡"定规模。现在 `BATCH_GAMES`
+   同时传给探针和 pipeline。
+2. **上传说文件带 CRLF**：Windows 工作区的 `.sh` 是 CRLF，直接 `put` 上去会让
+   `set -euo pipefail` 报 `invalid option name`，看起来像代码 bug。现在 `ssh.py put`
+   对 `.sh/.py/.md/...` 一律按 LF 写入，部署归档也走同一规则。
+
+另外这台机器上的 CUDA 二进制是从别的卡（V100, sm_70）拷来的，跑起来是
+`no kernel image is available for execution on the device`；`-arch=native` 的产物
+不会因为换卡自动重编，删掉 `build/nn_cuda.o` 重建即可（`SHUYI_CUDA_ARCH=native` 是
+按配置时那张卡算的）。
