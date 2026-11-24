@@ -47,6 +47,11 @@ INIT_DATA="${INIT_DATA:-}"
 # Empty -> the pipeline defaults (lr 2e-3 is a from-scratch rate: a warm start
 # needs something like 5e-4 or it throws the old weights away).
 LR="${LR:-}"
+# Continue a run whose manifest exists (a window that ran out mid-chain, or an
+# extra generation on the same box).  Without this the wrapper can only start new
+# runs: the pipeline refuses an existing directory, and re-running the wrapper
+# would silently be "start over" instead of "continue".
+RESUME="${RESUME:-0}"
 ELO_EVERY="${ELO_EVERY:-}"
 ELO_VISITS="${ELO_VISITS:-}"
 
@@ -73,6 +78,9 @@ mkdir -p "$REPO/runs/training/$RUN_NAME"
 LOG="$REPO/runs/training/$RUN_NAME/pipeline.log"
 
 EXTRA=()
+if [ "$RESUME" = "1" ]; then
+    EXTRA+=(--resume)
+fi
 if [ "$A_COND" = "1" ]; then
     EXTRA+=(--a-cond)
     if [ -n "$A_ANCHOR" ]; then

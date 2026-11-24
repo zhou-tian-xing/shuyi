@@ -28,24 +28,51 @@
 所以**旧模型不用重训也能直接下**：`models/b4c32-s42012-d595499` 在 nopass 下对 α-β 剪枝
 仍是 20-0，和在阻挡规则下一样（这一点曾被 `mcts.cpp` 的 `ruleset ==` 判断掩盖过）。
 
-**下一次 run（warm start，不换架构）**
+**b6c96 两小时试水（2026-11-24 11:36 → 13:14，已跑完）**
+
+在 3080 上租了 2 小时，`blocks=6 channels=96`、nopass、A 条件化、从**随机网络**起步
+（没有热启动：b4c32 的分片同架构不通用，用它当教师正是 b10c128 那轮失败的原因）：
+
+| 项 | 实测 |
+| --- | --- |
+| 前向吞吐（batch≥256，`--plan`） | **35,658 evals/s**（b4c32 在 3090 上是 99k） |
+| 自对弈（1024 visits，700 局） | 0.58 局/s，约 **28k sims/s**，一代 20 分钟 |
+| 单步价值模式（oneply，700 局） | 2.4 局/s，一代 5 分钟 |
+| 5 代总耗时（含 arena/ELO） | **1h38m** |
+| 数据 | 每代约 3.6 万局面，5 代 18.3 万 |
+
+**结果：每一代都比上一代强**（120 局 @1024 visits，对上一代）
+
+| 代 | 模式 | val_policy | 对上一代 | 池内 ELO（512 visits） |
+| ---: | --- | ---: | ---: | ---: |
+| 0 | random | 5.21 | — | −401 [−486, −322] |
+| 1 | oneply | 4.76 | 110-10（0.917） | −133 [−195, −93] |
+| 2 | oneply | 4.85 | 77-43（0.642） | −13 [−57, +44] |
+| 3 | selfplay | 3.79 | 97-23（0.808） | +226 [+166, +294] |
+| 4 | selfplay | **3.45** | 87-33（0.725） | **+321 [+266, +392]** |
+
+五个点的置信区间两两不重叠，也就是说这不是噪声：**b6c96 在 700 局/代的预算下还在涨**，
+而同样 700–800 局/代的 b4c32/v4 那一轮是 0.675 → 0.650 → 0.625 → 0.617（对前代一路下滑）。
+这就把 §0 的结论钉住了：**瓶颈是容量，不是训练量不够多**。
+
+产物在 `runs/training/b6c96-nopass-20261124/`（5 个模型 + manifest + 每代 arena/ELO）。
+
+**下一次正式 run 的建议**
 
 ```bash
-INIT_MODEL=models/b4c32-s42012-d595499.bin INIT_DATA="runs/training/b4c32-blocking-20261122/gen_00*/selfplay" VISITS=3000 GAMES=1200 GENERATIONS=6 LR=5e-4 ELO_EVERY=1 ELO_VISITS=800 RULESET=nopass bash training/run_generation.sh
+BLOCKS=6 CHANNELS=96 GAMES=1500 VISITS=1024 GENERATIONS=8 ELO_EVERY=2 ELO_VISITS=512 bash training/run_generation.sh
 ```
 
-`run_generation.sh` 现在默认 `RULESET=nopass`、默认目录 `runs/training/b4c32-nopass-<date>`，
-所以 `RULESET=nopass` 只是写明白。`INIT_DATA` 用阻挡链的 SYSELF4 分片是合法的：
-`rulesetCompatible(blocking, nopass)` 为真，训练器只拒反向。
-
-**开跑前还欠一件事**：`python training/avalue.py --ruleset nopass --komis -2,-1,0,1,2`
-重标 A\*。现在 `pipeline.py` 给 nopass 沿用阻挡的 +1.26（饥饿局只占 0.3%，A\* 应几乎不变，
-但这是"应该"不是"测过"）。
-
-**尺寸仍待决定**：v4 那一轮 4 代对上一代是 0.675 → 0.650 → 0.625 → 0.617，没有爬升。
-按 §1 的判断标准，这已经是"b4c32 抓不到特征"的形状；要么这一轮 nopass 直接用
-`BLOCKS=6 CHANNELS=96` 起（代价见 §1 的预算表），要么先用 b4c32 把 nopass 的数据口径跑通。
-两者都不改协议和数据格式。
+- 不用热启动：b6c96 没有可用的同架构权重，从随机起步这 5 代已经证明它会涨。
+- `GAMES=1500`：试水时一代 3.6 万局面明显喂不饱 103 万参数（val_policy 到第 5 代还在掉），
+  按 §2 的口径至少该翻一倍；12 小时窗口大约 8 代。
+- 想更快看到棋力，就把试水出来的 `b6c96-s13520-d183077` 当热启动起点（`LR=5e-4`），
+  省掉随机起步的 2 代。
+- **开跑前还欠一件事**：`python training/avalue.py --ruleset nopass --komis -2,-1,0,1,2`
+  重标 A\*。现在 `pipeline.py` 给 nopass 沿用阻挡的 +1.26（饥饿局只占 0.3%，
+  A\* 应几乎不变，但这是"应该"不是"测过"）。
+- 试水模型比随包的 `b4c32-s42012-d595499` 弱得多（5 代 × 700 局 vs 4.7 万局面链），
+  所以**先不换包里的模型**；等 b6c96 追上再换。
 
 ---
 

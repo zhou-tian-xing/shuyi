@@ -41,7 +41,8 @@
 runs/
 ├── training/                       真正用来出模型的 run
 │   ├── b4c32-blocking-20261122/    blk1：阻挡规则 6 代，b4c32 第一代基线
-│   └── b4c32-blocking-20261123/    acon：A 进网络（v4）+ 热启动，4 代
+│   ├── b4c32-blocking-20261123/    acon：A 进网络（v4）+ 热启动，4 代
+│   └── b6c96-nopass-20261124/      两小时试水：nopass，随机起步，5 代
 ├── smoke/                          pipeline 冒烟测试，几秒一轮，不产出可用模型
 │   ├── acond-20261123/             A 条件化管线（dry/dry2/dry3/e2e）
 │   ├── b2c16-20261122/             小模型全流程（3 代 × 8 局）
@@ -65,6 +66,7 @@ runs/
 | --- | --- | --- | ---: | --- | --- |
 | `training/b4c32-blocking-20261122` | blocking | 11-22 23:30 → 11-23 00:49 | 6 | `b4c32-s5960…` … `b4c32-s34760-d470705` | 第一次 b4c32 链式训练；`s34760` 是随后 3 小时 run 的热启动模型。manifest 只记录了 5 代（第 6 代训练完、模型已产出，进程在写 manifest 前被停掉）。 |
 | `training/b4c32-blocking-20261123` | blocking | 11-23 23:00 → 11-24 01:13 | 4 | `b4c32-s7252-d202770`（累计口径 = `models/b4c32-s42012-d595499`） | A 进网络（`SHUYINN4`）第一次真训练：热启动 5e-4，gen0 对 `s34760` 0.675。ELO 池内 −140/−91/+112/+119，即没有稳定爬升。 |
+| `training/b6c96-nopass-20261124` | nopass | 11-24 11:36 → 13:14 | 5 | `b6c96-s13520-d183077` | 2 小时试水：**b6c96 从随机起步，每代都比上一代强**（0.917 / 0.642 / 0.808 / 0.725，120 局 @1024 visits），池内 ELO −401 → −133 → −13 → +226 → **+321**（512 visits，CI 不重叠）。700 局/代、1024 visits，1h38m 跑完 5 代。 |
 
 `runs/training/*/elo/` 是每一代的池内 ELO；`gen_XXX/arena/match.json` 是与上一代的
 对局记录；`manifest.json` 是唯一的权威索引（--resume 依赖它）。
@@ -114,3 +116,22 @@ runs/
   不记录 steps/data。
 - `training/b4c32-blocking-20261122/manifest.json` 少最后一代的记录（模型文件在，
   记录不在）；用 `--resume` 会重跑那一代。
+
+## 2026-11-24 晚：自对弈分片与 checkpoint 已删
+
+`gen_XXX/selfplay/shard_*.bin` 和 `gen_XXX/checkpoints/*.pt` 只为“训练中断后
+`--resume`”存在，不是结果。转 b6c96 之后 b4c32 的分片再没有用处（不同架构不能
+热启动，而用它当教师正是 b10c128 那轮失败的原因，见 `docs/reports/DIAGNOSIS_2026-11-22`），
+所以本地和服务器上的都删了：
+
+| | 之前 | 之后 |
+|---|---:|---:|
+| 本地 `runs/` | 1.4 GB | 21 MB |
+| 服务器 `/root/shuyi_data` + `runs/blocking` | 598 MB | 0 |
+
+留下的：`models/b*.bin`（每代最终模型）、`manifest.json`、`gen_XXX/arena/`、
+`gen_XXX/logs/`、`gen_XXX/train_summary.json`、`train_metrics.csv`、`elo/`。
+**这些就是全部结果**；要复现某一代的数据，用 manifest 里的配置重跑。
+
+以后再有 run：跑完（或窗口结束）就删这两类目录，别攒着。
+
