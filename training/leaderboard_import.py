@@ -97,10 +97,27 @@ def write_table(path: Path, order, cells) -> None:
             writer.writerow(line)
 
 
-def add(cells, a, b, wins, draws, losses) -> None:
+CONFLICTS: list[str] = []
+
+
+def add(cells, a, b, wins, draws, losses, source="", visits=0) -> None:
+    """追加。格子是累计的：同一对多下几次就多记几次，绝不覆盖。
+
+    但两次来源打架时要说出来：同一对里一方这次 80% 赢、上次 80% 输，说明有一份
+    数据是错的（名字指错模型、或者 a/b 写反了）。这种格子照样累计进去，同时记进
+    `conflicts.txt`，不假装没发生。
+    """
     if a == b or min(wins, draws, losses) < 0 or wins + draws + losses == 0:
         return
-    prev = cells.get((a, b), (0, 0, 0))
+    prev = cells.get((a, b))
+    if prev and prev[0] + prev[1] + prev[2] >= 10 and wins + draws + losses >= 10:
+        old_rate = (prev[0] + 0.5 * prev[1]) / sum(prev)
+        new_rate = (wins + 0.5 * draws) / (wins + draws + losses)
+        if (old_rate > 0.7 and new_rate < 0.3) or (old_rate < 0.3 and new_rate > 0.7):
+            CONFLICTS.append(
+                f"{visits} visits: {a} vs {b}: 已有 {prev[0]}-{prev[1]}-{prev[2]}, "
+                f"这次 {wins}-{draws}-{losses}（来自 {source}）")
+    prev = prev or (0, 0, 0)
     total = (prev[0] + wins, prev[1] + draws, prev[2] + losses)
     cells[(a, b)] = total
     cells[(b, a)] = (total[2], total[1], total[0])
@@ -118,7 +135,7 @@ def import_all(out_dir: Path, roots: list[Path] | None = None) -> dict[int, int]
     if ledger_path.exists():
         ledger = set(json.loads(ledger_path.read_text(encoding="utf-8")))
 
-    def record(visits, a, b, wins, draws, losses):
+    def record(visits, a, b, wins, draws, losses, source=""):
         nonlocal skipped
         a, b = canonical(a), canonical(b)
         for name in (a, b):
@@ -130,7 +147,7 @@ def import_all(out_dir: Path, roots: list[Path] | None = None) -> dict[int, int]
         for name in (a, b):
             if name not in order:
                 order.append(name)
-        add(cells, a, b, wins, draws, losses)
+        add(cells, a, b, wins, draws, losses, source=source, visits=visits)
         write_table(path, order, cells)
         imported[visits] = imported.get(visits, 0) + wins + draws + losses
 
@@ -155,7 +172,7 @@ def import_all(out_dir: Path, roots: list[Path] | None = None) -> dict[int, int]
         if "a" in data and "b" in data and "a_wins" in data:
             seen.add(path)
             record(visits, data["a"], data["b"], int(data["a_wins"]),
-                   int(data.get("draws", 0)), int(data["b_wins"]))
+                   int(data.get("draws", 0)), int(data["b_wins"]), source=key)
             ledger.add(key)
             continue
         if "names" not in data or "pairs" not in data:
@@ -173,11 +190,18 @@ def import_all(out_dir: Path, roots: list[Path] | None = None) -> dict[int, int]
             b = canonical(entry[1])
             a = mapping.get(a, a)
             b = mapping.get(b, b)
-            record(visits, a, b, int(entry[2]), int(entry[3]), int(entry[4]))
+            record(visits, a, b, int(entry[2]), int(entry[3]), int(entry[4]), source=key)
         ledger.add(key)
 
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     ledger_path.write_text(json.dumps(sorted(ledger), indent=0) + "\n", encoding="utf-8")
+
+    if CONFLICTS:
+        log = out_dir / "conflicts.txt"
+        log.write_text("\n".join(CONFLICTS) + "\n", encoding="utf-8")
+        print(f"{len(CONFLICTS)} conflicting cell(s) -> {log}", flush=True)
+        for line in CONFLICTS[:5]:
+            print("  " + line, flush=True)
 
     if skipped:
         print(f"skipped {skipped} pair(s) naming a model that is not in the repo",

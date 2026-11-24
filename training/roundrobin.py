@@ -78,15 +78,16 @@ def tasks_for(models: list[Path], args) -> list[tuple[Path | str, Path | str]]:
         missing = [name for name in order if name not in by_name]
         if missing:
             raise SystemExit("ladder names not found: " + ", ".join(missing))
-        chain = [by_name[name] for name in order]
-        tasks = list(zip(chain, chain[1:]))
+        rungs = [by_name[name] for name in order]
+        tasks = list(zip(rungs, rungs[1:]))
         if args.random_anchor:
-            tasks.append((chain[0], "random"))
+            # 只有最弱那一档跟随机下：它给出绝对 0 分，其余各档的分差由梯子递推，
+            # 不需要每个人都去打随机（那样每场都是 40-0，什么也读不出来）。
+            tasks.append((rungs[0], "random"))
         return tasks
-    tasks = list(itertools.combinations(models, 2))
     if args.random_anchor:
-        tasks += [(path, "random") for path in models]
-    return tasks
+        raise SystemExit("--random-anchor 要配合 --ladder：随机锚只挂在最弱那一档上")
+    return list(itertools.combinations(models, 2))
 
 
 def main() -> int:

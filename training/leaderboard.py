@@ -107,22 +107,52 @@ def decisive(wins: int, draws: int, losses: int) -> bool:
 
 
 def leaderboard(path: Path, anchor: str = "random"):
+    """(名字, 分数, 区间, 局数, 锚信息)。
+
+    锚如果是 `random`，它只和梯子最下面那一档下过，而且必然是一边倒（40-0 之类）。
+    这一格给出的不是点估计而是下界，所以整张表按"最下面那一档 = 这个下界"平移：
+    绝对值全部偏保守，但 random 仍然是 0，换预算也不会挪零点。
+    """
     order, results = read_table(path)
     pairs = [(a, b, wins, draws, losses, 1.0)
              for (a, b), (wins, draws, losses) in results.items()
              if a < b and decisive(wins, draws, losses)]
     games = sum(wins + draws + losses for (_, _, wins, draws, losses, _) in pairs)
     if not pairs:
-        return order, {}, {}, games
+        return order, {}, {}, games, {}
     names = sorted({name for (a, b, *_) in pairs for name in (a, b)})
     ratings = dict(zip(names, fit_elo(names, pairs)))
     intervals = dict(zip(names, bootstrap_ci(names, pairs)))
+
+    info: dict = {}
+    zero = None
     if anchor in ratings:
-        # 锚就是 0 分：不换算的话每张表的零点都不同，数字没法比较。
         zero = ratings[anchor]
+        info = {"kind": "played"}
+    else:
+        # The anchor itself has no decisive game: use its one-sided result against
+        # the bottom rung as the absolute reference.
+        for (a, b), (wins, draws, losses) in results.items():
+            if anchor not in (a, b):
+                continue
+            other = b if a == anchor else a
+            if other not in ratings:
+                continue
+            scored, conceded = (losses, wins) if a == anchor else (wins, losses)
+            total = wins + draws + losses
+            if scored == total:
+                bound = elo_gap(wilson_lower(scored, total))
+            elif conceded == total:
+                bound = -elo_gap(wilson_lower(conceded, total))
+            else:
+                continue
+            zero = ratings[other] - bound
+            info = {"kind": "bound", "from": other, "bound": bound, "games": total}
+            break
+    if zero is not None:
         ratings = {name: value - zero for name, value in ratings.items()}
         intervals = {name: (low - zero, high - zero) for name, (low, high) in intervals.items()}
-    return order, ratings, intervals, games
+    return order, ratings, intervals, games, info
 
 
 def components(order, results) -> list[list[str]]:
@@ -176,7 +206,7 @@ def render(path: Path, anchor: str = "random") -> list[str]:
     的结果和分差，而不是一个假装精确的绝对值。
     """
     order, results = read_table(path)
-    _, ratings, intervals, games = leaderboard(path, anchor)
+    _, ratings, intervals, games, anchor_info = leaderboard(path, anchor)
     visits = path.stem.split("_")[1]
     total_cells = sum(1 for (a, b) in results if a < b)
     onesided = sum(1 for (a, b), (w, d, l) in results.items()
@@ -188,11 +218,13 @@ def render(path: Path, anchor: str = "random") -> list[str]:
         lines += [f"> 表里 {total_cells} 个格子里有 {onesided} 个是一边倒（20-0 之类）。"
                   "它们只说明「强很多」，读不出分差，所以**不参与拟合、也没有被改写成别的比分**；"
                   "评分只用两边都赢过至少一局的格子。", ""]
-    if anchor not in order:
+    if anchor_info.get("kind") == "bound":
+        lines += [f"> 绝对分的锚：`{anchor_info['from']}` 跟 `{anchor}` 下了 "
+                  f"{anchor_info['games']} 局全胜，这一格只能给 95% 下界 "
+                  f"{anchor_info['bound']:+.0f}。整张表按这个下界平移，"
+                  "所以每个数都是**保守下界**，不是点估计。", ""]
+    elif anchor not in order:
         lines += [f"> 这张表没有 `{anchor}`，分数是相对池子算的，不是绝对分。", ""]
-    elif anchor not in ratings:
-        lines += [f"> `{anchor}` 在这张表里的对局全是一边倒，读不出分差，"
-                  "所以这版分数仍是相对池子算的。", ""]
     ranked = sorted((name for name in order if name in ratings),
                     key=lambda name: -ratings[name])
     unrated = [name for name in order if name not in ratings]
@@ -238,7 +270,7 @@ def compare(paths: list[Path], anchor: str) -> list[str]:
         if anchor not in order:
             skipped.append(path.stem.split("_")[1])
             continue
-        _, ratings, intervals, games = leaderboard(path, anchor)
+        _, ratings, intervals, games, anchor_info = leaderboard(path, anchor)
         if ratings:
             label = path.stem.split("_")[1]
             need = len(order) * (len(order) - 1) // 2
@@ -317,7 +349,7 @@ def main(argv=None):
              "不同 visits 从不混算。", ""]
     for path in paths:
         lines += render(path, args.anchor)
-        _, ratings, _, _ = leaderboard(path, args.anchor)
+        _, ratings, _, _, _ = leaderboard(path, args.anchor)
         if ratings:
             top = sorted(ratings.items(), key=lambda kv: -kv[1])[:5]
             print(f"{path.stem.split('_')[1]:>5} visits: " +
