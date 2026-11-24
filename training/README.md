@@ -83,6 +83,27 @@ manifest 里记 `capacity_history`。宽度变了不能热启动，所以升级�
 
 ---
 
+## 3.4 按窗口定规模：`training/run_session.sh`
+
+租来的卡有一个固定的钟，**窗口决定能跑几代，模型规模决定每代要多少数据和多少步**。
+这两件事不该由手输的数字决定——375 局/代的教训就是手输。
+
+```bash
+HOURS=10 MODEL=runs/training/<run>/models/b6c96-s25920-d258451.bin \
+RUN_NAME=b6c96-nopass-20261125a bash training/run_session.sh
+```
+
+| 步骤 | 做什么 |
+| --- | --- |
+| 探针 | 用真实模型、真实 visits 跑 24 局，测出这台机器的 `games/s` |
+| 定规模 | `training/budget.py`：目标步数 = 10,000 × (M/1.03)，训练量按回放窗口 ×1.8 计，再算「几代 × 每代几局 × 几个 epoch」，写进 `plan.json` |
+| 跑 | `pipeline.py ... --max-hours H`：只**在代与代之间**停，剩的时间不够下一代的 1.15 倍就收尾，manifest 里记 `stopped_early` |
+
+`budget.py` 的算术有单测（`training/tests/test_budget.py`，进 ctest）：一代少于 800 局直接
+报错，不会悄悄缩成"跑着像训练、其实是噪声"的小代。
+
+---
+
 ## 3.5 排行榜：`training/leaderboard.py`
 
 数据就是一张二维 CSV，`runs/leaderboard/matches_<visits>.csv`：

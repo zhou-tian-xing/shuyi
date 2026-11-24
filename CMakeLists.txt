@@ -48,6 +48,16 @@ if(SHUYI_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
+# The training tools have no compiled code, but their arithmetic decides whether a
+# rented ten-hour window trains a model or a few hundred games.  It is tested like
+# code: the sizing maths and the deadline rule run in a second, no GPU involved.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME shuyi_training_budget
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/training/tests/test_budget.py)
+endif()
+
 # -------------------------------------------------------------------- install --
 # Each product installs on its own, into its own prefix:
 #   cmake --install build --component engine --prefix dist/engine

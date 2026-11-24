@@ -12,10 +12,14 @@ import time
 
 import paramiko
 
-HOST = os.environ.get("SHUYI_HOST", "223.109.239.11")
-PORT = int(os.environ.get("SHUYI_PORT", "25924"))
+# Credentials come from the environment, never from this file: the box and its
+# password change every session, and a password in the repository outlives both.
+HOST = os.environ.get("SHUYI_HOST", "")
+PORT = int(os.environ.get("SHUYI_PORT", "22"))
 USER = os.environ.get("SHUYI_USER", "root")
-PASS = os.environ.get("SHUYI_PASS", "Ewee4ohd")
+PASS = os.environ.get("SHUYI_PASS", "")
+if not HOST or not PASS:
+    raise SystemExit("set SHUYI_HOST and SHUYI_PASS (and SHUYI_PORT if not 22)")
 
 LDPATH = ":".join(
     "/home/vipuser/miniconda3/lib/python3.12/site-packages/nvidia/" + p + "/lib"

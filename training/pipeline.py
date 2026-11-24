@@ -39,6 +39,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from budget import deadline_exceeded  # noqa: E402  (same directory, no package)
+
 REPO = Path(__file__).resolve().parents[1]  # repo root (training/..)
 DEFAULT_SELFPLAY_GPU = REPO / "build" / "shuyi_selfplay_gpu"
 DEFAULT_TRAINER = REPO / "training" / "train_resnet.py"
@@ -615,6 +618,10 @@ def main(argv=None):
     parser.add_argument("--capacity-ladder", default="b4c32,b6c48,b6c64,b8c96")
     parser.add_argument("--promotion-games", type=int, default=0,
                         help="deprecated alias for --arena-games")
+    parser.add_argument("--max-hours", type=float, default=0.0,
+                        help="stop starting new generations once this much wall time has "
+                             "been used (0 = no limit). The generation in progress always "
+                             "finishes, so the run never ends with a half-written model")
     parser.add_argument("--promotion-threshold", type=float, default=0.55)
     parser.add_argument("--max-cell-ratio", type=float, default=0.90,
                         help="fail if the target's cells are as uninformative as uniform")
@@ -765,6 +772,12 @@ def main(argv=None):
     # `completed` (the manifest as it was at start-up), so a fresh run reached the
     # ELO stage with one model and died with "need at least two --models".
     produced = {}
+    # Wall-clock budget.  A rented box is a fixed window: the run has to stop
+    # *between* generations, never inside one, or the last model is half written
+    # and the shards are wasted.  `--max-hours` is therefore checked here, with an
+    # estimate taken from the generations actually observed on this machine.
+    run_started = time.time()
+    gen_seconds: list[float] = []
     for gen in range(args.generations):
         gen_dir = run_dir / f"gen_{gen:03d}"
         gen_dir.mkdir(parents=True, exist_ok=True)
@@ -777,6 +790,25 @@ def main(argv=None):
             log(f"generation {gen}: already complete, skipping")
             continue
 
+        if args.max_hours > 0 and gen_seconds:
+            elapsed = time.time() - run_started
+            remaining = args.max_hours * 3600.0 - elapsed
+            # 15% of slack: the next generation may be slower than the worst so far
+            # (a longer endgame, a busier box), and stopping one generation early is
+            # cheap while overrunning the rental is not.
+            estimate = max(gen_seconds) * 1.15
+            if deadline_exceeded(remaining, gen_seconds):
+                log(f"deadline: {remaining / 60.0:.0f} min left, next generation needs "
+                    f"~{estimate / 60.0:.0f} min -- stopping before generation {gen}")
+                manifest["stopped_early"] = {
+                    "reason": "max-hours",
+                    "generation": gen,
+                    "elapsed_minutes": round(elapsed / 60.0, 1),
+                    "max_hours": args.max_hours,
+                }
+                break
+
+        gen_started = time.time()
         if gen == 0 and args.init_model:
             # 接着已有的模型练：有旧分片就重训它们（warm），没有就让这个模型自对弈
             # 出新分片（selfplay）。两条路都不从随机权重开始，计数器也接着它的 s/d。
@@ -929,6 +961,7 @@ def main(argv=None):
         if not args.dry_run:
             write_json(manifest_path, manifest)
         previous_model = final_model
+        gen_seconds.append(time.time() - gen_started)
 
         if summary:
             last = summary.get("last", {})
@@ -942,7 +975,9 @@ def main(argv=None):
     manifest["updated"] = now()
     write_json(manifest_path, manifest)
     log(f"done: {run_dir}")
-    log(f"final model: {models_dir / f'gen_{args.generations - 1:03d}.bin'}")
+    if produced:
+        last_gen = max(produced)
+        log(f"last model: {produced[last_gen]} (generation {last_gen})")
     return 0
 
 

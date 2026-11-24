@@ -14,6 +14,7 @@ the C++ binaries with training/setup_ubuntu.sh.
 """
 import argparse
 import fnmatch
+import io
 import os
 import shlex
 import sys
@@ -26,6 +27,12 @@ REPO = Path(__file__).resolve().parents[1]  # repo root (training/..)
 
 def build_archive(path):
     exclusions = {"build", "runs", ".venv", "__pycache__", ".git"}
+    # Text files are written with LF, whatever the checkout uses.  A Windows
+    # working copy is CRLF, and shipping that makes `set -euo pipefail` die with
+    # "invalid option name" on the Linux box -- a failure that looks like a code
+    # bug and costs a session.
+    text_suffixes = (".sh", ".py", ".md", ".txt", ".csv", ".ini", ".cmake", ".json")
+    text_names = {"CMakeLists.txt", ".gitattributes", ".gitignore"}
     with tarfile.open(path, "w:gz") as archive:
         for root, dirs, files in os.walk(REPO):
             dirs[:] = [d for d in dirs if d not in exclusions]
@@ -38,7 +45,14 @@ def build_archive(path):
                     continue
                 if name.endswith((".pyc", ".o", ".obj", ".exe")):
                     continue
-                archive.add(full, arcname=str(Path("shuyi") / relative))
+                arcname = str(Path("shuyi") / relative)
+                if name.endswith(text_suffixes) or name in text_names:
+                    data = full.read_bytes().replace(b"\r\n", b"\n")
+                    info = archive.gettarinfo(str(full), arcname=arcname)
+                    info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+                else:
+                    archive.add(full, arcname=arcname)
 
 
 def main(argv=None):
@@ -50,9 +64,13 @@ def main(argv=None):
     parser.add_argument("--password-env", default="SHUYI_SSH_PASSWORD")
     parser.add_argument("--key", default="", help="private key path instead of password")
     parser.add_argument("--setup", action="store_true", help="run setup_ubuntu.sh")
-    parser.add_argument("--start", action="store_true", help="start 15-gen run with nohup")
+    parser.add_argument("--start", action="store_true",
+                        help="start training/run_session.sh under nohup")
     parser.add_argument("--run-name", default="")
-    parser.add_argument("--generations", type=int, default=15)
+    parser.add_argument("--hours", type=float, default=10.0,
+                        help="window passed to run_session.sh")
+    parser.add_argument("--model", default="",
+                        help="weights to continue from, path on the server")
     parser.add_argument("--skip-upload", action="store_true")
     args = parser.parse_args(argv)
 
@@ -105,13 +123,16 @@ def main(argv=None):
         if args.setup:
             run(f"cd {shlex.quote(args.remote_dir)} && bash training/setup_ubuntu.sh")
         if args.start:
-            # run_generation.sh reads the run shape from the environment; the
-            # 15-gen wrapper it used to call does not exist any more.
-            run_name = args.run_name or "run_latest"
+            # The session wrapper sizes the run from the box and stops on the
+            # clock; a fixed generation count is exactly what it replaces.
+            if not args.model:
+                raise RuntimeError("--start needs --model (weights to continue from)")
+            run_name = args.run_name or f"b6c96-nopass-{__import__('time').strftime('%Y%m%d')}"
             command = (
                 f"cd {shlex.quote(args.remote_dir)} && "
-                f"RUN_NAME={shlex.quote(run_name)} GENERATIONS={int(args.generations)} "
-                f"nohup bash training/run_generation.sh "
+                f"HOURS={float(args.hours)} MODEL={shlex.quote(args.model)} "
+                f"RUN_NAME={shlex.quote(run_name)} "
+                f"nohup bash training/run_session.sh "
                 f"> training_full.log 2>&1 & echo $!"
             )
             run(command, check=False)

@@ -4,16 +4,23 @@
 Usage: python training/remote.py "nvidia-smi"
        python training/remote.py -f script.sh   (run local file's content)
 """
+import os
 import sys
+
 import paramiko
 
-HOST = "223.109.239.11"
-PORT = 25924
-USER = "root"
-PASS = "Ewee4ohd"
+# Same rule as ssh.py: the host and password are per-session facts and live in
+# the environment, not in the repository.
+HOST = os.environ.get("SHUYI_HOST", "")
+PORT = int(os.environ.get("SHUYI_PORT", "22"))
+USER = os.environ.get("SHUYI_USER", "root")
+PASS = os.environ.get("SHUYI_PASS", "")
 
 
 def main():
+    if not HOST or not PASS:
+        print("set SHUYI_HOST and SHUYI_PASS (and SHUYI_PORT if not 22)", file=sys.stderr)
+        return 2
     args = sys.argv[1:]
     if not args:
         print("usage: remote.py <cmd> | remote.py -f <file>")
