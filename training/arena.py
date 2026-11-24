@@ -247,7 +247,7 @@ def main(argv=None):
     ap.add_argument("--time", type=int, default=0,
                     help="deprecated, ignored; kept so old command lines still parse")
     ap.add_argument("--komi", type=float, default=KOMI)
-    ap.add_argument("--ruleset", choices=["classic", "blocking"], default="classic")
+    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="classic")
     ap.add_argument("--root-k", type=int, default=32)
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--out", default="")

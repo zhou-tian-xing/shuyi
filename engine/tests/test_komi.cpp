@@ -17,6 +17,14 @@ using namespace shuyi;
 namespace {
 int failures = 0;
 
+// These tests exercise the base game (scoring, witnesses), which is rule-set
+// independent; the placements they use are only legal under Classic.
+inline Position classicStart() {
+    Position position;
+    position.setRuleset(Ruleset::Classic);
+    return position;
+}
+
 void checkImpl(bool condition, const char* expression, int line) {
     if (!condition) {
         ++failures;
@@ -106,6 +114,11 @@ bool buildPosition(const Witness& witness, Position& position, std::string& erro
     // Any complete final placement can be reached: red and black simply play
     // their lists in any order.  This also exercises real alternating play.
     position.reset();
+    // These witnesses are unordered final placements, so they are only reachable
+    // when every empty cell accepts every number (Classic).  Under a blocking
+    // rule the placement order would have to be legal too, which is a different
+    // question the witnesses do not answer.
+    position.setRuleset(Ruleset::Classic);
     for (int i = 0; i < 27; ++i) {
         if (!position.play(moves[0][i]) || !position.play(moves[1][i])) {
             error = "witness is not reachable by alternating legal moves";
@@ -138,7 +151,7 @@ int runKomiTests() {
             continue;
         }
         seen[witness.score + 73] = true;
-        Position position;
+        Position position = classicStart();
         if (!buildPosition(witness, position, error)) {
             std::cerr << error << "\n";
             CHECK(false);
@@ -169,7 +182,7 @@ int runKomiTests() {
     // Outside the achievable score interval no integer A can draw.
     Position any;
     for (const Witness& witness : witnesses) {
-        Position position;
+        Position position = classicStart();
         if (buildPosition(witness, position, error)) {
             any = position;
             break;

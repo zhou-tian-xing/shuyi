@@ -72,9 +72,17 @@ struct Node {
     std::uint8_t passes = 0; // consecutive passes, 2 ends the game
 };
 
-// A game ends when all 54 stones are placed or both sides passed in a row.
+// The rule set is fixed for the whole process (one run, one rule set).  Node is
+// copied through the tree by value, so carrying the rule set inside it would
+// cost more than this one global, and there is exactly one player of the game.
+Ruleset g_ruleset = kDefaultRuleset;
+bool hasPlacement(const Node& node);  // defined after blockingReach
+
+// A game ends when all 54 stones are placed or both sides passed in a row.  Under
+// NoPass it also ends the moment the side to move has no placement at all.
 bool terminalState(const Node& node) {
-    return node.stones >= kMaxPlies || node.passes >= 2;
+    if (node.stones >= kMaxPlies || node.passes >= 2) return true;
+    return !rulesetHasPass(g_ruleset) && !hasPlacement(node);
 }
 
 struct Edge {
@@ -211,7 +219,7 @@ bool parse(int argc, char** argv, Options& o) {
             o.tempMoves = std::max(0, std::stoi(next("--temp-moves")));
         } else if (arg == "--ruleset") {
             if (!parseRuleset(next("--ruleset"), o.ruleset)) {
-                std::cerr << "--ruleset must be classic or blocking" << std::endl;
+                std::cerr << "--ruleset must be classic, blocking or nopass" << std::endl;
                 return false;
             }
         } else if (arg == "--stats") {
@@ -328,8 +336,37 @@ int blockingReach(const Node& node, int cell) {
 
 bool play(Node& node, Move mv, Ruleset ruleset);
 
+// Is any (cell, number) placement legal for the side to move?
+bool hasPlacement(const Node& node) {
+    if (node.stones >= kMaxPlies) return false;
+    const int side = node.side;
+    int largest = 0;
+    for (int number = kNumbers; number >= 1; --number) {
+        if (node.rem[side * 9 + (number - 1)] > 0) {
+            largest = number;
+            break;
+        }
+    }
+    if (largest == 0) return false;
+    for (int cell = 0; cell < kCells; ++cell) {
+        if (node.board[cell] != 0) continue;
+        if (!rulesetBlocks(g_ruleset) || largest > blockingReach(node, cell)) return true;
+    }
+    return false;
+}
+
 // Forced pass: the side to move has no placement but the game goes on.
+[[noreturn]] void noMoveError() {
+    std::fprintf(stderr, "no legal move and the ruleset has no pass (ruleset %s)\n",
+                 rulesetName(g_ruleset));
+    std::abort();
+}
+
 bool passTurn(Node& node) {
+    // NoPass has no pass: a position with no placement is terminal, so reaching
+    // here under that rule set means terminalState() and the move generator
+    // disagree.  Callers turn the false return into a hard error.
+    if (!rulesetHasPass(g_ruleset)) return false;
     ++node.ply;
     ++node.passes;
     node.side = static_cast<std::uint8_t>(node.ply & 1);
@@ -346,7 +383,7 @@ bool play(Node& node, Move mv, Ruleset ruleset) {
     if (node.board[mv.cell] != 0) return false;
     const int side = node.ply & 1;
     if (node.rem[side * 9 + (mv.number - 1)] == 0) return false;
-    if (ruleset == Ruleset::Blocking && mv.number <= blockingReach(node, mv.cell)) return false;
+    if (rulesetBlocks(ruleset) && mv.number <= blockingReach(node, mv.cell)) return false;
     const auto cross = crossOf(mv.cell);
     int before = 0;
     for (int i = 0; i < 5; ++i) before += scoreSign(node.board, cross[i]);
@@ -377,7 +414,7 @@ void legalMoves(const Node& node, std::vector<Move>& out, Ruleset ruleset) {
         if (node.rem[side * 9 + (number - 1)] == 0) continue;
         for (int cell = 0; cell < kCells; ++cell) {
             if (node.board[cell] != 0) continue;
-            if (ruleset == Ruleset::Blocking && number <= blockingReach(node, cell)) continue;
+            if (rulesetBlocks(ruleset) && number <= blockingReach(node, cell)) continue;
             out.emplace_back(cell, number);
         }
     }
@@ -974,7 +1011,7 @@ int runRandom(const Options& o) {
                 if (terminalState(states[g])) continue;
                 legalMoves(states[g], moves, o.ruleset);
                 if (moves.empty()) {
-                    passTurn(states[g]);
+                    if (!passTurn(states[g])) noMoveError();
                     continue;
                 }
                 Sample sample;
@@ -1186,7 +1223,8 @@ int runOneply(Evaluator& evaluator, const Options& o) {
                 const std::size_t begin = offsets[g];
                 const std::size_t end = offsets[g + 1];
                 if (begin == end) {
-                    passTurn(states[g]); // blocked: forced pass, no training sample
+                    // Blocked: a forced pass, and no training sample for it.
+                    if (!passTurn(states[g])) noMoveError();
                     continue;
                 }
                 double best = -1e30;
@@ -1528,7 +1566,7 @@ int runBench(Evaluator& evaluator, const Options& o) {
         for (int i = 0; i < plies; ++i) {
             legalMoves(node, moves, o.ruleset);
             if (moves.empty()) {
-                passTurn(node);
+                if (!passTurn(node)) noMoveError();
                 continue;
             }
             applyMove(node, moves[rng() % moves.size()], o.ruleset);
@@ -1692,6 +1730,7 @@ int main(int argc, char** argv) {
     argv = utf8Args.pointers();
     Options options;
     if (!parse(argc, argv, options)) return 1;
+    g_ruleset = options.ruleset;
 #ifdef _OPENMP
     // Descend / expand / back up run on the CPU and used to be the reason the
     // GPU sat idle two thirds of the time.
@@ -1716,13 +1755,20 @@ int main(int argc, char** argv) {
     }
     evaluator.setA(options.komi);
     // A model trained for one rule set has the wrong value semantics for the
-    // other, so mixing them is refused rather than silently trusted.
+    // other, so mixing them is refused rather than silently trusted.  The one
+    // exception is a blocking model played under NoPass: every NoPass game is a
+    // blocking game up to its earlier end, and that is said out loud.
     for (int i = 0; i < evaluator.count(); ++i) {
-        if (evaluator.rulesetOf(i) != options.ruleset) {
+        if (!rulesetCompatible(evaluator.rulesetOf(i), options.ruleset)) {
             std::cerr << "model " << evaluator.name(i) << " was trained for the "
                       << rulesetName(evaluator.rulesetOf(i)) << " rule set but --ruleset is "
                       << rulesetName(options.ruleset) << "\n";
             return 1;
+        }
+        if (evaluator.rulesetOf(i) != options.ruleset) {
+            std::cerr << "note: model " << evaluator.name(i) << " was trained for "
+                      << rulesetName(evaluator.rulesetOf(i)) << ", played under "
+                      << rulesetName(options.ruleset) << "\n";
         }
     }
     std::printf("device=%s planes=%d channels=%d blocks=%d mode=%s ruleset=%s\n",

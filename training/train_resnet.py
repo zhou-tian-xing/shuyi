@@ -52,7 +52,8 @@ MAGIC1 = b"SYSELF1\x00"
 MAGIC2 = b"SYSELF2\x00"
 MAGIC3 = b"SYSELF3\x00"
 MAGIC4 = b"SYSELF4\x00"
-RULESET_NAMES = {0: "classic", 1: "blocking"}
+RULESET_NAMES = {0: "classic", 1: "blocking", 2: "nopass"}
+RULESET_CODES = {name: code for code, name in RULESET_NAMES.items()}
 
 BASE_DTYPE = np.dtype(
     [
@@ -189,9 +190,15 @@ def load_shards(paths, max_samples=0, seed=1, ruleset=0):
         raise ValueError("no dataset shards")
     chunks = []
     total = 0
+    blocking_for_nopass = 0
     for path in paths:
         data, version, shard_ruleset = _read_shard(path)
-        if shard_ruleset != ruleset:
+        # A nopass game is a blocking game up to its earlier end, so blocking
+        # shards can seed a nopass run (warm start from the previous model's
+        # data).  The reverse is not true and stays an error.
+        if shard_ruleset == 1 and ruleset == 2:
+            blocking_for_nopass += 1
+        elif shard_ruleset != ruleset:
             raise ValueError(
                 f"{path}: data is for the {RULESET_NAMES.get(shard_ruleset, shard_ruleset)} "
                 f"rule set but --ruleset is {RULESET_NAMES.get(ruleset, ruleset)}"
@@ -210,6 +217,9 @@ def load_shards(paths, max_samples=0, seed=1, ruleset=0):
         chunks.append(data)
         total += len(data)
     data = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
+    if blocking_for_nopass:
+        print(f"note: {blocking_for_nopass} blocking shard(s) used for a nopass run "
+              f"(a nopass game is a blocking game up to its earlier end)")
     if max_samples and len(data) > max_samples:
         games = np.unique(data["game"])
         rng = np.random.default_rng(seed)
@@ -346,10 +356,15 @@ def load_bin(model, path):
                 f"model has {globals_} global features, expected {GLOBAL} (v4) or "
                 f"{GLOBAL_V3} (v3)"
             )
-        if file_ruleset != getattr(model, "ruleset", 0):
+        model_ruleset = getattr(model, "ruleset", 0)
+        # A blocking model may warm start a NoPass run: every NoPass game is a
+        # blocking game up to its earlier end, so the weights mean the same
+        # thing there.  The reverse is not true and is refused.
+        compatible = file_ruleset == model_ruleset or (file_ruleset == 1 and model_ruleset == 2)
+        if not compatible:
             raise ValueError(
                 f"model was trained for the {RULESET_NAMES.get(file_ruleset, file_ruleset)} "
-                f"rule set, cannot load it into a {RULESET_NAMES.get(getattr(model, 'ruleset', 0))} model"
+                f"rule set, cannot load it into a {RULESET_NAMES.get(model_ruleset)} model"
             )
         # A 19-plane checkpoint can warm start a 37-plane model: the 19 planes
         # are a prefix of the 37-plane layout, so the extra hand planes start at
@@ -565,7 +580,7 @@ def main(argv=None):
     parser.add_argument("--blocks", type=int, default=4)
     parser.add_argument("--input-planes", type=int, default=INPUT_PLANES,
                         choices=[INPUT_PLANES, INPUT_PLANES_V3])
-    parser.add_argument("--ruleset", choices=["classic", "blocking"], default="classic",
+    parser.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="classic",
                         help="rule set the data and the model belong to")
     parser.add_argument("--epochs", type=int, default=60)
     parser.add_argument("--batch", type=int, default=512)
@@ -614,7 +629,7 @@ def main(argv=None):
         torch.set_float32_matmul_precision("high")
 
     if args.init_only:
-        code = 0 if args.ruleset == "classic" else 1
+        code = RULESET_CODES[args.ruleset]
         save_bin(
             ResNet(args.channels, args.blocks, args.input_planes, code,
                    GLOBAL if args.a_cond else GLOBAL_V3),
@@ -626,7 +641,7 @@ def main(argv=None):
         raise SystemExit("--data is required unless --init-only is given")
 
     data = load_shards(args.data, args.max_samples, args.seed,
-                      0 if args.ruleset == "classic" else 1)
+                       RULESET_CODES[args.ruleset])
     train_mask, val_mask = split_by_game(data, args.val, args.seed)
     if args.a_cond and "score" not in data.dtype.names:
         raise SystemExit(
@@ -663,7 +678,7 @@ def main(argv=None):
         flush=True,
     )
 
-    ruleset_code = 0 if args.ruleset == "classic" else 1
+    ruleset_code = RULESET_CODES[args.ruleset]
     model = ResNet(args.channels, args.blocks, args.input_planes, ruleset_code,
                    globals_width).to(device)
     model.use_score_head = args.score_weight > 0

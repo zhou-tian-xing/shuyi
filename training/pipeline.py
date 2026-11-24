@@ -520,7 +520,7 @@ def main(argv=None):
     parser.add_argument("--top-k", type=int, default=16, help="interior children kept, 0 = all")
     parser.add_argument("--batch-games", type=int, default=128)
     parser.add_argument("--chunk", type=int, default=1024)
-    parser.add_argument("--ruleset", choices=["classic", "blocking"], default="classic",
+    parser.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="classic",
                         help="rule set: data, models and run directory are tagged with it")
     parser.add_argument("--komi", type=float, default=None,
                         help="points added to Red; default is per rule set: -0.5 classic "

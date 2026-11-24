@@ -77,8 +77,9 @@ analysis_visits=512
 play_visits=512
 # A值：终局分数的平移量。阻挡规则标定为 +1.26，取整 +1。
 a_value=1
-# 规则集：classic / blocking。模型必须与它一致，否则引擎会拒绝加载。
-ruleset=blocking
+# 规则集：nopass / blocking / classic。默认是无过手（阻挡规则 + 一方无子可落立刻终局）。
+# 包里的模型是 blocking 训练的，在 nopass 下直接可用（引擎会在回复里说明）。
+ruleset=nopass
 """
 
 

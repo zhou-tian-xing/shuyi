@@ -291,7 +291,7 @@ void ProtocolSession::handle(const std::string& raw) {
         }
         Ruleset parsed = position_.ruleset();
         if (!parseRuleset(lower(value), parsed)) {
-            return respond(false, "usage: ruleset [classic|blocking]");
+            return respond(false, "usage: ruleset [classic|blocking|nopass]");
         }
         position_.setRuleset(parsed);
         // The tree, the model and the evaluator all belong to the old rule set.
@@ -301,7 +301,8 @@ void ProtocolSession::handle(const std::string& raw) {
         if (!options_.nnModelPath.empty()) {
             PolicyValueNet probe;
             std::string reason;
-            if (probe.load(options_.nnModelPath, &reason) && probe.ruleset() != parsed) {
+            if (probe.load(options_.nnModelPath, &reason) &&
+                !rulesetCompatible(probe.ruleset(), parsed)) {
                 const std::string old = rulesetName(probe.ruleset());
                 options_.nnModelPath.clear();
                 std::string ignored;
@@ -344,19 +345,21 @@ void ProtocolSession::handle(const std::string& raw) {
         // Validate before touching the running engine: a model trained for the
         // other rule set produces plausible-looking nonsense, so it is refused.
         bool modelSeesA = false;
+        Ruleset modelRuleset = position_.ruleset();
         {
             PolicyValueNet probe;
             std::string reason;
             if (!probe.load(path, &reason)) {
                 return respond(false, reason.empty() ? "cannot load model: " + path : reason);
             }
-            if (probe.ruleset() != position_.ruleset()) {
+            if (!rulesetCompatible(probe.ruleset(), position_.ruleset())) {
                 return respond(false, "model is for the " +
                                           std::string(rulesetName(probe.ruleset())) +
                                           " ruleset, but the position is " +
                                           rulesetName(position_.ruleset()));
             }
             modelSeesA = probe.aInput();
+            modelRuleset = probe.ruleset();
         }
         stopAndJoin();
         const std::string previous = options_.nnModelPath;
@@ -372,8 +375,16 @@ void ProtocolSession::handle(const std::string& raw) {
         }
         aInput_ = modelSeesA;
         // The reply says what the model can do; `set_a` is meaningless to a
-        // v3 model and a front end must be able to warn about that.
-        return respond(true, path + (aInput_ ? "" : " (no A input: v3 model)"));
+        // v3 model, and a blocking model played under NoPass is a deliberate
+        // compatibility (every NoPass game is a blocking game up to its end),
+        // so both are stated instead of assumed.
+        std::string note;
+        if (!aInput_) note += " (no A input: v3 model)";
+        if (modelRuleset != position_.ruleset()) {
+            note += std::string(" (trained for ") + rulesetName(modelRuleset) +
+                    ", played under " + rulesetName(position_.ruleset()) + ")";
+        }
+        return respond(true, path + note);
     }
     if (command == "set_visits") {
         int visits = 0;
@@ -531,7 +542,7 @@ void ProtocolSession::cmdCapabilities() {
     const bool model = engine_ && engine_->ready(nullptr);
     std::ostringstream out;
     out << "engine=shuyi_engine proto=" << kProtocolVersion << " cuda=" << (cuda ? 1 : 0)
-        << " backend=" << backendUsed_ << " rulesets=classic,blocking visits=1 stream=1 json=1"
+        << " backend=" << backendUsed_ << " rulesets=classic,blocking,nopass visits=1 stream=1 json=1"
         << " model=" << (model ? 1 : 0) << " a_input=" << (aInput_ ? 1 : 0);
     respond(true, out.str());
 }

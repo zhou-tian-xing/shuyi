@@ -309,7 +309,7 @@ bool PolicyValueNet::load(const std::string& path, std::string* error) {
                                 : (isV3 ? (version == kVersion3) : (version == kVersion2));
     const bool globalsOk = isV4 ? (globals == kResGlobalFeatures)
                                 : (globals == kResGlobalFeaturesV3);
-    if (!in || !versionOk || ruleset > 1 || features != kFeatureVersion ||
+    if (!in || !versionOk || ruleset >= kRulesetCount || features != kFeatureVersion ||
         (inputs != kResInputPlanes && inputs != kResInputPlanesV3) || !globalsOk ||
         channels < 1 || channels > kMaxChannels || blocks < 1 || blocks > kMaxBlocks) {
         if (error) *error = "unsupported model shape: " + path;
@@ -448,7 +448,6 @@ NnOutput PolicyValueNet::evaluate(const Position& position, double aValue) const
 
     const int channels = channels_;
     const int planes = inputPlanes_;
-    const int hiddenInput = 1 + globals_;
     std::array<std::int8_t, kCells> board{};
     for (int cell = 0; cell < kCells; ++cell) {
         board[cell] = static_cast<std::int8_t>(position.stoneAt(cell));

@@ -54,7 +54,7 @@ def main(argv=None):
                     help="generation models in training order")
     ap.add_argument("--labels", nargs="*", default=[],
                     help="labels for --models; default is the file stem")
-    ap.add_argument("--ruleset", choices=["classic", "blocking"], default="blocking")
+    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="blocking")
     ap.add_argument("--komi", type=float, default=0.0)
     ap.add_argument("--visits", type=int, default=EVAL_VISITS,
                     help="fixed budget per move, identical for every player")

@@ -68,7 +68,9 @@ int classicOrderBonus(const Position& before, Move move, int immediateDelta) {
 const SearchPolicy kClassicSearchPolicy{"classic", &evaluateHandAware, &classicOrderBonus};
 
 const SearchPolicy& policyFor(Ruleset ruleset) {
-    return ruleset == Ruleset::Blocking ? kBlockingSearchPolicy : kClassicSearchPolicy;
+    // Both blocking-style rule sets share the same evaluation and move ordering:
+    // they differ only in whether a starved side passes or the game ends.
+    return rulesetBlocks(ruleset) ? kBlockingSearchPolicy : kClassicSearchPolicy;
 }
 
 namespace {

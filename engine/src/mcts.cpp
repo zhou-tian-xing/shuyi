@@ -310,10 +310,15 @@ private:
         // move) but still take the value from the network.
         const bool forcedPass = moves.size() == 1 && isPass(moves[0]);
 
-        // A network trained for the other rule set would evaluate with the
-        // wrong value semantics, so it is ignored rather than trusted.
+        // A network trained for an incompatible rule set would evaluate with the
+        // wrong value semantics, so it is ignored rather than trusted.  Equality
+        // is not the whole test: a blocking-trained model is valid under NoPass
+        // (every NoPass game is a blocking game up to its earlier end), and this
+        // gate used to compare for equality only -- so the protocol accepted the
+        // model and the search silently ran without it, which reads as "the
+        // network got much worse" instead of "the network was not used".
         if (useNn_ && (nn_.loaded() || useFasterNn_) && !forcedPass &&
-            nn_.ruleset() == position.ruleset()) {
+            rulesetCompatible(nn_.ruleset(), position.ruleset())) {
             const NnOutput output = (useFasterNn_ && options_.nnOverride->evaluate)
                                         ? options_.nnOverride->evaluate(position, options_.aValue)
                                         : nn_.evaluate(position, options_.aValue);

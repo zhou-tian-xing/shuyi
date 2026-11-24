@@ -188,12 +188,32 @@ int Position::blockingReach(int cell) const {
     return reach;
 }
 
+bool Position::hasPlacement() const {
+    if (stones_ >= kTotalMoves) return false;
+    const auto& left = remaining_[static_cast<int>(sideToMove())];
+    int largest = 0;
+    for (int number = 9; number >= 1; --number) {
+        if (left[number] > 0) {
+            largest = number;
+            break;
+        }
+    }
+    if (largest == 0) return false;
+    for (int cell = 0; cell < kCells; ++cell) {
+        if (!empty_.test(cell)) continue;
+        // The strongest number in hand is the one that beats the highest reach,
+        // so a single compare settles most cells.
+        if (!rulesetBlocks(ruleset_) || largest > blockingReach(cell)) return true;
+    }
+    return false;
+}
+
 bool Position::isLegal(Move move) const {
     if (gameOver() || !move.valid()) return false;
     if (board_[move.cell] != 0) return false;
     const Player side = sideToMove();
     if (remaining_[static_cast<int>(side)][move.number] <= 0) return false;
-    if (ruleset_ == Ruleset::Blocking && move.number <= blockingReach(move.cell)) return false;
+    if (rulesetBlocks(ruleset_) && move.number <= blockingReach(move.cell)) return false;
     return true;
 }
 
@@ -203,7 +223,7 @@ std::vector<Move> Position::legalMoves() const {
     moves.reserve(static_cast<std::size_t>(remainingPieces(sideToMove())) * 16);
     const Player side = sideToMove();
     const auto& left = remaining_[static_cast<int>(side)];
-    if (ruleset_ == Ruleset::Classic) {
+    if (!rulesetBlocks(ruleset_)) {
         for (int number = 1; number <= 9; ++number) {
             if (left[number] == 0) continue;
             for (int cell = 0; cell < kCells; ++cell) {
@@ -227,7 +247,12 @@ std::vector<Move> Position::legalMoves() const {
 
 std::vector<Move> Position::searchMoves() const {
     std::vector<Move> moves = legalMoves();
-    if (moves.empty() && !gameOver()) moves.emplace_back(kPassCell, kPassNumber);
+    // A forced pass exists only where the rules allow a pass at all.  Under
+    // NoPass the same position is already terminal, so gameOver() is true and
+    // no pass is emitted.
+    if (moves.empty() && !gameOver() && rulesetHasPass(ruleset_)) {
+        moves.emplace_back(kPassCell, kPassNumber);
+    }
     return moves;
 }
 
@@ -253,6 +278,8 @@ bool Position::play(Move move) {
 }
 
 bool Position::pass() {
+    // NoPass has no pass move at all: being unable to place ends the game.
+    if (!rulesetHasPass(ruleset_)) return false;
     if (gameOver()) return false;
     if (!legalMoves().empty()) return false; // a pass is only ever forced
     history_.push_back(Move{kPassCell, kPassNumber});
@@ -353,6 +380,12 @@ bool Position::validate(std::string* error) const {
     }
     if (history_.size() != static_cast<std::size_t>(ply_)) {
         if (error) *error = "history size does not match ply";
+        return false;
+    }
+    // NoPass cannot represent a pass at all, so a position that carries one is
+    // not a legal NoPass position (it came from another rule set).
+    if (!rulesetHasPass(ruleset_) && passes_ != 0) {
+        if (error) *error = "this rule set has no pass, but the position has one";
         return false;
     }
     for (int side = 0; side < 2; ++side) {

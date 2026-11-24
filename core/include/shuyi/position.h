@@ -98,12 +98,17 @@ struct Position {
     int passes() const { return passes_; }
     Ruleset ruleset() const { return ruleset_; }
     void setRuleset(Ruleset ruleset) { ruleset_ = ruleset; }
-    // The game ends when all 54 stones are placed, or when both sides pass in a
-    // row (only reachable under the blocking rule).
-    bool gameOver() const { return stones_ >= kTotalMoves || passes_ >= 2; }
+    // The game ends when all 54 stones are placed; under the blocking rule also
+    // when both sides pass in a row; under NoPass the moment the side to move
+    // has no legal placement (there is no pass to fall back on).
+    bool gameOver() const {
+        return stones_ >= kTotalMoves || passes_ >= 2 ||
+               (!rulesetHasPass(ruleset_) && !hasPlacement());
+    }
     // Can the side to move place anything?  Under the blocking rule it can be
-    // starved, in which case the rules force a pass.
-    bool mustPass() const { return !gameOver() && legalMoves().empty(); }
+    // starved, in which case the rules force a pass; under NoPass that same
+    // situation is already terminal, so this stays false.
+    bool mustPass() const { return !gameOver() && !hasPlacement(); }
     int rawScore() const { return rawScore_; }
     double finalScore(double aValue) const { return static_cast<double>(rawScore_) + aValue; }
     Outcome outcome(double aValue = 1.0) const;
@@ -171,6 +176,9 @@ struct Position {
 private:
     int evaluateCell(int cell) const;
     void refreshAround(int cell);
+    // Is any (cell, number) placement legal right now?  Early-outs on the first
+    // one, so the terminal check is cheap: gameOver() asks it for NoPass.
+    bool hasPlacement() const;
 
     std::array<std::int8_t, kCells> board_{};
     Ruleset ruleset_ = kDefaultRuleset;

@@ -50,6 +50,7 @@ constexpr int ID_ABOUT = 4002;
 
 constexpr int ID_RULESET_CLASSIC = 5101;
 constexpr int ID_RULESET_BLOCKING = 5102;
+constexpr int ID_RULESET_NOPASS = 5103;
 constexpr int ID_ENGINE_OFF = 5001;
 constexpr int ID_ENGINE_PRUNING = 5002;
 constexpr int ID_ENGINE_MCTS = 5003;
@@ -728,16 +729,31 @@ int modelIndexFor(const std::string& path) {
     return -1;
 }
 
+// Display label for a rule set.  Kept in the front end, not in core: core is
+// included from CUDA translation units, and a Chinese string literal there
+// breaks nvcc's own parser on Windows.
+const wchar_t* rulesetLabel(Ruleset ruleset) {
+    switch (ruleset) {
+    case Ruleset::Blocking: return L"阻挡";
+    case Ruleset::NoPass: return L"无过手";
+    default: return L"现行";
+    }
+}
+
 const wchar_t* modelRulesetHint(const ModelEntry& entry) {
-    if (entry.ruleset == 1) return L"阻挡";
-    if (entry.ruleset == 0) return L"现行";
-    return L"未知";
+    // Static buffer: the pointer must outlive the call that builds the label.
+    static wchar_t buffer[32];
+    if (entry.ruleset < 0 || entry.ruleset >= kRulesetCount) {
+        MultiByteToWideChar(CP_UTF8, 0, "未知", -1, buffer, 32);
+        return buffer;
+    }
+    return rulesetLabel(static_cast<Ruleset>(entry.ruleset));
 }
 
 // Fallback when nothing has been picked from the menu yet: the model with the
 // most training steps that was trained for the ruleset currently in force.  A
-// model from the other rule set is never selected -- the engine would refuse it,
-// and silently running the wrong network is worse than having none.
+// model from an incompatible rule set is never selected -- the engine would
+// refuse it, and silently running the wrong network is worse than having none.
 std::string defaultModelPath() {
     char buffer[MAX_PATH]{};
     const DWORD length = GetEnvironmentVariableA("SHUYI_NN_MODEL", buffer, MAX_PATH);
@@ -745,7 +761,12 @@ std::string defaultModelPath() {
     if (g_modelList.empty()) scanModels();
     const ModelEntry* best = nullptr;
     for (const ModelEntry& entry : g_modelList) {
-        if (entry.ruleset != static_cast<int>(g_ruleset)) continue;
+        // `compatible`, not equal: a blocking-trained model is a valid choice
+        // under NoPass (every NoPass game is a blocking game up to its end).
+        if (entry.ruleset < 0 ||
+            !rulesetCompatible(static_cast<Ruleset>(entry.ruleset), g_ruleset)) {
+            continue;
+        }
         if (!best || entry.steps > best->steps) best = &entry;
     }
     return best ? best->enginePath : std::string();
@@ -794,13 +815,14 @@ void setEngineChoice(EngineChoice choice);
 void selectModel(int index) {
     if (index < 0 || index >= static_cast<int>(g_modelList.size())) return;
     const ModelEntry& entry = g_modelList[index];
-    // A network trained for the other rule set is not a valid choice: the engine
-    // would refuse it later, so say it here while the reason is obvious.
-    if (entry.ruleset >= 0 && entry.ruleset != static_cast<int>(g_ruleset)) {
+    // A network trained for an incompatible rule set is not a valid choice: the
+    // engine would refuse it later, so say it here while the reason is obvious.
+    if (entry.ruleset < 0 ||
+        !rulesetCompatible(static_cast<Ruleset>(entry.ruleset), g_ruleset)) {
+        const std::wstring modelLabel = modelRulesetHint(entry);
+        const std::wstring gameLabel = rulesetLabel(g_ruleset);
         MessageBoxW(g_hwnd,
-                    (L"这个模型是用“" + std::wstring(entry.ruleset == 1 ? L"阻挡" : L"现行") +
-                     L"规则”训练的，当前局面是“" +
-                     std::wstring(g_ruleset == Ruleset::Blocking ? L"阻挡" : L"现行") +
+                    (L"这个模型是用“" + modelLabel + L"规则”训练的，当前局面是“" + gameLabel +
                      L"规则”。\n\n请先在 规则 菜单切换规则（只能在新局前切换），再选模型。")
                         .c_str(),
                     L"模型与规则不匹配", MB_OK | MB_ICONINFORMATION);
@@ -1362,9 +1384,10 @@ void drainEngineLines() {
 
 void syncRulesetChecks() {
     if (!g_rulesetMenu) return;
-    CheckMenuRadioItem(g_rulesetMenu, ID_RULESET_CLASSIC, ID_RULESET_BLOCKING,
-                       g_ruleset == Ruleset::Blocking ? ID_RULESET_BLOCKING : ID_RULESET_CLASSIC,
-                       MF_BYCOMMAND);
+    int id = ID_RULESET_CLASSIC;
+    if (g_ruleset == Ruleset::NoPass) id = ID_RULESET_NOPASS;
+    else if (g_ruleset == Ruleset::Blocking) id = ID_RULESET_BLOCKING;
+    CheckMenuRadioItem(g_rulesetMenu, ID_RULESET_CLASSIC, ID_RULESET_NOPASS, id, MF_BYCOMMAND);
 }
 
 // Switching the rule set is only legal before the first stone: the two games have
@@ -2267,8 +2290,11 @@ void createMenuBar(HWND hwnd) {
     AppendMenuW(game, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(game, MF_STRING, ID_EXIT, L"退出");
 
+    AppendMenuW(rulesetMenu, MF_STRING, ID_RULESET_NOPASS,
+                L"无过手（阻挡规则；一方无子可落立刻终局）");
+    AppendMenuW(rulesetMenu, MF_STRING, ID_RULESET_BLOCKING,
+                L"阻挡规则（异色大子禁止相邻；无子可落时强制过手）");
     AppendMenuW(rulesetMenu, MF_STRING, ID_RULESET_CLASSIC, L"现行规则（无阻挡）");
-    AppendMenuW(rulesetMenu, MF_STRING, ID_RULESET_BLOCKING, L"阻挡规则（异色大子禁止相邻）");
 
     AppendMenuW(mode, MF_STRING, ID_MODE_PVP, L"双人对弈");
     AppendMenuW(mode, MF_STRING, ID_MODE_HUMAN_RED, L"人机 · 你执红");
@@ -2470,6 +2496,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         case ID_MODE_HUMAN_BLACK: setMode(Mode::HumanBlack); return 0;
         case ID_RULESET_CLASSIC: setRuleset(Ruleset::Classic); return 0;
         case ID_RULESET_BLOCKING: setRuleset(Ruleset::Blocking); return 0;
+        case ID_RULESET_NOPASS: setRuleset(Ruleset::NoPass); return 0;
         case ID_ENGINE_OFF: setEngineChoice(EngineChoice::Off); return 0;
         case ID_ENGINE_PRUNING: setEngineChoice(EngineChoice::Pruning); return 0;
         case ID_ENGINE_MCTS: setEngineChoice(EngineChoice::Mcts); return 0;

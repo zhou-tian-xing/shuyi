@@ -107,7 +107,9 @@ void testBlockingIsSideAsymmetric() {
 }
 
 void testClassicUnaffected() {
-    Position position;                            // classic by default
+    // The product default is NoPass now, so a classic test has to say so.
+    Position position;
+    position.setRuleset(Ruleset::Classic);
     CHECK(position.ruleset() == Ruleset::Classic);
     CHECK(position.play(Move(40, 9)));
     CHECK(position.isLegal(Move(41, 9)));         // classic ignores adjacency
@@ -121,6 +123,7 @@ void testBlockingScoreUnchanged() {
     std::mt19937 rng(11);
     for (int game = 0; game < 20; ++game) {
         Position classic;
+        classic.setRuleset(Ruleset::Classic);
         Position blocking = blockingStart();
         bool diverged = false;
         for (int ply = 0; ply < kTotalMoves && !diverged; ++ply) {
@@ -147,6 +150,67 @@ void testPassOnlyWhenStarved() {
     CHECK(position.ply() == 0);
     // A fresh game never needs a pass, so searchMoves == legalMoves.
     CHECK(position.searchMoves().size() == position.legalMoves().size());
+}
+
+void testNoPassEndsWhenStarved() {
+    // Find a blocking position where the side to move is starved, then look at
+    // the same position under NoPass: it must be terminal, with no move and no
+    // pass, and the same score the raw board implies.
+    std::mt19937 rng(17);
+    int checked = 0;
+    for (int game = 0; game < 200 && checked < 5; ++game) {
+        Position position = blockingStart();
+        while (!position.gameOver() && !position.mustPass()) {
+            const auto moves = position.legalMoves();
+            if (moves.empty()) break;
+            CHECK(position.play(moves[rng() % moves.size()]));
+        }
+        if (!position.mustPass()) continue;
+        ++checked;
+
+        Position nopass = position;
+        nopass.setRuleset(Ruleset::NoPass);
+        CHECK(nopass.gameOver());
+        CHECK(nopass.mustPass() == false);
+        CHECK(nopass.legalMoves().empty());
+        CHECK(nopass.searchMoves().empty());      // no forced pass either
+        CHECK(!nopass.pass());                    // there is no pass at all
+        CHECK(nopass.outcome(1.0) != Outcome::Ongoing);
+        CHECK(nopass.rawScore() == position.rawScore());
+        CHECK(nopass.validate());
+
+        // The blocking twin is not over, and offers exactly the forced pass.
+        CHECK(!position.gameOver());
+        const auto blockingMoves = position.searchMoves();
+        CHECK(blockingMoves.size() == 1);
+        CHECK(isPass(blockingMoves[0]));
+        CHECK(position.ply() < kTotalMoves);      // ended early, not full board
+    }
+    if (checked == 0) {
+        std::cout << "note: no starved blocking position found; NoPass not exercised\n";
+    }
+}
+
+void testNoPassPlacementMatchesBlocking() {
+    // Up to the moment the game ends, NoPass and Blocking accept exactly the same
+    // placements: only the ending differs.
+    std::mt19937 rng(23);
+    for (int game = 0; game < 30; ++game) {
+        Position blocking = blockingStart();
+        Position nopass = blockingStart();
+        nopass.setRuleset(Ruleset::NoPass);
+        while (!blocking.gameOver() && !nopass.gameOver()) {
+            const auto a = blocking.legalMoves();
+            const auto b = nopass.legalMoves();
+            CHECK(a.size() == b.size());
+            if (a.empty()) break;
+            const Move move = a[rng() % a.size()];
+            CHECK(blocking.play(move));
+            CHECK(nopass.play(move));
+            CHECK(blocking.rawScore() == nopass.rawScore());
+            CHECK(blocking.key() == nopass.key());
+        }
+    }
 }
 
 void testPassRoundTrip() {
@@ -319,6 +383,14 @@ void testBoardSymmetry() {
 void testRulesetNames() {
     Ruleset parsed = Ruleset::Classic;
     CHECK(parseRuleset("blocking", parsed) && parsed == Ruleset::Blocking);
+    CHECK(parseRuleset("nopass", parsed) && parsed == Ruleset::NoPass);
+    CHECK(parseRuleset("nps", parsed) && parsed == Ruleset::NoPass);
+    CHECK(std::string(rulesetName(Ruleset::NoPass)) == "nopass");
+    CHECK(std::string(rulesetTag(Ruleset::NoPass)) == "nps");
+    CHECK(kDefaultRuleset == Ruleset::NoPass);
+    CHECK(rulesetCompatible(Ruleset::Blocking, Ruleset::NoPass));
+    CHECK(!rulesetCompatible(Ruleset::NoPass, Ruleset::Blocking));
+    CHECK(!rulesetCompatible(Ruleset::Classic, Ruleset::NoPass));
     CHECK(parseRuleset("blk", parsed) && parsed == Ruleset::Blocking);
     CHECK(parseRuleset("classic", parsed) && parsed == Ruleset::Classic);
     CHECK(parseRuleset("cls", parsed) && parsed == Ruleset::Classic);
@@ -337,6 +409,8 @@ int runRulesTests() {
     testClassicUnaffected();
     testBlockingScoreUnchanged();
     testPassOnlyWhenStarved();
+    testNoPassEndsWhenStarved();
+    testNoPassPlacementMatchesBlocking();
     testPassRoundTrip();
     testBlockingSearchFindsMoves();
     testRulesetNames();

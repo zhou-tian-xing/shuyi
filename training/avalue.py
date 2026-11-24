@@ -152,7 +152,7 @@ def main() -> int:
                     help="model to probe; required unless --self-test")
     ap.add_argument("--model-b", type=Path, default=None,
                     help="optional second model; default is the same model on both sides")
-    ap.add_argument("--ruleset", choices=["classic", "blocking"], default="blocking")
+    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="blocking")
     ap.add_argument("--komis", default="-2,-1,0,1",
                     help="comma separated A values to probe")
     ap.add_argument("--games", type=int, default=300)

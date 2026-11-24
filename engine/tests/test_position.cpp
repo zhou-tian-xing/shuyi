@@ -22,6 +22,15 @@ void checkImpl(bool condition, const char* expression, int line) {
 
 #define CHECK(expr) checkImpl((expr), #expr, __LINE__)
 
+// The base-game tests below (scoring, hashing, undo) are rule-set independent,
+// but which placements are *legal* is not.  They run under Classic so every
+// empty cell accepts every number; the product default is NoPass now.
+inline Position classicStart() {
+    Position position;
+    position.setRuleset(Ruleset::Classic);
+    return position;
+}
+
 void testGeometry() {
     CHECK(kCells == 81);
     CHECK(index(0, 0) == 0);
@@ -39,7 +48,7 @@ void testGeometry() {
 }
 
 void testInitialPosition() {
-    Position position;
+    Position position = classicStart();
     CHECK(position.ply() == 0);
     CHECK(position.sideToMove() == Player::Red);
     CHECK(!position.gameOver());
@@ -56,7 +65,7 @@ void testInitialPosition() {
 
 void testSingleStoneScores() {
     {
-        Position position;
+        Position position = classicStart();
         CHECK(position.play(Move(index(4, 4), 5)));
         CHECK(position.rawScore() == 5); // centre + four orthogonal neighbours
         CHECK(position.sideToMove() == Player::Black);
@@ -65,7 +74,7 @@ void testSingleStoneScores() {
         CHECK(position.validate());
     }
     {
-        Position position;
+        Position position = classicStart();
         CHECK(position.play(Move(index(0, 0), 1)));
         CHECK(position.rawScore() == 3); // corner
         CHECK(position.scoreCell(index(0, 0)) == 1);
@@ -75,7 +84,7 @@ void testSingleStoneScores() {
         CHECK(position.validate());
     }
     {
-        Position position;
+        Position position = classicStart();
         CHECK(position.play(Move(index(8, 4), 9)));
         CHECK(position.rawScore() == 4); // edge
         CHECK(position.scoreCell(index(0, 0)) == 0);
@@ -84,7 +93,7 @@ void testSingleStoneScores() {
 }
 
 void testNoWrapAndSign() {
-    Position position;
+    Position position = classicStart();
     CHECK(position.play(Move(index(8, 0), 1))); // red i1
     CHECK(position.rawScore() == 3);
     CHECK(position.scoreCell(index(0, 0)) == 0); // a1 must not see i1
@@ -98,7 +107,7 @@ void testNoWrapAndSign() {
 }
 
 void testEqualMaxima() {
-    Position position;
+    Position position = classicStart();
     CHECK(position.play(Move(index(4, 4), 5))); // red 5 e5
     CHECK(position.play(Move(index(4, 3), 5))); // black 5 e4
     CHECK(position.scoreCell(index(4, 4)) == 0);
@@ -113,7 +122,7 @@ void testEqualMaxima() {
 }
 
 void testBitboardsAndHash() {
-    Position position;
+    Position position = classicStart();
     int empty = 0;
     for (int cell = 0; cell < kCells; ++cell) empty += position.emptyMask().test(cell) ? 1 : 0;
     CHECK(empty == 81);
@@ -133,7 +142,7 @@ void testBitboardsAndHash() {
 }
 
 void testLegalityAndDuplicates() {
-    Position position;
+    Position position = classicStart();
     const auto initial = position.legalMoves();
     CHECK(std::count(initial.begin(), initial.end(), Move(index(0, 0), 1)) == 1);
     CHECK(!position.play(Move(index(0, 0), 0)));
@@ -154,7 +163,7 @@ void testLegalityAndDuplicates() {
 }
 
 void testUndo() {
-    Position position;
+    Position position = classicStart();
     CHECK(position.play(Move(index(4, 4), 7)));
     CHECK(position.play(Move(index(0, 0), 1)));
     CHECK(position.play(Move(index(8, 8), 9)));
@@ -176,7 +185,7 @@ void testUndo() {
 void testRandomGamesAndUndo() {
     std::mt19937 rng(20261121);
     for (int game = 0; game < 8; ++game) {
-        Position position;
+        Position position = classicStart();
         while (!position.gameOver()) {
             auto moves = position.legalMoves();
             CHECK(!moves.empty());
@@ -203,7 +212,7 @@ void testRandomGamesAndUndo() {
 }
 
 void testAValue() {
-    Position position;
+    Position position = classicStart();
     CHECK(position.play(Move(index(4, 4), 5)));
     CHECK(position.finalScore(1.0) == 6.0);
     CHECK(position.finalScore(-1.5) == 3.5);
@@ -220,7 +229,7 @@ void testAValue() {
 }
 
 void testAi() {
-    Position position;
+    Position position = classicStart();
     SearchOptions options;
     options.timeLimitMs = 120;
     options.seed = 42;

@@ -13,6 +13,14 @@ using namespace shuyi;
 
 namespace {
 int failures = 0;
+// These tests exercise the base game (scoring, witnesses), which is rule-set
+// independent; the placements they use are only legal under Classic.
+inline Position classicStart() {
+    Position position;
+    position.setRuleset(Ruleset::Classic);
+    return position;
+}
+
 void checkImpl(bool condition, const char* expression, int line) {
     if (!condition) {
         ++failures;
@@ -41,7 +49,7 @@ EngineOptions optionsFor(std::uint64_t seed) {
 //     without a score head.
 void testEndgameExactScore() {
     const std::string headless = std::string(SHUYI_SOURCE_DIR) + "/models/shuyi_resnet_v1.bin";
-    Position opening;
+    Position opening = classicStart();
 
     EngineOptions options = optionsFor(4242);
     options.nnModelPath = headless;
@@ -55,7 +63,7 @@ void testEndgameExactScore() {
     CHECK(early.averageScore == 0.0); // and certainly not a fabricated one
 
     // Walk a legal game down to two plies left.
-    Position late;
+    Position late = classicStart();
     std::uint64_t seed = 99;
     while (kTotalMoves - late.ply() > 2) {
         const std::vector<Move> moves = late.legalMoves();
@@ -226,7 +234,7 @@ void testSymmetryReport() {
 }
 
 void testVisitBudget() {
-    Position position;
+    Position position = classicStart();
     const int budget = 200;
 
     for (EngineKind kind : {EngineKind::Mcts}) {
@@ -277,7 +285,7 @@ void testTt() {
 }
 
 void testSearchProgress() {
-    Position position;
+    Position position = classicStart();
     SearchOptions search;
     search.timeLimitMs = 40;
     search.maxDepth = 3;
@@ -294,7 +302,7 @@ void testSearchProgress() {
 }
 
 void testEngineKinds() {
-    Position position;
+    Position position = classicStart();
     SearchRequest request;
     request.timeLimitMs = 35;
     for (EngineKind kind : {EngineKind::Random, EngineKind::Pruning, EngineKind::Mcts,
@@ -331,7 +339,7 @@ void testEngineKinds() {
 }
 
 void testAspirationPvs() {
-    Position position;
+    Position position = classicStart();
     SearchOptions base;
     base.timeLimitMs = 5000;
     base.maxDepth = 4;
@@ -399,7 +407,7 @@ void testHandAwareEvaluation() {
     CHECK(evaluateHandAware(empty) == 0);
     CHECK(evaluateHandAware(empty, 0.0) == 0);
 
-    Position position;
+    Position position = classicStart();
     CHECK(position.play(Move(index(4, 4), 9))); // red spends a high number
     CHECK(position.play(Move(index(0, 0), 1)));  // black spends a low number
     const int noHand = evaluateHandAware(position, 0.0);
@@ -408,7 +416,7 @@ void testHandAwareEvaluation() {
 }
 
 void testDirichletRoot() {
-    Position position;
+    Position position = classicStart();
     EngineOptions options = optionsFor(77);
     options.rootDirichletAlpha = 0.5;
     options.rootNoiseWeight = 1.0;
@@ -431,7 +439,7 @@ void testNnModel() {
     const std::string path = std::string(SHUYI_SOURCE_DIR) + "/models/shuyi_resnet_v1.bin";
     CHECK(net.load(path, &error));
     if (!error.empty()) std::cerr << error << "\n";
-    Position position;
+    Position position = classicStart();
     const NnOutput output = net.evaluate(position, 1.0);
     CHECK(output.value >= 0.0f && output.value <= 1.0f);
     const Move move(index(4, 4), 7);
@@ -494,6 +502,9 @@ void testNnModel() {
     // Score head flag must survive clear()/allocate() inside load(); it is a
     // separate bit in the v3 header and used to be wiped on the way in.
     PolicyValueNet scorer = PolicyValueNet::random(44, "score-test", 8, 1);
+    // The search compares the model's rule set with the position's before it
+    // trusts the value head; this fixture is played on a Classic position.
+    scorer.setRuleset(Ruleset::Classic);
     scorer.enableScoreHead(1.0f);
     CHECK(scorer.hasScoreHead());
     CHECK(scorer.save(temp, &error));
@@ -532,6 +543,49 @@ void testNnModel() {
     std::filesystem::remove(temp);
 }
 
+// A blocking-trained model must be *used* under NoPass, not quietly dropped.
+//
+// The search compares the model's rule set with the position's before it trusts
+// the value head, and that comparison used to be equality.  The protocol gate
+// accepted the model (rulesetCompatible) and the search then ignored it, so the
+// engine played NoPass with a uniform prior and rollout values -- which looks
+// exactly like "the network got much worse under the new rule".
+//
+// The rule set is not part of the network input, so the same board must give the
+// same root value under both rule sets.  If the model were dropped under NoPass
+// the two numbers would differ.
+void testNoPassUsesTheModel() {
+    const std::string model =
+        std::string(SHUYI_SOURCE_DIR) + "/models/b4c32-s42012-d595499.bin";
+    if (!std::filesystem::exists(model)) {
+        CHECK(false);  // the shipped model is part of the repository
+        return;
+    }
+    auto evaluate = [&](Ruleset ruleset) {
+        Position position = classicStart();
+        position.reset();
+        position.setRuleset(ruleset);
+        EngineOptions options = optionsFor(31);
+        options.nnModelPath = model;
+        options.nnValueBlend = 1.0;
+        options.visits = 1;
+        options.mctsRootChildren = 1;
+        options.mctsMaxChildren = 1;
+        auto engine = makeEngine(EngineKind::MctsNn, options);
+        SearchRequest request;
+        request.visits = 1;
+        request.timeLimitMs = 2000;
+        return engine->search(position, request);
+    };
+    const Analysis blocking = evaluate(Ruleset::Blocking);
+    const Analysis nopass = evaluate(Ruleset::NoPass);
+    CHECK(blocking.valid);
+    CHECK(nopass.valid);
+    CHECK(std::fabs(blocking.winrate - nopass.winrate) < 1e-6f);
+    CHECK(blocking.best.cell == nopass.best.cell);
+    CHECK(blocking.best.number == nopass.best.number);
+}
+
 } // namespace
 
 int runEngineTests() {
@@ -543,6 +597,7 @@ int runEngineTests() {
     testDirichletRoot();
     testNnModel();
     testEndgameExactScore();
+    testNoPassUsesTheModel();
     testNoHardValueWithoutProof();
     testTerminalProof();
     testSymmetryReport();

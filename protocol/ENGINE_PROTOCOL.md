@@ -62,9 +62,9 @@ can pipeline: replies that arrive out of order stay attributable. A late
 | `name` | `ShuyiEngine` | |
 | `version` | e.g. `0.3.0` | |
 | `list_commands` | space separated names | |
-| `capabilities` | `engine=shuyi_engine proto=2 cuda=0\|1 backend=cpu\|cuda rulesets=classic,blocking visits=1 stream=1 json=1 model=0\|1 a_input=0\|1` | probe before choosing a binary |
+| `capabilities` | `engine=shuyi_engine proto=2 cuda=0\|1 backend=cpu\|cuda rulesets=classic,blocking,nopass visits=1 stream=1 json=1 model=0\|1 a_input=0\|1` | probe before choosing a binary |
 | `boardsize <n>` | empty | only 9 is accepted; anything else is an error |
-| `ruleset [classic\|blocking]` | the active rule set | only before the first move |
+| `ruleset [classic\|blocking\|nopass]` | the active rule set | only before the first move; `nopass` is the product default |
 | `clear_board` | empty | resets the position and the tree |
 | `play <red\|black> <a1..i9> <1..9>` | empty | the front end owns the game; an illegal move is an error |
 | `play <red\|black> pass` | empty | only legal when the side has no placement |
@@ -167,7 +167,10 @@ Every command either does what it says or fails with `?`.
 * A wrong board size, an unknown command, a bad argument: `?`.
 * `set_backend cuda` on a CPU build: `?`. With `auto` the engine uses the GPU when
   it works and reports `cpu` in the reply and in every analysis object.
-* `set_model` refuses a network trained for the other rule set, and refuses a
+* `set_model` refuses a network trained for an incompatible rule set.  A
+  blocking-trained model is accepted under `nopass` (every nopass game is a
+  blocking game up to its earlier end) and the reply says so; the reverse is
+  refused.  It also refuses a
   model file whose shape it cannot read (a v4 file in a v3-only engine is an
   error, not a silently truncated load).
 * `genmove`/`analyze` refuse to run when the selected engine cannot run (for

@@ -160,6 +160,43 @@ python training/elo.py --report runs/arena/blocking512/table.json --anchor rando
 
 ## 6. 改进记录
 
+### 2026-11-24 · 第三套规则：无过手（nopass），并设为默认
+
+规则：落子限制与阻挡完全相同，但**没有过手**——轮到一方而它无处可落，棋局立刻终局计分。
+所以棋盘可能少于 54 枚收场，“把对手困死”变成真正的终局手段。
+
+实现要点（细节见 `docs/RULES.zh-CN.md` 第 7 节）：
+
+- `Ruleset::NoPass = 2`，`kDefaultRuleset` 改成它；`rulesetBlocks()` / `rulesetHasPass()`
+  取代散落的 `== Ruleset::Blocking` 判断（core、引擎、selfplay 三处都有）。
+- `Position::gameOver()` 在 NoPass 下多一个条件：`!hasPlacement()`。`hasPlacement()`
+  只检查手里最大的数字（更大的都不行，更小的更不行），所以通常是几次比较就短路。
+- `searchMoves()` 不再为 NoPass 造“强制过手”节点；`pass()` 直接返回 false。
+  如果 selfplay 在非终局遇到无合法着法，直接 abort——那是生成器与规则不一致，不能继续跑。
+- `rulesetCompatible(blocking, nopass) == true`：无过手的每一局都是阻挡的一局的前缀，
+  所以阻挡模型可以直接下无过手，引擎在 `set_model` 应答里写明。反向不允许。
+
+**踩到的坑（值得记住）**：协议层放行了“阻挡模型 + 无过手”，但 `mcts.cpp` 里判断是否
+信任网络的代码还是一句 `nn_.ruleset() == position.ruleset()`。结果模型被悄悄丢掉，
+MCTS 用均匀先验 + rollout 下棋，第一次测出来是“模型在无过手规则下 20 局全输给剪枝”，
+看起来像“换规则把模型毁了”。实际是引擎没在用模型。修好后同一场比赛 20:0 反过来。
+已加回归测试 `testNoPassUsesTheModel`：同一局面在 blocking / nopass 下的根值与最佳着法
+必须完全一致（规则集不进网络输入），把无过手静默丢模型的复现路径钉死。
+
+**实测影响**（这是用户的问题：换规则对现有模型影响多大？）：
+
+| 数据 | 对局 | 在 54 手前结束（有强制过手） |
+|---|---:|---:|
+| 阻挡规则、训练好的模型自对弈（gen_005 分片） | 1500 | 5（0.3%） |
+| 阻挡规则、随机落子（gen_000 分片） | 1500 | 20（1.3%） |
+| 无过手、训练好的模型自对弈（实跑 200 局） | 200 | 1（0.5%） |
+
+发生时的终局位置在 ply 50–52；分数平均只差 0.8 分，5 局里有 1 局胜负翻转。
+也就是说换规则**不需要重训**：模型在无过手下的表现与阻挡下一致（对剪枝 256 与 512
+visits 各 20:0）。下一轮训练会直接在无过手下产数据（`--ruleset nopass`），
+komi 仍用 1.26——不过要重新标定，因为终局更早、颜色平衡可能变了
+（200 局里红 120 / 黑 80，样本太小，不能直接下结论）。
+
 ### 2026-11-24 · 第一轮 v4 训练（3090，3 小时，3000 visits/步）
 
 配置：从 `models/b4c32-s34760-d470705.bin`（v3，A 盲）热启动，`--a-cond`、
@@ -205,8 +242,10 @@ python training/elo.py --report runs/arena/blocking512/table.json --anchor rando
 - 默认 PyTorch 源在这个机房只有 ~260 KB/s，`torch+cu124` 要 40 分钟；换清华 PyPI 镜像
   后 797 MB 用了 2 分钟（镜像里是 cu121 轮子，3090 上照样跑）。不要用 `-q` 装 torch，
   看不到进度会误判为卡死。
-- `git archive` 在 Windows 上按 `core.autocrlf` 写 CRLF，Linux 上 `set -euo pipefail`
-  直接报 "invalid option name"，Python 脚本也带 ``。已加 `.gitattributes`。
+- `git archive` 在 Windows 上按 `core.autocrlf` 写 CRLF，Linux 上 `set -euo pipefail
+`
+  直接报 "invalid option name"，Python 脚本也带 `
+`。已加 `.gitattributes`。
 - `cmake -S . -B build` 在 Linux 上会因为默认构建 Win32 界面而失败；现在 UI 的默认值
   跟随平台。
 - 15 GB 内存的机器上，`--max-samples 600000` 的 37 平面输入要 ~7 GB；只放一代分片时
