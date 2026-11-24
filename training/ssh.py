@@ -58,6 +58,9 @@ def run(cmd):
     return rc
 
 
+TEXT_SUFFIXES = (".sh", ".py", ".md", ".txt", ".csv", ".ini", ".cmake")
+
+
 def put(pairs):
     cli = connect()
     sftp = cli.open_sftp()
@@ -70,7 +73,15 @@ def put(pairs):
             except OSError:
                 run("mkdir -p " + d)
                 sftp = cli.open_sftp()
-        sftp.put(local, remote)
+        if remote.endswith(TEXT_SUFFIXES):
+            # A Windows working copy is CRLF, and a CRLF shell script dies on the
+            # Linux box with "set: pipefail: invalid option name" -- a failure that
+            # looks like a code bug.  Text files go up as LF, always.
+            data = open(local, "rb").read().replace(b"\r\n", b"\n")
+            with sftp.open(remote, "wb") as handle:
+                handle.write(data)
+        else:
+            sftp.put(local, remote)
         print(f"put {local} -> {remote}")
     sftp.close()
     cli.close()

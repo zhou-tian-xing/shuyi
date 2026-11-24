@@ -30,16 +30,21 @@ LR="${LR:-2e-4}"
 REPLAY_GENS="${REPLAY_GENS:-2}"
 SCORE_WEIGHT="${SCORE_WEIGHT:-0.5}"
 ARENA_GAMES="${ARENA_GAMES:-100}"
+# The probe must use the batch the run uses: probing at 8 measured 0.25 games/s
+# where the run actually does 0.45, which sizes the whole session for a box half
+# as fast as the one that is running.
+BATCH_GAMES="${BATCH_GAMES:-32}"
 SEED="${SEED:-20261201}"
 RUN_NAME="${RUN_NAME:-b${BLOCKS}c${CHANNELS}-${RULESET}-$(date +%Y%m%d)}"
 PYTHON="${SHUYI_PYTHON:-$REPO/.venv/bin/python}"
 [ -x "$PYTHON" ] || PYTHON="${SHUYI_PYTHON:-python3}"
+command -v "$PYTHON" >/dev/null || { echo "no python: $PYTHON" >&2; exit 1; }
 BIN="${SHUYI_SELFPLAY:-$REPO/build/shuyi_selfplay_gpu}"
 TRAIN_RATE="${TRAIN_RATE:-20000}"
 DRY="${DRY:-0}"
 # Parameters from the model file when it exists (exact), from the shape otherwise:
 # 37x9 stem + 6 blocks of two 3x3 convs + heads, which is 1.03 M for 6x96.
-PARAMS=$(python - "$MODEL" "$BLOCKS" "$CHANNELS" <<'PY'
+PARAMS=$("$PYTHON" - "$MODEL" "$BLOCKS" "$CHANNELS" <<'PY'
 import os, sys
 model, blocks, channels = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 if os.path.exists(model):
@@ -60,7 +65,7 @@ if [ -n "${SHUYI_FAKE_RATE:-}" ]; then
 else
     echo "probing self-play throughput (24 games, $VISITS visits)..."
     PROBE="$RUN_DIR/logs/probe_selfplay.log"
-    "$BIN" --mode selfplay --model "$MODEL" --games 24 --batch-games 8 \
+    "$BIN" --mode selfplay --model "$MODEL" --games 24 --batch-games "$BATCH_GAMES" \
         --visits "$VISITS" --ruleset "$RULESET" --komi "$KOMI" \
         --root-k 32 --top-k 16 --noise 0.25 --dirichlet 0.3 \
         --temp-moves 12 --temperature 1.0 --opening 2 --seed "$SEED" \
@@ -71,21 +76,21 @@ else
     echo "measured $RATE games/s at $VISITS visits"
 fi
 
-python "$REPO/training/budget.py" --rate "$RATE" --hours "$HOURS" --params "$PARAMS" \
+"$PYTHON" "$REPO/training/budget.py" --rate "$RATE" --hours "$HOURS" --params "$PARAMS" \
     --visits "$VISITS" --arena-games "$ARENA_GAMES" --train-rate "$TRAIN_RATE" \
     --replay-gens "$REPLAY_GENS" \
     --json > "$RUN_DIR/plan.json"
-python "$REPO/training/budget.py" --rate "$RATE" --hours "$HOURS" --params "$PARAMS" \
+"$PYTHON" "$REPO/training/budget.py" --rate "$RATE" --hours "$HOURS" --params "$PARAMS" \
     --visits "$VISITS" --arena-games "$ARENA_GAMES" --train-rate "$TRAIN_RATE" \
     --replay-gens "$REPLAY_GENS"
 
 # Read the plan from inside the run directory: a run path may contain non-ASCII
 # characters, and passing it through `python -c` breaks on Windows code pages.
-GENS=$(cd "$RUN_DIR" && python -c 'import json;print(json.load(open("plan.json"))["generations"])')
-GAMES=$(cd "$RUN_DIR" && python -c 'import json;print(json.load(open("plan.json"))["games_per_generation"])')
-EPOCHS=$(cd "$RUN_DIR" && python -c 'import json;print(json.load(open("plan.json"))["epochs"])')
+GENS=$(cd "$RUN_DIR" && "$PYTHON" -c 'import json;print(json.load(open("plan.json"))["generations"])')
+GAMES=$(cd "$RUN_DIR" && "$PYTHON" -c 'import json;print(json.load(open("plan.json"))["games_per_generation"])')
+EPOCHS=$(cd "$RUN_DIR" && "$PYTHON" -c 'import json;print(json.load(open("plan.json"))["epochs"])')
 ELAPSED=$(( $(date +%s) - START ))
-RACE_HOURS=$(python -c "print(f'{(($HOURS * 3600) - $ELAPSED) / 3600:.3f}')")
+RACE_HOURS=$("$PYTHON" -c "print(f'{(($HOURS * 3600) - $ELAPSED) / 3600:.3f}')")
 
 echo "launching $GENS generations x $GAMES games x $EPOCHS epochs, deadline ${RACE_HOURS}h from now"
 
@@ -103,7 +108,7 @@ exec "$PYTHON" "$REPO/training/pipeline.py" \
     --generations "$GENS" \
     --games-per-gen "$GAMES" \
     --visits "$VISITS" \
-    --batch-games 32 \
+    --batch-games "$BATCH_GAMES" \
     --komi "$KOMI" --ruleset "$RULESET" \
     --a-cond --a-anchor "$KOMI" \
     --score-weight "$SCORE_WEIGHT" \
