@@ -50,6 +50,22 @@ LR="${LR:-}"
 ELO_EVERY="${ELO_EVERY:-}"
 ELO_VISITS="${ELO_VISITS:-}"
 
+# The interpreter that has torch: setup_ubuntu.sh installs into .venv, so a run
+# must not fall back to the system python3 (numpy/torch are not there, and the
+# failure shows up as ModuleNotFoundError two minutes into generation 0).
+PYTHON="${SHUYI_PYTHON:-}"
+if [ -z "$PYTHON" ]; then
+    if [ -x "$REPO/.venv/bin/python" ]; then
+        PYTHON="$REPO/.venv/bin/python"
+    else
+        PYTHON="python3"
+    fi
+fi
+"$PYTHON" -c "import torch, numpy" 2>/dev/null || {
+    echo "no torch/numpy in $PYTHON: run bash training/setup_ubuntu.sh first" >&2
+    exit 1
+}
+
 BIN="$BUILD/shuyi_selfplay_gpu"
 [ -x "$BIN" ] || { echo "build first: bash training/server_setup.sh" >&2; exit 1; }
 
@@ -88,7 +104,8 @@ if [ -n "$INIT_MODEL" ]; then
     EXTRA+=(--init-data "${INIT_SHARDS[@]}")
 fi
 
-nohup python3 -u "$REPO/training/pipeline.py" \
+nohup "$PYTHON" -u "$REPO/training/pipeline.py" \
+    --python "$PYTHON" \
     --run-name "$RUN_NAME" \
     --generations "$GENERATIONS" \
     --oneply-gens "$ONEPLY_GENS" \

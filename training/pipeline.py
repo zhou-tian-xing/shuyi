@@ -655,8 +655,13 @@ def main(argv=None):
         print()
         return 0
 
+    # run_generation.sh creates the run directory to hold pipeline.log before the
+    # pipeline starts, so "the directory exists" is not "a run exists".  Only refuse
+    # when something was actually written: a manifest or a generation directory.
     if run_dir.exists() and not (args.resume or args.force):
-        raise SystemExit(f"run directory exists: {run_dir} (use --resume or --force)")
+        written = (run_dir / "manifest.json").exists() or any(run_dir.glob("gen_*"))
+        if written:
+            raise SystemExit(f"run directory exists: {run_dir} (use --resume or --force)")
     run_dir.mkdir(parents=True, exist_ok=True)
     models_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = run_dir / "manifest.json"
