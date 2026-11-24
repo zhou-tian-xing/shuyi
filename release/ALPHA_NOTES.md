@@ -11,7 +11,7 @@
 ```
 shuyi.exe                  Win32 界面（规则与显示；不含任何搜索）
 shuyi_engine.exe           无头引擎：NN-MCTS，CUDA 12.4 构建
-models/b4c32-s34760-d470705.bin   当前最强的阻挡规则网络（6 代，470,705 局面）
+models/b4c32-s42012-d595499.bin   当前最强的阻挡规则网络（v4，A 是输入，3000 visits/步）
 shuyi-ui.ini               随包设置：阻挡规则、A=1、512 visits、引擎同目录
 ENGINE_PROTOCOL.md         引擎协议 v2（命令 + JSON 流式分析）
 RULES.zh-CN.md             规则全文
@@ -24,7 +24,7 @@ RULES.zh-CN.md             规则全文
 
 ```
 ruleset blocking
-set_model models/b4c32-s34760-d470705.bin
+set_model models/b4c32-s42012-d595499.bin
 set_engine mcts_nn
 set_backend auto
 1 analyze red 512 interval 100
@@ -131,23 +131,40 @@ inputs(4) globals(4) flags(4) ruleset(1) + 权重。`flags` 的 bit0 表示有�
 表示 v3（看不见 A），24 表示 v4（A 是输入）。引擎两种都读，并在 `capabilities` 里用
 `a_input=0/1` 明说，旧模型不会被当成能响应 A 的模型。
 
-本次发布的网络是 **v3 / 22 维全局 / `a_input=0`**：`set_a` 只影响终局判定，中局胜率
-不会随 A 变化（这是已知缺口，v4 训练完成后替换模型即修复）。
+本次发布的网络是 **v4 / 24 维全局 / `a_input=1`**（`b4c32-s42012-d595499.bin`）：
+A 是网络的输入，`set_a` 会连续改变胜率。同一个中局在 512 visits 下：
+
+| A | −6 | −2 | 0 | +1.26 | +4 | +8 |
+|---|---|---|---|---|---|---|
+| 胜率 | 0.057 | 0.301 | 0.544 | 0.699 | 0.903 | 0.979 |
+
+（旧 v3 模型在同一个局面下六个 A 都是 0.294 —— 它看不见 A。）
+
+这个模型是在上一代 b4c32-s34760 上热启动、用 3000 visits/步 自对弈 3 代得到的，
+每代对上一代都是 0.62~0.68（120 局，3000 visits）；同一个池里 800 visits 的 ELO 是
+gen_000 −140 → gen_001 −91 → gen_002 +112 → gen_003 +119。也就是说 A + 更高搜索量
+本身带来了提升，**不是**单靠加容量。
 
 容量对比：b4c32 = 8.6 万参数，KataGo 最小的 b6c96 = 103 万（12×），
-b8c128 = 241 万，b10c128 = 300 万。**容量是当前第一瓶颈。**
+b8c128 = 241 万，b10c128 = 300 万。这一轮连涨 4 代还没见平台，所以容量仍是下一档
+手段，不是现在的第一瓶颈。
 
 ---
 
 ## 6. 训练思路
 
 1. **自对弈产数据**：C++ 树 + 批量 CUDA 前向（`shuyi_selfplay_gpu`），
-   默认 1024 visits/步、2000 局/代。落子按访问数取分布，记录策略目标与终局胜负/目差。
+   这一轮用 3000 visits/步、800 局/代（3090 上约 30 分钟一代，≈64k sims/s）。
+   落子按访问数取分布，记录策略目标与终局胜负/目差。
 2. **前两代 bootstrap**：gen0 随机走子（纯策略学习），gen1/gen2 单层扫描
    （用网络的策略当目标、不做完整搜索），gen3 起才是 MCTS 自对弈。
    这样在策略还很差时不至于把搜索噪声当老师。
 3. **顺次迭代、不设闸门**：第 N+1 代用第 N 代的数据、从第 N 代权重续训；
    arena 只记录不阻断。原因是闸门会被"对某个旧模型恰好强"误导，而顺次链条更简单。
+4. **A 条件化（v4）**：全局特征末尾加 `A/10`、`|A|/10`；价值目标不再用搜索值，而是用
+   这局真实的终局原始分重算 `sign(score + side_sign·A)`。训练时每个 epoch 按样本重抽 A
+   （65% 在 ±12 内均匀，35% 固定在锚点 1.26），验证集固定在锚点。这样网络必须学会
+   `P(赢 | A)`，而不是背下某一个 komi。`--a-cond` 需要 SYSELF4 数据（每局都有原始分）。
 4. **只用 ELO 判断强弱**，不看 val_loss：曾出现过 val_policy 从 4.40 降到 3.34
    但 200 局复核胜率 0.495 的反例。
 5. **评测口径**：统一 512 visits/步，random 锚定 0，ELO 用两参数 logistic 拟合，
@@ -161,7 +178,7 @@ b8c128 = 241 万，b10c128 = 300 万。**容量是当前第一瓶颈。**
 | 总优化步数 | 34,760 |
 | 累计局面 | 470,705（每代约 7.8 万） |
 | 训练超参 | 40 epoch、batch 512、lr 2e-3（余弦） |
-| 模型 | `b4c32-s34760-d470705.bin` |
+| 模型 | `b4c32-s42012-d595499.bin`（v4，`a_input=1`） |
 | ELO（阻挡，512 visits，random=0） | **+1520** |
 | A值 | +1.26（包内取整 +1） |
 | 目差头 | 未训练（显示 `--`） |
@@ -187,7 +204,7 @@ python protocol/tests/protocol_smoke.py  shuyi_engine.exe
 python protocol/tests/visit_budget_smoke.py shuyi_engine.exe
 
 # 引擎侧自检
-echo -e "ruleset blocking\nset_model models/b4c32-s34760-d470705.bin\nset_engine mcts_nn\nbench 256\nquit" | shuyi_engine.exe
+echo -e "ruleset blocking\nset_model models/b4c32-s42012-d595499.bin\nset_engine mcts_nn\nbench 256\nquit" | shuyi_engine.exe
 ```
 
 包内没有训练/评测脚本；需要复现训练或跑 ELO 时用仓库里的 `training/` 与 `tools/`

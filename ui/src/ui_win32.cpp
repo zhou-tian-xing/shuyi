@@ -634,9 +634,15 @@ int readModelRuleset(const std::string& utf8Path) {
     const std::size_t got = std::fread(header, 1, sizeof(header), file);
     std::fclose(file);
     if (got < 12) return -1;
+    // v4 keeps the v3 header layout and only grows the global vector, so the
+    // rule-set byte is in the same place.  Without this case a v4 model reads as
+    // "unknown" and the menu silently drops it (it only lists models that match
+    // the active rule set), which is exactly how the package ended up with no
+    // model at all after the A-conditioned network shipped.
+    const bool v4 = std::memcmp(header, "SHUYINN4", 8) == 0;
     const bool v3 = std::memcmp(header, "SHUYINN3", 8) == 0;
     const bool v2 = std::memcmp(header, "SHUYINN2", 8) == 0;
-    if (!v3 && !v2) return -1;
+    if (!v3 && !v4 && !v2) return -1;
     if (v2) return 0;  // v2 has no ruleset byte; those weights are classic
     if (got < 33) return 0;
     // magic(8) version(4) channels(4) blocks(4) inputs(4) globals(4) flags(4) ruleset(1)
