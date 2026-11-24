@@ -97,35 +97,24 @@ def read_table(path: Path):
 # ---------------------------------------------------------------------------
 # 排行榜
 # ---------------------------------------------------------------------------
-def bounded_result(wins: int, draws: int, losses: int, z: float = 1.96):
-    """把 20-0 这种一边倒的格子换成它能证明的胜率（95% 下界）。
+def decisive(wins: int, draws: int, losses: int) -> bool:
+    """这一格两个方向都赢过 = 能读出分差；一边倒的格子只能读出"强很多"。
 
-    20-0 只说明"至少赢 83%"，不是"赢 100%"。按 100% 去拟合，评分会冲到几千分，
-    而且区间是假的；按 83% 记，分差就落回一个可信的下界，链式递推才有意义。
+    20-0 换写成 17-3 是编数据：那 3 局没下过。这种格子只含不等式信息，所以不进
+    拟合，只在表里标成 `≥`；评分只用两边都赢过至少一局的格子。
     """
-    total = wins + draws + losses
-    if total <= 0 or (wins != total and losses != total):
-        return wins, draws, losses
-    score = (wins + 0.5 * draws) / total
-    bound = wilson_lower(wins + 0.5 * draws, total) if wins == total else 1.0 - wilson_lower(losses + 0.5 * draws, total)
-    if wins == total and bound >= score:
-        return wins, draws, losses
-    if losses == total and bound <= score:
-        return wins, draws, losses
-    booked = int(round(bound * total))
-    booked = max(0, min(total, booked))
-    return booked, 0, total - booked
+    return wins > 0 and losses > 0
 
 
 def leaderboard(path: Path, anchor: str = "random"):
     order, results = read_table(path)
     pairs = [(a, b, wins, draws, losses, 1.0)
-             for (a, b), (wins, draws, losses) in results.items() if a < b
-             for wins, draws, losses in [bounded_result(wins, draws, losses)]]
+             for (a, b), (wins, draws, losses) in results.items()
+             if a < b and decisive(wins, draws, losses)]
     games = sum(wins + draws + losses for (_, _, wins, draws, losses, _) in pairs)
     if not pairs:
         return order, {}, {}, games
-    names = list(order)
+    names = sorted({name for (a, b, *_) in pairs for name in (a, b)})
     ratings = dict(zip(names, fit_elo(names, pairs)))
     intervals = dict(zip(names, bootstrap_ci(names, pairs)))
     if anchor in ratings:
@@ -189,19 +178,22 @@ def render(path: Path, anchor: str = "random") -> list[str]:
     order, results = read_table(path)
     _, ratings, intervals, games = leaderboard(path, anchor)
     visits = path.stem.split("_")[1]
-    lines = [f"## {visits} visits — {games} 局，{len(order)} 个参赛者", ""]
+    total_cells = sum(1 for (a, b) in results if a < b)
+    onesided = sum(1 for (a, b), (w, d, l) in results.items()
+                   if a < b and not decisive(w, d, l))
+    lines = [f"## {visits} visits — {games} 局能读出分差，{len(order)} 个参赛者", ""]
     if not ratings:
         return lines + ["（还没有数据）", ""]
-    if anchor not in order:
-        lines += [f"> 这张表没有锚 `{anchor}`：分数是相对池子算的，不是绝对分。", ""]
-    groups = components(order, results)
-    if len(groups) > 1:
-        described = "、".join(
-            "{" + ", ".join(group[:3]) + ("…" if len(group) > 3 else "") + "}"
-            for group in groups)
-        lines += [f"> 这些组之间没有对局：{described}。组与组之间的分数是任意定的，",
-                  "> 只有组内比较有意义；补一场跨组对局（往往只需几十局）就能连上。", ""]
-    ranked = sorted(order, key=lambda name: -ratings.get(name, -1e9))
+    if onesided:
+        lines += [f"> 表里 {total_cells} 个格子里有 {onesided} 个是一边倒（20-0 之类）。"
+                  "它们只说明「强很多」，读不出分差，所以**不参与拟合、也没有被改写成别的比分**；"
+                  "评分只用两边都赢过至少一局的格子。", ""]
+    if anchor not in ratings:
+        lines += [f"> `{anchor}` 在这张表里没有能读出分差的对局（全是 40-0），"
+                  "所以这版分数是相对池子算的，不是绝对分。", ""]
+    ranked = sorted((name for name in order if name in ratings),
+                    key=lambda name: -ratings[name])
+    unrated = [name for name in order if name not in ratings]
     lines.append("| # | 模型 | ELO | 95% CI | 对下一档 | 分差 |")
     lines.append("| ---: | --- | ---: | --- | --- | ---: |")
     for index, row in enumerate(ranked):
@@ -214,16 +206,19 @@ def render(path: Path, anchor: str = "random") -> list[str]:
             if value:
                 wins, draws, losses = value
                 total = wins + draws + losses
-                score = (wins + 0.5 * draws) / total
                 cell = f"{wins}-{draws}-{losses}"
                 if wins == total or losses == total:
-                    # 一边全胜：只能读出下界，读不出准确分差。
-                    bound = wilson_lower(wins, total) if wins == total else 1.0 - wilson_lower(losses, total)
-                    gap = f"≥ {abs(elo_gap(bound)):+.0f}" if wins == total else f"≥ -{abs(elo_gap(bound)):+.0f}"
+                    # 一边全胜：只有一个下界（20-0 的 95% 下界约 +287），没有点估计。
+                    bound = (wilson_lower(wins, total) if wins == total
+                             else 1.0 - wilson_lower(losses, total))
+                    gap = f"≥ {elo_gap(bound):+.0f}"
                 else:
-                    gap = f"{elo_gap(score):+.0f}"
-        lines.append(f"| {index + 1} | `{row}` | {ratings.get(row, 0.0):+.0f} | {ci_text} | "
+                    gap = f"{elo_gap((wins + 0.5 * draws) / total):+.0f}"
+        lines.append(f"| {index + 1} | `{row}` | {ratings[row]:+.0f} | {ci_text} | "
                      f"{cell} | {gap} |")
+    if unrated:
+        lines += ["", "只有一边倒的对局、评不出分的：" +
+                  "、".join(f"`{name}`" for name in unrated) + "。"]
     return lines + [""]
 
 
