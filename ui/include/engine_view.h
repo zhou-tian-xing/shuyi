@@ -30,8 +30,9 @@ struct CellAnalysisView {
     // The engine solved this move's subtree: win rate and score are exact, so a
     // small visit count does not turn them into a guess.
     bool proven = false;
-    // A network without a score head cannot fill the third row; the mark then
-    // shows "--" instead of a misleading 0.0.
+    // This cell carries a real score: the exact margin of a solved line, or an
+    // average that some visit measured.  Without it the cell shows "--"; 0.0
+    // from "no score source" is not "the game is even".
     bool hasScore = false;
 };
 

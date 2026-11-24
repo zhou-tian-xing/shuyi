@@ -259,6 +259,8 @@ std::wstring signedText(int value) {
 }
 
 std::wstring signedDecimal(double value) {
+    // Never "+-0.0": an exact zero has no sign to show.
+    if (value == 0.0) value = 0.0;
     std::wostringstream out;
     if (value >= 0.0) out << L'+';
     out << std::fixed << std::setprecision(1) << value;
@@ -1727,7 +1729,10 @@ void drawAnalysisMarks(HDC dc, const Layout& layout) {
         const bool topMark = rank[cellIndex] >= 0 && rank[cellIndex] < kMarkAlwaysShow;
         const double score = cellScore(info);
         const double relative = score - markedScore;
-        if (!topMark && relative < -kMarkWinRateWindow) continue;
+        // A solved cell is a fact, not a sample: draw it even when its win rate is
+        // far below the best, because the number it carries is the margin.  The
+        // window exists to keep estimates from crowding the board.
+        if (!topMark && !info.proven && relative < -kMarkWinRateWindow) continue;
         if (!topMark && !info.proven && bestVisits > 0 &&
             info.visits < static_cast<long long>(bestVisits * kMarkVisitFloor)) {
             continue;
@@ -1739,15 +1744,17 @@ void drawAnalysisMarks(HDC dc, const Layout& layout) {
         const RECT mark{cx - radius, cy - radius, cx + radius, cy + radius};
         roundRect(dc, mark, corner, mixColor(kBoard, colour, 0.62), colour, std::max(1, scale(1)));
         int y = cy + textTop;
-        // Show the same number the ranking uses: a solved cell shows its exact
-        // value, an estimate shows the Wilson lower bound.  A single lucky sample
-        // must not be printed as "100%" -- that reads like a proof, and the engine
-        // has no proof there (only `proven` is a proof).
-        drawTextAt(dc, formatWinRate(cellScore(info)), cx - radius, y, radius * 2, rowHeight,
-                   g_fontSmall, RGB(28, 32, 38));
+        // A solved cell shows its exact margin instead of a win rate: "loses by 2"
+        // and "loses by 18" are both 0% and would read identically.  An estimate
+        // shows the Wilson lower bound, so a single lucky sample is never printed
+        // as "100%" -- that reads like a proof, and only `proven` is a proof.
+        const bool exact = info.proven && info.hasScore;
+        drawTextAt(dc, exact ? formatPoints(info.averageScore) : formatWinRate(cellScore(info)),
+                   cx - radius, y, radius * 2, rowHeight, g_fontSmall, RGB(28, 32, 38));
         y += rowHeight;
         drawTextAt(dc, formatVisits(info.visits), cx - radius, y, radius * 2, rowHeight,
                    g_fontSmall, RGB(28, 32, 38));
+        if (exact) continue;  // the margin is already the first row
         y += rowHeight;
         const std::wstring scoreText = info.hasScore ? formatAverageScore(info.averageScore)
                                                      : std::wstring(L"--");
@@ -2063,8 +2070,15 @@ void drawStatus(HDC dc, const Layout& layout) {
         left = L"格 " + widen(squareName(g_hoverCell)) + L" · 数字 " +
                std::to_wstring(static_cast<int>(info.move.number)) + L" · 胜率 " +
                std::to_wstring(static_cast<int>(std::lround(shown * 100.0))) +
-               L"% · 访问 " + std::to_wstring(info.visits) + L" · 均分 " +
-               signedDecimal(info.averageScore);
+               L"% · 访问 " + std::to_wstring(info.visits);
+        if (info.hasScore) {
+            // A solved cell's number is the exact margin; anything else is an
+            // average over the visits that carried a score.
+            left += info.proven ? L" · 目差 " : L" · 均分 ";
+            left += signedDecimal(info.averageScore);
+        } else {
+            left += L" · 均分 --";
+        }
         if (!info.hasData) left += L"（未搜索）";
         if (info.proven) left += L"（已解算）";
     } else if (g_thinking) {

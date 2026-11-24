@@ -49,6 +49,22 @@ inline std::wstring formatAverageScore(double score) {
     return std::wstring(buffer);
 }
 
+// An exact margin inside a board cell: at most four characters.  Whole points are
+// the normal case ("+3", "-12"); when the A value makes the margin fractional the
+// one decimal is kept ("+3.3"), and an exact zero is "0" rather than "-0".
+inline std::wstring formatPoints(double score) {
+    wchar_t buffer[24]{};
+    const double rounded = std::round(score);
+    if (std::fabs(score - rounded) < 0.05) {
+        if (rounded > 0.0) std::swprintf(buffer, 24, L"+%.0f", rounded);
+        else if (rounded < 0.0) std::swprintf(buffer, 24, L"%.0f", rounded);
+        else std::swprintf(buffer, 24, L"0");
+    } else {
+        std::swprintf(buffer, 24, L"%+.1f", score);
+    }
+    return std::wstring(buffer);
+}
+
 // Wilson score interval lower bound for a win rate measured over `visits` samples.
 //
 // This is the number the board marks rank by: it answers "how good is this move,

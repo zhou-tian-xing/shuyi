@@ -79,6 +79,12 @@ struct CellAnalysis {
     int visits = 0;
     double averageScore = 0.0;
     bool hasData = false;
+    // averageScore is a real number: the exact margin of a solved line, or an
+    // average over visits that carried a terminal/net score.  A false here means
+    // "this cell has no score", which the front end shows as "--".  It is not the
+    // same as 0.0: a position lost by 18 points used to report 0.0 because no
+    // visit carried a score, and the board then read like an even game.
+    bool hasScore = false;
     // This move's subtree is solved, so winrate and averageScore are exact
     // rather than sampled.  The UI trusts proven cells even with a low visit
     // count, which a confidence bound could never do.

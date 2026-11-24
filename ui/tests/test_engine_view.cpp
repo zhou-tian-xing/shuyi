@@ -33,10 +33,14 @@ const char* kAnalysis =
     "\"best\":\"e5:3\",\"elapsed_ms\":412,\"nn\":\"b4c32-s34760-d470705.bin\","
     "\"pv\":[\"e5:3\",\"d4:1\"],"
     "\"moves\":[{\"move\":\"e5:3\",\"winrate\":0.5312,\"visits\":210,\"score\":1.234}],"
+    // Per-cell has_score: a solved cell (a1) has an exact margin, a sampled one
+    // without a score head (c3) has none, and e5's average came from a score head.
     "\"cells\":[{\"cell\":\"e5\",\"number\":3,\"winrate\":0.5312,\"visits\":210,"
-    "\"score\":1.234,\"proven\":false},"
-    "{\"cell\":\"a1\",\"number\":1,\"winrate\":0.42,\"visits\":7,\"score\":0.5,"
-    "\"proven\":true}]}";
+    "\"score\":1.234,\"has_score\":true,\"proven\":false},"
+    "{\"cell\":\"a1\",\"number\":1,\"winrate\":0.0,\"visits\":7,\"score\":-12.0,"
+    "\"has_score\":true,\"proven\":true},"
+    "{\"cell\":\"c3\",\"number\":2,\"winrate\":0.48,\"visits\":3,\"score\":0.0,"
+    "\"has_score\":false,\"proven\":false}]}";
 
 void testAnalysis() {
     EngineAnalysisView view;
@@ -57,7 +61,11 @@ void testAnalysis() {
           "cell e5");
     check(view.hasCell[sq("a1")] && view.cells[sq("a1")].proven,
           "proven cell");
-    check(view.cells[sq("e5")].hasScore, "cells inherit has_score");
+    check(view.cells[sq("e5")].hasScore, "a score-head cell carries its average");
+    check(view.cells[sq("a1")].proven && view.cells[sq("a1")].hasScore &&
+              view.cells[sq("a1")].averageScore == -12.0,
+          "a solved cell carries its exact margin");
+    check(!view.cells[sq("c3")].hasScore, "a cell without a score source has none");
     check(!view.hasCell[sq("b2")], "a cell without data stays empty");
 }
 

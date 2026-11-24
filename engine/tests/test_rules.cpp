@@ -292,6 +292,15 @@ void testScoreFormatting() {
     CHECK(formatAverageScore(3.4) == L"+3.4");
     CHECK(formatAverageScore(-0.5) == L"-0.5");
     CHECK(formatAverageScore(0.0) == L"0.0");
+    // An exact margin inside a cell: short, signed, no trailing ".0", and never
+    // "-0".  The A value can make it fractional, and then the decimal stays.
+    CHECK(formatPoints(3.0) == L"+3");
+    CHECK(formatPoints(-12.0) == L"-12");
+    CHECK(formatPoints(0.0) == L"0");
+    CHECK(formatPoints(-0.0) == L"0");
+    CHECK(formatPoints(3.26) == L"+3.3");
+    CHECK(formatPoints(-12.26) == L"-12.3");
+    CHECK(formatPoints(3.26).size() <= 5);
 }
 
 void testMarkRanking() {

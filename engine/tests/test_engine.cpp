@@ -96,7 +96,11 @@ void testNoHardValueWithoutProof() {
     options.nnModelPath = headless;
     options.nnValueBlend = 1.0;  // value head only: it cannot output exactly 1.0 here
     auto engine = makeEngine(EngineKind::MctsNn, options);
-    Position opening;
+    // classicStart(), not a default Position: the fixture is a classic model and
+    // the product default is nopass, where the search would ignore the model and
+    // fall back to rollouts -- which still has a score, so this test would pass
+    // while measuring nothing it says it measures.
+    Position opening = classicStart();
     SearchRequest request;
     request.timeLimitMs = 0;
     request.visits = 600;
@@ -111,6 +115,10 @@ void testNoHardValueWithoutProof() {
         if (info.visits == 0) continue;
         CHECK(info.winrate < 0.999);
         CHECK(info.winrate > 0.001);
+        // This network has no score head and nothing here is solved, so there is
+        // no score.  Reporting 0.0 would look like an even position (the old
+        // behaviour: every cell of a lost position read "0").
+        CHECK(!info.hasScore);
     }
 }
 
@@ -167,6 +175,26 @@ void testTerminalProof() {
         const double total = after.finalScore(1.0);
         const double expectedScore = late.sideToMove() == Player::Red ? total : -total;
         CHECK(std::fabs(analysis.averageScore - expectedScore) < 1e-6);
+        // Every legal move ends the game, so every cell is solved and has to carry
+        // its own exact margin: "loses by 2" and "loses by 12" must not both come
+        // out as the sampled 0.0 the scoreless network leaves behind.
+        int cellsWithScore = 0;
+        for (const CellAnalysis& info : analysis.cells) {
+            if (!info.hasData) continue;
+            CHECK(info.proven);
+            CHECK(info.hasScore);
+            Position child = late;
+            CHECK(late.isLegal(info.move));
+            if (!late.isLegal(info.move)) continue;
+            child.play(info.move);
+            CHECK(child.gameOver());
+            const double cellTotal = child.finalScore(1.0);
+            const double expectedCell =
+                late.sideToMove() == Player::Red ? cellTotal : -cellTotal;
+            CHECK(std::fabs(info.averageScore - expectedCell) < 1e-6);
+            ++cellsWithScore;
+        }
+        CHECK(cellsWithScore > 0);
         ++provenPositions;
     }
     CHECK(provenPositions > 0);
@@ -182,7 +210,7 @@ void testSymmetryReport() {
     options.nnModelPath = headless;
     options.nnValueBlend = 1.0;
     auto engine = makeEngine(EngineKind::MctsNn, options);
-    Position empty;
+    Position empty = classicStart();  // see testNoHardValueWithoutProof
     SearchRequest request;
     request.timeLimitMs = 0;
     request.visits = 256;
@@ -212,7 +240,7 @@ void testSymmetryReport() {
 
     // After a stone on a1 the surviving symmetry is the main-diagonal transpose,
     // which swaps b1 with a2: those two must still agree.
-    Position diagonal;
+    Position diagonal = classicStart();
     diagonal.play(Move(index(0, 0), 1));
     engine->reset();
     const Analysis after = engine->search(diagonal, request);

@@ -951,8 +951,18 @@ private:
             cellInfo.visits = static_cast<int>(edge.visits);
             cellInfo.winrate = edgeValue(edge);
             cellInfo.averageScore = edgeScore(edge);
+            cellInfo.hasScore = edgeHasScore(edge);
             cellInfo.hasData = edge.visits > 0;
             cellInfo.proven = edgeProven(edge);
+            // A solved move has an exact margin even when no visit carried a
+            // score: the line ends in a terminal value.  Without this a move that
+            // loses by 18 reported the sampled 0.0 -- the same number as a drawn
+            // position -- because a scoreless network never fills scoreSum.
+            if (cellInfo.proven && edge.child >= 0 && scoreExact_[edge.child] &&
+                provenValue_[edge.child] >= 0.0) {
+                cellInfo.averageScore = -provenScore_[edge.child];
+                cellInfo.hasScore = true;
+            }
             analysis.cells.push_back(cellInfo);
         }
         return analysis;

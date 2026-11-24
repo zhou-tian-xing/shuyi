@@ -13,6 +13,10 @@ namespace {
 // valid JSON, and a front end must never have to special-case them.
 std::string number(double value, int decimals) {
     if (!std::isfinite(value)) value = 0.0;
+    // -0.0 is a real double (a score that came out exactly even from the losing
+    // side) and snprintf prints it as "-0.000".  Every front end would then show
+    // a minus sign on a drawn position, so zero is written as zero.
+    if (value == 0.0) value = 0.0;
     char buffer[64]{};
     std::snprintf(buffer, sizeof(buffer), "%.*f", decimals, value);
     return buffer;
@@ -114,6 +118,7 @@ std::string analysisJson(const Analysis& analysis, const std::string& backend,
             << ",\"winrate\":" << number(cell.winrate, 4)
             << ",\"visits\":" << cell.visits
             << ",\"score\":" << number(cell.averageScore, 3)
+            << ",\"has_score\":" << (cell.hasScore ? "true" : "false")
             << ",\"proven\":" << (cell.proven ? "true" : "false") << '}';
     }
     out << ']';

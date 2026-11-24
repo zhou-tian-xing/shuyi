@@ -134,7 +134,10 @@ rebuild it because the search itself changed.
     {"move": "e5:3", "winrate": 0.5312, "visits": 210, "score": 1.234}
   ],
   "cells": [
-    {"cell": "e5", "number": 3, "winrate": 0.5312, "visits": 210, "score": 1.234, "proven": false}
+    {"cell": "e5", "number": 3, "winrate": 0.5312, "visits": 210, "score": 1.234,
+     "has_score": true, "proven": false},
+    {"cell": "a1", "number": 1, "winrate": 0.0, "visits": 7, "score": -12.0,
+     "has_score": true, "proven": true}
   ]
 }
 ```
@@ -155,6 +158,14 @@ rebuild it because the search itself changed.
 | `pv` | principal variation, compact move tokens |
 | `moves` | candidate moves, best first |
 | `cells` | one entry per board cell with data; the UI draws these |
+| `cells[].proven` | this move's subtree is solved: `winrate` and `score` are exact |
+| `cells[].has_score` | this cell's `score` is real. For a solved cell it is the **exact margin**; for an estimate it is an average over the visits that carried a score. `false` means "no score for this cell", which a front end must render as `--`, never as `0` |
+
+A solved cell's `score` is the exact margin even when the network has no score
+head: the line ends in a terminal value, so a move that loses by 12 reports
+`-12`, not the sampled `0` that the same position used to report. A front end
+that sorts solved moves by win rate alone cannot tell `-2` from `-12`; the
+margin is the number to show.
 
 A cell that is not in `cells` has no analysis. Nothing in this object is derived
 by the front end: if `has_score` is false there is no score, and the front end

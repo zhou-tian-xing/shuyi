@@ -120,9 +120,12 @@ bool parseAnalysis(const std::string& json, EngineAnalysisView& out, std::string
             info.averageScore = doubleOf(item, "score");
             info.hasData = info.visits > 0;
             info.proven = boolOf(item, "proven");
-            // Only show a score the engine actually has (a terminal result or a
-            // trained score head).  There is no win-rate-to-score mapping here.
-            info.hasScore = view.hasScore;
+            // Per cell, not per position: a solved move has an exact margin even
+            // when the network has no score head, and an unsolved one may have no
+            // score at all.  An older engine does not send the field; there the
+            // position-level flag was the same decision for every cell, so it is
+            // the honest fallback.
+            info.hasScore = boolOf(item, "has_score", view.hasScore);
             view.cells[index] = info;
             view.hasCell[index] = true;
         }
