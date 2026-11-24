@@ -6,7 +6,7 @@
 
 | 文档 | 内容 |
 |---|---|
-| [RULES.zh-CN.md](RULES.zh-CN.md) | 棋盘、落子、计分、A值、两套规则的完整定义 |
+| [RULES.zh-CN.md](RULES.zh-CN.md) | 棋盘、落子、计分、A值、三套规则（现行/阻挡/无过手）的完整定义 |
 | [A_VALUE_ANALYSIS.zh-CN.md](A_VALUE_ANALYSIS.zh-CN.md) | A值的平局可达性：`P ∈ [-73, 73]` 的证明与 147 个见证 |
 | [plans/PLAN_BLOCK_RULE.zh-CN.md](plans/PLAN_BLOCK_RULE.zh-CN.md) | 阻挡规则的设计、实测数据、A值标定结果 |
 
