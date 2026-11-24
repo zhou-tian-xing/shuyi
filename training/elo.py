@@ -112,7 +112,13 @@ def fit_elo(names, pairs, prior_sigma=400.0, passes=60):
     return rating
 
 
-def bootstrap_ci(names, pairs, rounds=200, seed=7):
+def bootstrap_ci(names, pairs, rounds=200, seed=7, passes=60):
+    """95% interval from resampling the games.
+
+    `passes` has to match the point estimate: a short Newton run stops before the
+    prior has been overcome and returns ratings compressed toward the mean, which
+    is how a CI ended up not containing the estimate.
+    """
     rng = random.Random(seed)
     samples = [[] for _ in names]
     for _ in range(rounds):
@@ -132,7 +138,7 @@ def bootstrap_ci(names, pairs, rounds=200, seed=7):
                 else:
                     sb += 1
             resampled.append((a, b, sa, sd, sb, weight))
-        rating = fit_elo(names, resampled, passes=25)
+        rating = fit_elo(names, resampled, passes=passes)
         for i, r in enumerate(rating):
             samples[i].append(r)
     ci = []
