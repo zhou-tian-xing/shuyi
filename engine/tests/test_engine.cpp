@@ -1,4 +1,5 @@
 #include "shuyi/ai.h"
+#include "shuyi/endgame.h"
 #include "shuyi/engine.h"
 #include "shuyi/nn.h"
 #include "shuyi/tt.h"
@@ -126,6 +127,116 @@ void testNoHardValueWithoutProof() {
 // must stop spending visits once it is solved.  This is the regression test for
 // the sign of the terminal value as it travels back up the tree: a loss that
 // propagates as a win shows up here as a win rate of 1.0 on a lost position.
+// Plain minimax, written here without alpha-beta so the solver's pruning and its
+// sign convention are checked against something that shares no code with it.
+double bruteForceScore(Position& position, double aValue) {
+    Position terminal = position;
+    double total = 0.0;
+    if (position.gameOver()) {
+        total = terminal.finalScore(aValue);
+        return position.sideToMove() == Player::Red ? total : -total;
+    }
+    const std::vector<Move> moves = position.searchMoves();
+    if (moves.empty()) {
+        total = terminal.finalScore(aValue);
+        return position.sideToMove() == Player::Red ? total : -total;
+    }
+    double best = -1e18;
+    for (const Move& move : moves) {
+        Position child = position;
+        child.play(move);
+        best = std::max(best, -bruteForceScore(child, aValue));
+    }
+    return best;
+}
+
+// The last plies are solved exactly: every legal move gets its own margin, and the
+// number the board shows is the game-theoretic score, not a sample.
+void testExactEndgameSolver() {
+    int checked = 0;
+    for (int game = 0; game < 5; ++game) {
+        Position late;
+        late.setRuleset(Ruleset::NoPass);
+        std::uint64_t seed = 11 + static_cast<std::uint64_t>(game) * 977;
+        while (kTotalMoves - late.stones() > 3) {
+            const std::vector<Move> moves = late.legalMoves();
+            if (moves.empty()) break;
+            seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+            late.play(moves[seed % moves.size()]);
+        }
+        if (kTotalMoves - late.stones() > 3) continue;
+
+        const double aValue = 1.0;
+        const EndgameSolution solved = solveEndgame(late, aValue);
+        CHECK(solved.solved);
+        CHECK(!solved.moves.empty());
+        CHECK(late.isLegal(solved.best));
+
+        const double expected = bruteForceScore(late, aValue);
+        CHECK(std::fabs(solved.score - expected) < 1e-9);
+        // Every move's score must match the plain minimax too, not only the best.
+        double bestSeen = -1e18;
+        for (const EndgameMove& entry : solved.moves) {
+            CHECK(late.isLegal(entry.move));
+            Position child = late;
+            child.play(entry.move);
+            const double value = -bruteForceScore(child, aValue);
+            CHECK(std::fabs(entry.score - value) < 1e-9);
+            bestSeen = std::max(bestSeen, value);
+        }
+        CHECK(std::fabs(bestSeen - solved.score) < 1e-9);
+        // A win is a positive score: if the sign convention were flipped, this
+        // would fail on the games that are decided.
+        for (const EndgameMove& entry : solved.moves) {
+            Position child = late;
+            child.play(entry.move);
+            if (!child.gameOver()) continue;
+            const double total = child.finalScore(aValue);
+            const double fromMover = late.sideToMove() == Player::Red ? total : -total;
+            CHECK(std::fabs(entry.score - fromMover) < 1e-9);
+        }
+        ++checked;
+    }
+    CHECK(checked > 0);
+}
+
+// The engine publishes those exact numbers: no visits, every cell solved, and the
+// margin on the board equals the minimax score of that move.
+void testExactEndgamePublished() {
+    Position late;
+    late.setRuleset(Ruleset::NoPass);
+    std::uint64_t seed = 4242;
+    while (kTotalMoves - late.stones() > 3) {
+        const std::vector<Move> moves = late.legalMoves();
+        if (moves.empty()) break;
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        late.play(moves[seed % moves.size()]);
+    }
+    CHECK(kTotalMoves - late.stones() <= 3);
+
+    EngineOptions options = optionsFor(7);
+    auto engine = makeEngine(EngineKind::Mcts, options);  // no model needed
+    SearchRequest request;
+    request.visits = 512;
+    const Analysis analysis = engine->search(late, request);
+    CHECK(analysis.valid);
+    CHECK(analysis.proven);
+    CHECK(analysis.hasScore);
+    CHECK(analysis.visits == 0);                        // solved, not sampled
+    CHECK(late.isLegal(analysis.best));
+    CHECK(!analysis.cells.empty());
+    for (const CellAnalysis& info : analysis.cells) {
+        CHECK(info.hasData);
+        CHECK(info.proven);
+        CHECK(info.hasScore);
+        CHECK(late.isLegal(info.move));
+        Position child = late;
+        child.play(info.move);
+        const double value = -bruteForceScore(child, options.aValue);
+        CHECK(std::fabs(info.averageScore - value) < 1e-9);
+    }
+}
+
 void testTerminalProof() {
     const std::string headless = std::string(SHUYI_SOURCE_DIR) + "/models/shuyi_resnet_v1.bin";
 
@@ -628,6 +739,8 @@ int runEngineTests() {
     testNoPassUsesTheModel();
     testNoHardValueWithoutProof();
     testTerminalProof();
+    testExactEndgameSolver();
+    testExactEndgamePublished();
     testSymmetryReport();
     testVisitBudget();
     return failures;

@@ -47,6 +47,13 @@ struct EngineOptions {
     // results are worth more than any network estimate, and a pruned tree may
     // never reach them.  0 disables.
     int mctsFullWidthPlies = 6;
+    // With this many plies left the last plies are solved exactly instead of
+    // searched.  A proof publishes a margin only when every reply is solved, and
+    // it stops at the first winning line, so a search would report "solved, no
+    // margin" in exactly the phase where the margin is the interesting number.
+    // Measured on a 3080 laptop CPU: 3-6 stones left costs 1-34 ms (the hands are
+    // nearly empty, so the branching is small); 7 costs seconds.  0 disables.
+    int exactEndgamePlies = 6;
     int aspirationWindow = 24;
     bool usePvs = true;
     // There is deliberately no tree-size cap: a cap silently changed how leaves

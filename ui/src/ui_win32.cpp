@@ -1631,14 +1631,22 @@ constexpr double kMarkVisitFloor = 0.05;
 // nearly all visits.  Without it a converged search leaves a single mark on the
 // board, which reads as "the engine proved a unique answer" -- it did not.
 constexpr int kMarkAlwaysShow = 8;
-// A cell is "best" by lower confidence bound, not by raw win rate: one lucky
-// visit at 100% has a Wilson bound near 20%, so it can never outrank a well
-// searched 55%.  This is what stops the blue mark from flickering between
-// half-explored cells.
-constexpr double kMarkTieMargin = 0.005;
 
 // Remembers the marked cell so ties do not alternate on every refresh.
 int g_markedBestCell = -1;
+
+// The engine's recommended move, as the cell the board can mark.  The mark and
+// the summary must describe this one cell: the engine picks the move, and a front
+// end that ranks cells on its own can name a different one (two symmetric squares
+// are one move, and the panel used to say "best d6-1" while d4-1 was highlighted).
+const CellAnalysisView* analysisBestCell() {
+    const Move best = g_engineAnalysis.best;
+    if (!best.valid() || isPass(best)) return nullptr;
+    if (best.cell < 0 || best.cell >= kCells) return nullptr;
+    if (!g_engineAnalysis.hasCell[best.cell]) return nullptr;
+    const CellAnalysisView& info = g_engineAnalysis.cells[best.cell];
+    return info.hasData ? &info : nullptr;
+}
 
 COLORREF markColor(double relative, bool best) {
     if (best) return RGB(126, 196, 255); // light blue
@@ -1670,28 +1678,32 @@ void drawAnalysisMarks(HDC dc, const Layout& layout) {
     }
     if (markedScore < 0.0) return;
 
-    // Pick the best cell from the confidence bound; on a near tie keep the cell
-    // that was marked last time, so the mark does not hop between equal moves.
-    // Between two solved moves with the same outcome the score decides: when the
-    // game is lost either way, play the line that loses by the fewest points.
+    // The panel names the engine's recommended move, so the mark goes there too.
+    // It used to be chosen independently by the confidence bound, which lands on
+    // whichever cell of an equivalence class happens to rank first: the board then
+    // highlighted d4-1 while the panel said "best d6-1" (the same move under the
+    // board's symmetry), and the two numbers could not agree because the panel
+    // measured the bound over the root's visits and the cell over its own.
     int bestCell = -1;
+    if (const CellAnalysisView* chosen = analysisBestCell()) {
+        bestCell = chosen->move.cell;
+    }
     double bestScore = -1.0;
     double bestExactScore = 0.0;
     bool bestProven = false;
-    for (int cellIndex = 0; cellIndex < kCells; ++cellIndex) {
+    if (bestCell >= 0) {
+        bestScore = cellScore(g_engineAnalysis.cells[bestCell]);
+        bestProven = g_engineAnalysis.cells[bestCell].proven;
+        bestExactScore = g_engineAnalysis.cells[bestCell].averageScore;
+    }
+    for (int cellIndex = 0; cellIndex < kCells && bestCell < 0; ++cellIndex) {
         if (g_position.stoneAt(cellIndex) != 0) continue;  // only empty cells can be played
         if (!g_engineAnalysis.hasCell[cellIndex]) continue;
         const auto& info = g_engineAnalysis.cells[cellIndex];
         if (!info.hasData || info.visits <= 0) continue;
-        const double score = cellScore(info);
-        const bool incumbent = cellIndex == g_markedBestCell;
-        const bool closeEnough = bestCell >= 0 && score > bestScore - kMarkTieMargin;
-        const bool betterScore = closeEnough && info.proven && bestProven &&
-                                 info.averageScore > bestExactScore + 1e-9;
-        if (bestCell < 0 || score > bestScore + kMarkTieMargin || betterScore ||
-            (incumbent && closeEnough)) {
+        if (cellScore(info) > bestScore) {
             bestCell = cellIndex;
-            bestScore = score;
+            bestScore = cellScore(info);
             bestProven = info.proven;
             bestExactScore = info.averageScore;
         }
@@ -1752,8 +1764,12 @@ void drawAnalysisMarks(HDC dc, const Layout& layout) {
         drawTextAt(dc, exact ? formatPoints(info.averageScore) : formatWinRate(cellScore(info)),
                    cx - radius, y, radius * 2, rowHeight, g_fontSmall, RGB(28, 32, 38));
         y += rowHeight;
-        drawTextAt(dc, formatVisits(info.visits), cx - radius, y, radius * 2, rowHeight,
-                   g_fontSmall, RGB(28, 32, 38));
+        // An exactly solved cell has no visit count to show: the answer did not
+        // come from sampling, and printing "0" would look like an empty search.
+        if (info.visits > 0) {
+            drawTextAt(dc, formatVisits(info.visits), cx - radius, y, radius * 2, rowHeight,
+                       g_fontSmall, RGB(28, 32, 38));
+        }
         if (exact) continue;  // the margin is already the first row
         y += rowHeight;
         const std::wstring scoreText = info.hasScore ? formatAverageScore(info.averageScore)
@@ -1894,18 +1910,31 @@ void drawEngineAnalysis(HDC dc, const PanelRects& rects) {
     y += scale(23);
     std::wstring metric;
     if (analysis.kind.rfind("mcts", 0) == 0) {
-        // Same number the marks show: the exact value when solved, the Wilson
-        // lower bound otherwise.  Printing a raw average here made the panel and
-        // the board disagree about the same position.
-        const double shown = analysis.proven
-                                 ? analysis.winrate
-                                 : winRateLowerBound(analysis.winrate, analysis.visits);
-        metric = L"访问 " + std::to_wstring(analysis.visits) + L" · 胜率 " +
-                 std::to_wstring(static_cast<int>(std::lround(shown * 100.0))) +
-                 L"% · 均分 " + signedDecimal(analysis.averageScore);
-        // A solved position stops searching on purpose: say so instead of
-        // looking like a search that ran out of budget.
-        if (analysis.proven) metric += L" · 已解算";
+        // Describe the same cell the board marks, with that cell's own sample
+        // count.  Measuring the bound over the root's visits (which is what this
+        // panel used to do) prints a number the board can never agree with: the
+        // recommended move has its own visit count, and a bound over 512 visits
+        // is not the bound over 96.
+        const CellAnalysisView* bestCell = analysisBestCell();
+        const bool proven = bestCell ? bestCell->proven : analysis.proven;
+        const double winrate = bestCell ? bestCell->winrate : analysis.winrate;
+        const long long visits = bestCell ? bestCell->visits : analysis.visits;
+        const double shown = proven ? winrate : winRateLowerBound(winrate, visits);
+        const bool hasScore = bestCell ? bestCell->hasScore : analysis.hasScore;
+        const double score = bestCell ? bestCell->averageScore : analysis.averageScore;
+        // An exact solve reports no visits: printing "0/0" would read as a search
+        // that did nothing, when in fact it needs no search at all.
+        const bool solvedExactly = analysis.visits == 0 && proven;
+        metric = solvedExactly ? L"精确解算"
+                               : L"访问 " + std::to_wstring(visits) + L"/" +
+                                     std::to_wstring(analysis.visits);
+        metric += L" · 胜率 " +
+                  std::to_wstring(static_cast<int>(std::lround(shown * 100.0))) + L"%";
+        metric += hasScore ? (proven ? L" · 目差 " : L" · 均分 ") : L" · 均分 --";
+        if (hasScore) metric += signedDecimal(score);
+        // A solved move stops searching on purpose: say so instead of looking
+        // like a search that ran out of budget.
+        if (proven && !solvedExactly) metric += L" · 已解算";
     } else {
         metric = L"深度 " + std::to_wstring(analysis.depth) + L" · 节点 " +
                  std::to_wstring(analysis.nodes) + L" · 评分 " +

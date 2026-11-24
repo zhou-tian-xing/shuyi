@@ -48,6 +48,7 @@ add_library(shuyi_search STATIC
     src/ai_blocking.cpp
     src/nn.cpp
     src/mcts.cpp
+    src/endgame.cpp
     src/engine.cpp
     src/tt.cpp
 )

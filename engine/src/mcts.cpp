@@ -1,3 +1,4 @@
+#include "shuyi/endgame.h"
 #include "shuyi/engine.h"
 #include "shuyi/nn.h"
 
@@ -139,6 +140,21 @@ public:
     }
 
     Analysis search(const Position& position, const SearchRequest& request) override {
+        // The last few plies are a finite game, not a sampling problem.  Solving
+        // them exactly makes the answer deterministic and complete: every legal
+        // move gets its own margin, instead of a proof that stops at the first
+        // winning line and leaves the margin unpublished.
+        if (options_.exactEndgamePlies > 0 &&
+            pliesRemaining(position) <= options_.exactEndgamePlies) {
+            Analysis exact = exactAnalysis(position);
+            if (exact.valid) {
+                // Publish it like any other snapshot: a front end learns the
+                // position from the info stream, and a search that returns without
+                // one leaves the board empty even though the answer was exact.
+                if (request.onUpdate) request.onUpdate(exact);
+                return exact;
+            }
+        }
         ensureRoot(position);
         if (position.gameOver()) return snapshot();
         if (options_.rootDirichletAlpha > 0.0 && !rootNoiseApplied_ && edgeCount_.size() > 0 &&
@@ -812,11 +828,78 @@ private:
         if (edgeProven(edge)) return edgeScoreExact(edge);
         return edge.scoreVisits > 0;
     }
+    // The average of the scores the visits measured, ignoring the proof.  A
+    // proven line whose margin is not final deliberately has no edgeScore, but
+    // the samples behind it are terminal results and are worth reporting.
+    double edgeSampledScore(const Edge& edge) const {
+        if (edge.scoreVisits == 0) return std::numeric_limits<double>::quiet_NaN();
+        return edge.scoreSum / static_cast<double>(edge.scoreVisits);
+    }
     double edgeScore(const Edge& edge) const {
         // A proven line with an unfinished margin reports nothing rather than a
         // lower bound that looks like a result.
         if (edgeProven(edge)) return edgeScoreExact(edge) ? -provenScore_[edge.child] : 0.0;
         return edge.scoreVisits ? edge.scoreSum / static_cast<double>(edge.scoreVisits) : 0.0;
+    }
+
+    // The exact answer for the last few plies, in the same shape as a search
+    // result: proven, with a margin on every cell.  `visits` stays 0 because no
+    // simulation ran -- the front end shows that as "solved", not as an empty
+    // search.
+    Analysis exactAnalysis(const Position& position) const {
+        Analysis analysis;
+        analysis.kind = kind();
+        analysis.valid = false;
+        const EndgameSolution solved = solveEndgame(position, options_.aValue);
+        if (!solved.solved) return analysis;
+        analysis.valid = true;
+        analysis.proven = true;
+        analysis.hasScore = true;
+        analysis.averageScore = solved.score;
+        analysis.score = static_cast<int>(std::lround(solved.score));
+        analysis.winrate = solved.score > 0.0 ? 1.0 : (solved.score < 0.0 ? 0.0 : 0.5);
+        analysis.best = solved.best;
+        analysis.nodes = solved.nodes;
+        analysis.visits = 0;
+        analysis.depth = 1;
+
+        // One entry per cell: the best number for that cell and its exact margin.
+        std::array<double, kCells> cellBest{};
+        std::array<int, kCells> cellNumber{};
+        cellBest.fill(-std::numeric_limits<double>::infinity());
+        for (const EndgameMove& candidate : solved.moves) {
+            const int cell = candidate.move.cell;
+            if (cell < 0 || cell >= kCells) continue;
+            if (candidate.score > cellBest[cell]) {
+                cellBest[cell] = candidate.score;
+                cellNumber[cell] = static_cast<int>(candidate.move.number);
+            }
+        }
+        for (int cell = 0; cell < kCells; ++cell) {
+            if (!std::isfinite(cellBest[cell])) continue;
+            CellAnalysis info;
+            info.cell = cell;
+            info.move = Move(cell, static_cast<std::uint8_t>(cellNumber[cell]));
+            info.winrate = cellBest[cell] > 0.0 ? 1.0 : (cellBest[cell] < 0.0 ? 0.0 : 0.5);
+            info.averageScore = cellBest[cell];
+            info.hasScore = true;
+            info.hasData = true;
+            info.proven = true;
+            analysis.cells.push_back(info);
+
+            AnalysisCandidate candidate;
+            candidate.move = info.move;
+            candidate.winrate = info.winrate;
+            candidate.averageScore = info.averageScore;
+            candidate.score = static_cast<int>(std::lround(info.averageScore));
+            analysis.candidates.push_back(candidate);
+        }
+        std::stable_sort(analysis.candidates.begin(), analysis.candidates.end(),
+                         [](const AnalysisCandidate& a, const AnalysisCandidate& b) {
+                             return a.averageScore > b.averageScore;
+                         });
+        if (analysis.candidates.size() > 8) analysis.candidates.resize(8);
+        return analysis;
     }
 
     Analysis snapshot() const {
@@ -871,7 +954,18 @@ private:
             // engine would actually play.
             analysis.hasScore = scoreExact_[root_] != 0 || edgeScoreExact(edges_[bestEdge]);
             if (!analysis.hasScore) {
-                analysis.averageScore = 0.0;
+                // Solved, but the proof stopped at the first winning line so the
+                // margin is not final.  Every visit to that line still ended the
+                // game, so their average is a real measurement (a lower bound on a
+                // win) and far better than "--": this is the phase where the
+                // number matters and where the panel used to go blank.
+                const double sampled = edgeSampledScore(edges_[bestEdge]);
+                if (std::isfinite(sampled)) {
+                    analysis.hasScore = true;
+                    analysis.averageScore = sampled;
+                } else {
+                    analysis.averageScore = 0.0;
+                }
             } else if (scoreExact_[root_]) {
                 analysis.averageScore = provenScore_[root_];
             } else {
@@ -954,6 +1048,15 @@ private:
             cellInfo.hasScore = edgeHasScore(edge);
             cellInfo.hasData = edge.visits > 0;
             cellInfo.proven = edgeProven(edge);
+            if (!cellInfo.hasScore && cellInfo.proven) {
+                // Solved without a final margin (see snapshot): the visits to the
+                // proven line are terminal results, so their average is real.
+                const double sampled = edgeSampledScore(edge);
+                if (std::isfinite(sampled)) {
+                    cellInfo.hasScore = true;
+                    cellInfo.averageScore = sampled;
+                }
+            }
             // A solved move has an exact margin even when no visit carried a
             // score: the line ends in a terminal value.  Without this a move that
             // loses by 18 reported the sampled 0.0 -- the same number as a drawn
