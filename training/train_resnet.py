@@ -596,9 +596,17 @@ def main(argv=None):
                         help="train with A as an input (v4 model): the global vector grows "
                              "to 24 and the value target is sign(final raw score + A)")
     parser.add_argument("--a-range", type=float, default=4.0,
-                        help="training A is drawn uniformly from [-range, range].  "
-                             "A small range is deliberate: the engine plays at the "
-                             "anchor, and A far from it is extrapolation either way")
+                        help="legacy: A is drawn uniformly from [-range, range].  Only "
+                             "used when --a-values is empty; A is equivalent inside an "
+                             "interval between two integers, so a continuous draw "
+                             "teaches the same thing many times over")
+    parser.add_argument("--a-values", default="",
+                        help="comma-separated A values to draw from instead (one "
+                             "representative per equivalence class).  A only enters the "
+                             "label as sign(raw + A) with raw an integer, so every A in "
+                             "(k, k+1) gives the identical target; half-integers are the "
+                             "natural representatives and they cannot draw (raw + k.5 is "
+                             "never 0).  Integers are their own class and can draw")
     parser.add_argument("--a-anchor", type=float, default=1.26,
                         help="the A the engine actually plays with (avalue.py measured "
                              "+1.26 at 192 visits); part of every epoch uses it verbatim")
@@ -623,6 +631,25 @@ def main(argv=None):
         raise SystemExit("--a-anchor-fraction must be in [0, 1]")
     if args.a_range < 0.0:
         raise SystemExit("--a-range must be >= 0")
+
+    a_choices = []
+    if args.a_values.strip():
+        try:
+            a_choices = [float(item) for item in args.a_values.replace(" ", "").split(",") if item]
+        except ValueError:
+            raise SystemExit(f"--a-values must be comma-separated numbers: {args.a_values!r}")
+        if not a_choices:
+            raise SystemExit("--a-values was given but holds no value")
+        # Two A values teach the same target when no integer lies between them, so
+        # listing both is a config mistake, not extra coverage.
+        seen = {}
+        for value in a_choices:
+            key = ("int", value) if float(value).is_integer() else ("open", math.floor(value))
+            if key in seen:
+                raise SystemExit(
+                    f"--a-values has two equivalents: {seen[key]:+g} and {value:+g} "
+                    f"(A only matters between two integers)")
+            seen[key] = value
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -732,7 +759,13 @@ def main(argv=None):
         # Plain Python ints: np.uint64 * int upcasts to float64 on numpy 1.x,
         # and default_rng refuses a float seed.
         rng = np.random.default_rng(int(args.seed) * 7919 + int(epoch))
-        draw = rng.uniform(-args.a_range, args.a_range, len(data)).astype(np.float32)
+        if a_choices:
+            # One representative per equivalence class: A and A' teach the same
+            # target whenever no integer lies between them.
+            pick = rng.integers(0, len(a_choices), len(data))
+            draw = np.asarray(a_choices, dtype=np.float32)[pick]
+        else:
+            draw = rng.uniform(-args.a_range, args.a_range, len(data)).astype(np.float32)
         if args.a_anchor_fraction > 0.0:
             at_anchor = rng.random(len(data)) < args.a_anchor_fraction
             draw[at_anchor] = args.a_anchor
@@ -894,6 +927,7 @@ def main(argv=None):
         "a_cond": bool(args.a_cond),
         "a_anchor": float(args.a_anchor),
         "a_range": float(args.a_range),
+        "a_values": a_choices,
         "best_val_loss": float(best_score),
         "last": history[-1] if history else {},
     }

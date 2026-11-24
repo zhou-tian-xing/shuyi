@@ -40,6 +40,15 @@ BATCH_GAMES="${BATCH_GAMES:-128}"
 # default (blocking +1.26, classic -0.5).
 A_COND="${A_COND:-1}"
 A_ANCHOR="${A_ANCHOR:-}"
+# A enters the value target only as sign(raw + A) with raw an integer, so every A
+# in an open interval (k, k+1) teaches the identical label: 0.5 and 0.6 are the
+# same lesson, and so are 1.26 and 1.5.  One representative per class is all the
+# coverage a continuous draw ever bought.  Half-integers also cannot draw.
+A_VALUES="${A_VALUES:--2.5,-1.5,-0.5,0.5,1.5,2.5}"
+# The score head is what makes an "expected margin" exist in the middlegame.
+# Without it the UI can only show a margin at solved positions, which is exactly
+# the complaint that the number comes and goes.
+SCORE_WEIGHT="${SCORE_WEIGHT:-0.5}"
 # Continue from an existing model instead of a random chain start.  INIT_DATA
 # may list several shard files, globs or directories (space separated).
 INIT_MODEL="${INIT_MODEL:-}"
@@ -92,6 +101,12 @@ if [ -n "$RULESET" ]; then
 fi
 if [ -n "$KOMI" ]; then
     EXTRA+=(--komi "$KOMI")
+fi
+if [ -n "$A_VALUES" ]; then
+    EXTRA+=(--a-values "$A_VALUES")
+fi
+if [ -n "$SCORE_WEIGHT" ]; then
+    EXTRA+=(--score-weight "$SCORE_WEIGHT")
 fi
 if [ -n "$LR" ]; then
     EXTRA+=(--lr "$LR")

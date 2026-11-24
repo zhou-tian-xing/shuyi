@@ -341,6 +341,7 @@ def train(args, gen_dir, gen, shards, init_model):
         "--max-samples", str(args.max_samples),
         "--lr", str(args.lr),
         "--value-weight", str(args.value_weight),
+        "--score-weight", str(args.score_weight),
         "--val", str(args.val),
         "--seed", str(args.seed + gen * 101),
         "--device", args.device,
@@ -352,6 +353,8 @@ def train(args, gen_dir, gen, shards, init_model):
             "--a-range", str(args.a_range),
             "--a-anchor-fraction", str(args.a_anchor_fraction),
         ]
+        if args.a_values:
+            cmd += ["--a-values", args.a_values]
     if args.amp:
         cmd.append("--amp")
     else:
@@ -555,6 +558,16 @@ def main(argv=None):
     parser.add_argument("--val", type=float, default=0.06)
     parser.add_argument("--lr", type=float, default=2e-3)
     parser.add_argument("--value-weight", type=float, default=1.0)
+    parser.add_argument("--score-weight", type=float, default=0.0,
+                        help="weight of the score head.  >0 trains an extra head that "
+                             "predicts the exact margin, which is the only way the UI can "
+                             "show an expected score in the middlegame: without it the "
+                             "number exists only at solved positions")
+    parser.add_argument("--a-values", default="",
+                        help="comma-separated A values to train on (one per equivalence "
+                             "class, e.g. -2.5,-1.5,-0.5,0.5,1.5,2.5).  Empty falls back to "
+                             "the trainer's continuous --a-range draw, which teaches the "
+                             "same label many times over")
     parser.add_argument("--replay-gens", type=int, default=1)
     parser.add_argument("--train-from-scratch", action="store_true",
                         help="ignore the previous generation's weights (gen 0 always does)")

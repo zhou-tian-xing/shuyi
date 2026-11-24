@@ -107,7 +107,7 @@ std::wstring g_enginePathUsed;  // what the running process actually is
 bool g_engineAuto = true;       // no explicit path: fall back to discovery
 HINSTANCE g_instance = nullptr;
 Position g_position;
-int g_aValue = 1;
+double g_aValue = 1.5;
 int g_selected = 1;
 int g_hoverCell = -1;
 bool g_thinking = false;
@@ -188,7 +188,7 @@ COLORREF mixColor(COLORREF a, COLORREF b, double t) {
 
 void refresh(bool immediate = false);
 void maybeAiMove();
-void setAValue(int value);
+void setAValue(double value);
 void needEngine(const wchar_t* detail);
 void syncEngineChecks();
 
@@ -256,6 +256,26 @@ void filledCircle(HDC dc, int cx, int cy, int radius, COLORREF fill, COLORREF bo
 std::wstring signedText(int value) {
     if (value > 0) return L"+" + std::to_wstring(value);
     return std::to_wstring(value);
+}
+
+// The A value lives on a half-integer grid (an integer A can draw, a half-integer
+// cannot), so it prints without trailing zeros: "1.5", "1", "-0.5".
+std::string formatAValue(double value) {
+    char buffer[32]{};
+    std::snprintf(buffer, sizeof(buffer), "%.2f", value);
+    std::string text(buffer);
+    while (text.size() > 1 && text.back() == '0') text.pop_back();
+    if (!text.empty() && text.back() == '.') text.pop_back();
+    return text;
+}
+
+std::wstring formatAValueW(double value) {
+    const std::string text = formatAValue(value);
+    return std::wstring(text.begin(), text.end());
+}
+
+std::wstring signedValue(double value) {
+    return value > 0.0 ? L"+" + formatAValueW(value) : formatAValueW(value);
 }
 
 std::wstring signedDecimal(double value) {
@@ -949,7 +969,7 @@ void loadSettings() {
             } else if (line.rfind("play_visits=", 0) == 0) {
                 g_playVisits = std::clamp(std::atoi(line.substr(12).c_str()), 1, 50000000);
             } else if (line.rfind("a_value=", 0) == 0) {
-                g_aValue = std::clamp(std::atoi(line.substr(8).c_str()), -40, 40);
+                g_aValue = std::clamp(std::atof(line.substr(8).c_str()), -40.0, 40.0);
             } else if (line.rfind("ruleset=", 0) == 0) {
                 Ruleset parsed = g_ruleset;
                 if (parseRuleset(trimAscii(line.substr(8)), parsed)) g_ruleset = parsed;
@@ -982,7 +1002,7 @@ void saveSettings() {
         text += static_cast<char>(10);
         text += "play_visits=" + std::to_string(g_playVisits);
         text += static_cast<char>(10);
-        text += "a_value=" + std::to_string(g_aValue);
+        text += "a_value=" + formatAValue(g_aValue);
         text += static_cast<char>(10);
         text += "ruleset=";
         text += rulesetName(g_ruleset);
@@ -1067,7 +1087,7 @@ bool startEngineProcess() {
     };
     run("boardsize 9");
     run(std::string("ruleset ") + rulesetName(g_ruleset));
-    run("set_a " + std::to_string(g_aValue));
+    run("set_a " + formatAValue(g_aValue));
     if (g_engineChoice == EngineChoice::MctsNn) {
         if (g_nnModelPath.empty()) g_nnModelPath = defaultModelPath();
         // The model must be accepted before the engine that needs it is selected.
@@ -1131,9 +1151,20 @@ void closeSettings(bool apply) {
             if (end == buffer) return fallback;
             return static_cast<int>(std::clamp<long>(value, low, high));
         };
+        // A is a real number now: 1.5 is the shipped value because a half-integer
+        // cannot draw (raw + 1.5 is never 0), while the rounded 1 turns every
+        // P = -1 position into a draw.
+        const auto readA = [&](HWND edit, double fallback) {
+            if (!edit) return fallback;
+            GetWindowTextW(edit, buffer, 32);
+            wchar_t* end = nullptr;
+            const double value = std::wcstod(buffer, &end);
+            if (end == buffer || !std::isfinite(value)) return fallback;
+            return std::clamp(value, -40.0, 40.0);
+        };
         const int analysis = readInt(g_settingsAnalysisEdit, g_analysisVisits, 0, 50000000);
         const int play = readInt(g_settingsPlayEdit, g_playVisits, 1, 50000000);
-        const int aValue = readInt(g_settingsAValueEdit, g_aValue, -40, 40);
+        const double aValue = readA(g_settingsAValueEdit, g_aValue);
         g_analysisVisits = analysis;
         g_playVisits = play;
         saveSettings();
@@ -1199,15 +1230,18 @@ void openSettings() {
         CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE | SS_LEFT, scale(16), top,
                         scale(170), scale(20), g_settingsWnd, nullptr, g_instance, nullptr);
     };
-    const auto edit = [&](int top, int value) {
-        wchar_t text[24]{};
-        std::swprintf(text, 24, L"%d", value);
-        HWND box = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", text,
+    const auto editText = [&](int top, const std::wstring& text) {
+        HWND box = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", text.c_str(),
                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, scale(196),
                                    top - scale(2), scale(150), scale(24), g_settingsWnd, nullptr,
                                    g_instance, nullptr);
         SendMessageW(box, WM_SETFONT, reinterpret_cast<WPARAM>(g_fontUi), TRUE);
         return box;
+    };
+    const auto edit = [&](int top, int value) {
+        wchar_t text[24]{};
+        std::swprintf(text, 24, L"%d", value);
+        return editText(top, text);
     };
 
     const int rowHeight = scale(34);
@@ -1219,7 +1253,7 @@ void openSettings() {
     g_settingsPlayEdit = edit(top, g_playVisits);
     top += rowHeight;
     label(L"A值（目数，可为负）", top);
-    g_settingsAValueEdit = edit(top, g_aValue);
+    g_settingsAValueEdit = editText(top, formatAValueW(g_aValue));
     top += rowHeight + scale(6);
     label(L"空格：开始 / 停止 / 超限后继续搜索", top);
 
@@ -2009,7 +2043,7 @@ void drawPanel(HDC dc, const Layout& layout) {
 
     roundRect(dc, rects.stats, scale(9), kPanelDeep);
     const int raw = g_position.rawScore();
-    const int total = raw + g_aValue;
+    const double total = raw + g_aValue;
     const int sx = rects.stats.left + scale(12);
     const int sw = rects.stats.right - rects.stats.left - scale(24);
     drawTextAt(dc, L"当前格子分", sx, rects.stats.top + scale(5), sw - scale(70), scale(24),
@@ -2019,7 +2053,7 @@ void drawPanel(HDC dc, const Layout& layout) {
                DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     drawTextAt(dc, L"A值", sx, rects.stats.top + scale(35), sw - scale(100), scale(24), g_fontSmall,
                kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    drawTextAt(dc, signedText(g_aValue), sx + sw - scale(96), rects.stats.top + scale(35), scale(36),
+    drawTextAt(dc, signedValue(g_aValue), sx + sw - scale(96), rects.stats.top + scale(35), scale(36),
                scale(24), g_fontUi, kGold, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     roundRect(dc, rects.aMinus, scale(5), kPanelSoft, RGB(68, 75, 88));
     roundRect(dc, rects.aPlus, scale(5), kPanelSoft, RGB(68, 75, 88));
@@ -2029,7 +2063,7 @@ void drawPanel(HDC dc, const Layout& layout) {
                rects.aPlus.bottom - rects.aPlus.top, g_fontUi, kText);
     drawTextAt(dc, L"若现在终局", sx, rects.stats.top + scale(65), sw - scale(80), scale(24),
                g_fontSmall, kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    drawTextAt(dc, signedText(total), sx + sw - scale(76), rects.stats.top + scale(63), scale(76),
+    drawTextAt(dc, signedValue(total), sx + sw - scale(76), rects.stats.top + scale(63), scale(76),
                scale(26), g_fontUi, total > 0 ? kRedSoft : (total < 0 ? RGB(174, 181, 195) : kGreen),
                DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
@@ -2115,7 +2149,7 @@ void drawStatus(HDC dc, const Layout& layout) {
     } else if (g_position.gameOver()) {
         const Outcome outcome = g_position.outcome(g_aValue);
         left = std::wstring(L"终局：") + outcomeText(outcome) + L" · 比分 " +
-               signedText(g_position.rawScore()) + L" + A(" + signedText(g_aValue) + L") = " +
+               signedText(g_position.rawScore()) + L" + A(" + signedValue(g_aValue) + L") = " +
                signedText(g_position.rawScore() + g_aValue);
     }
     drawTextAt(dc, left, scale(24), y, layout.client.right - scale(180), scale(33), g_fontSmall,
@@ -2136,7 +2170,7 @@ void drawOverlay(HDC dc, const Layout& layout) {
     drawTextAt(dc, outcomeText(outcome), box.left + scale(20), box.top + scale(16),
                box.right - box.left - scale(40), scale(58), g_fontTitle, color);
     const std::wstring detail = L"局面分 " + signedText(g_position.rawScore()) + L"   +   A值 " +
-                                signedText(g_aValue) + L"   =   " +
+                                signedValue(g_aValue) + L"   =   " +
                                 signedText(g_position.rawScore() + g_aValue);
     drawTextAt(dc, detail, box.left + scale(16), box.top + scale(76), box.right - box.left - scale(32),
                scale(28), g_fontUi, kText);
@@ -2192,10 +2226,10 @@ void setMode(Mode mode) {
     resetGame();
 }
 
-void setAValue(int value) {
+void setAValue(double value) {
     g_aValue = value;
     if (g_engineChoice != EngineChoice::Off && g_engineReady) {
-        sendEngine("set_a " + std::to_string(g_aValue));
+        sendEngine("set_a " + formatAValue(g_aValue));
         syncEnginePosition();
         if (aiToMove()) maybeAiMove();
     }
