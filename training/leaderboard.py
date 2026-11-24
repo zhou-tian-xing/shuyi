@@ -323,6 +323,8 @@ def main(argv=None):
                     help="also show tables that hold only engine kinds")
     ap.add_argument("--import-existing", action="store_true",
                     help="把 runs/eval 下新的评测结果填进 CSV，然后照常算榜")
+    ap.add_argument("--write-ladder", type=Path, default=None,
+                    help="写一份梯子顺序（最弱在前），给 roundrobin.py --ladder 用")
     args = ap.parse_args(argv)
 
     if args.import_existing:
@@ -358,7 +360,33 @@ def main(argv=None):
     path = OUT / "leaderboard.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     print(f"wrote {path}")
+
+    if args.write_ladder:
+        lines_out = ladder_order(paths)
+        args.write_ladder.write_text("\n".join(lines_out) + "\n", encoding="utf-8")
+        print(f"wrote {args.write_ladder} ({len(lines_out)} rungs, weakest first)")
     return 0
+
+
+def ladder_order(paths: list[Path]) -> list[str]:
+    """各档的平均名次（最弱在前），用来排下一轮的梯子。
+
+    单看一张表会把偶然的次序当成真的，所以在所有带模型的表上取平均名次：
+    名次比分数稳，分数在不同预算之间还不能直接比。
+    """
+    ranks: dict[str, list[float]] = {}
+    for path in paths:
+        order, _results = read_table(path)
+        names = [name for name in order if name not in PSEUDO]
+        if len(names) < 2:
+            continue
+        _, ratings, _, _, _ = leaderboard(path)
+        ranked = sorted(names, key=lambda name: -ratings.get(name, -1e9))
+        for index, name in enumerate(ranked):
+            ranks.setdefault(name, []).append(index)
+    if not ranks:
+        raise SystemExit("no table with at least two models: cannot write a ladder")
+    return sorted(ranks, key=lambda name: -sum(ranks[name]) / len(ranks))
 
 
 if __name__ == "__main__":
