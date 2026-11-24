@@ -127,6 +127,7 @@ struct Options {
     int games = 100;
     int batchGames = 128;
     int visits = 1024;
+    int visitsB = 0; // 0 = same as `visits`; otherwise side B gets its own budget
     int rootK = 32;   // 0 = no truncation at the root (full width)
     int topK = 16;    // 0 = no truncation inside the tree
     int opening = 2;
@@ -147,6 +148,8 @@ struct Options {
     std::string modelB;
     std::string nameA = "A";
     std::string nameB = "B";
+    // --model-b random: side B plays uniform-random moves (the Elo anchor).
+    bool randomB = false;
     std::string out = "data/selfplay.bin";
     std::string jsonOut;
     std::string csvOut;
@@ -209,6 +212,8 @@ bool parse(int argc, char** argv, Options& o) {
             o.batchGames = std::clamp(std::stoi(next("--batch-games")), 1, 8192);
         } else if (arg == "--visits") {
             o.visits = std::max(1, std::stoi(next("--visits")));
+        } else if (arg == "--visits-b") {
+            o.visitsB = std::max(1, std::stoi(next("--visits-b")));
         } else if (arg == "--root-k") {
             o.rootK = std::max(0, std::stoi(next("--root-k")));
         } else if (arg == "--top-k") {
@@ -672,6 +677,10 @@ struct Search {
     std::mt19937_64 rng;
     std::vector<Sample> samples;
     int modelFor[2] = {0, 0}; // model index playing Red (0) and Black (1)
+    // A uniform-random side plays a random legal move instead of the MCTS move.
+    // That is the Elo anchor: `random` is budget-independent, so a model rated
+    // against it has an absolute number that does not move when other models do.
+    bool randomSide[2] = {false, false};
     int net = 0;
 };
 
@@ -924,7 +933,12 @@ bool advance(Search& g, const Options& o, int moveNo, bool sample, bool temperat
     }
 
     int chosen = bestEdge;
-    if (temperature && moveNo < o.tempMoves && o.temperature > 1e-3) {
+    if (g.randomSide[root.side]) {
+        // Uniform over the expanded root moves.  The search still ran (its
+        // edges have to exist), but its opinion is thrown away.
+        std::uniform_int_distribution<int> pick(begin, end - 1);
+        chosen = pick(g.rng);
+    } else if (temperature && moveNo < o.tempMoves && o.temperature > 1e-3) {
         std::vector<double> weights;
         weights.reserve(end - begin);
         for (int e = begin; e < end; ++e) {
@@ -1341,8 +1355,16 @@ int runMatch(Evaluator& evaluator, const Options& o) {
         std::vector<int> aIsRed(count, 0);
         for (int g = 0; g < count; ++g) {
             aIsRed[g] = ((start + g) % 2 == 0) ? 1 : 0; // alternate colours
-            games[g].modelFor[0] = aIsRed[g] ? 0 : 1;
-            games[g].modelFor[1] = aIsRed[g] ? 1 : 0;
+            if (o.randomB) {
+                // Only one network is loaded; both sides search with it and the
+                // random side throws the result away in advance().
+                games[g].modelFor[0] = 0;
+                games[g].modelFor[1] = 0;
+                games[g].randomSide[aIsRed[g] ? 1 : 0] = true;
+            } else {
+                games[g].modelFor[0] = aIsRed[g] ? 0 : 1;
+                games[g].modelFor[1] = aIsRed[g] ? 1 : 0;
+            }
             seedOpenings(games[g], o, o.seed + 7919ULL * static_cast<std::uint64_t>(start + g));
         }
         std::vector<int> active;
@@ -1352,8 +1374,20 @@ int runMatch(Evaluator& evaluator, const Options& o) {
                 if (!terminalState(games[g].tree.nodes[0])) active.push_back(g);
             }
             if (active.empty()) break;
-            for (int visit = 0; visit < o.visits; ++visit) {
-                tick(evaluator, games, active, scratch, o);
+            // Each *player* may get its own budget: the same weights at two visit
+            // counts is how one more doubling of search is measured without a
+            // pool.  Budgets follow side A/B, not the colour of the stone.
+            const int budgetB = o.visitsB > 0 ? o.visitsB : o.visits;
+            std::vector<int> group[2];
+            for (int g : active) {
+                const bool aToMove = (games[g].tree.nodes[0].side == 0) == (aIsRed[g] == 1);
+                group[aToMove ? 0 : 1].push_back(g);
+            }
+            for (int side = 0; side < 2; ++side) {
+                const int budget = side == 0 ? o.visits : budgetB;
+                for (int visit = 0; visit < budget; ++visit) {
+                    tick(evaluator, games, group[side], scratch, o);
+                }
             }
             for (int g : active) {
                 if (!advance(games[g], o, moveNo, false, false)) {
@@ -1745,7 +1779,15 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::vector<std::string> models{options.model};
-    if (options.mode == "match") models.push_back(options.modelB);
+    // `--model-b random` is the Elo anchor: the second side plays a uniform
+    // random legal move and there is no second network to load.
+    const bool randomB = options.mode == "match" && options.modelB == "random";
+    if (randomB) {
+        options.randomB = true;
+        if (options.nameB == "B") options.nameB = "random";
+    } else if (options.mode == "match") {
+        models.push_back(options.modelB);
+    }
 
     Evaluator evaluator;
     std::string error;

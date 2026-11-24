@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -96,10 +97,31 @@ def read_table(path: Path):
 # ---------------------------------------------------------------------------
 # 排行榜
 # ---------------------------------------------------------------------------
+def bounded_result(wins: int, draws: int, losses: int, z: float = 1.96):
+    """把 20-0 这种一边倒的格子换成它能证明的胜率（95% 下界）。
+
+    20-0 只说明"至少赢 83%"，不是"赢 100%"。按 100% 去拟合，评分会冲到几千分，
+    而且区间是假的；按 83% 记，分差就落回一个可信的下界，链式递推才有意义。
+    """
+    total = wins + draws + losses
+    if total <= 0 or (wins != total and losses != total):
+        return wins, draws, losses
+    score = (wins + 0.5 * draws) / total
+    bound = wilson_lower(wins + 0.5 * draws, total) if wins == total else 1.0 - wilson_lower(losses + 0.5 * draws, total)
+    if wins == total and bound >= score:
+        return wins, draws, losses
+    if losses == total and bound <= score:
+        return wins, draws, losses
+    booked = int(round(bound * total))
+    booked = max(0, min(total, booked))
+    return booked, 0, total - booked
+
+
 def leaderboard(path: Path, anchor: str = "random"):
     order, results = read_table(path)
     pairs = [(a, b, wins, draws, losses, 1.0)
-             for (a, b), (wins, draws, losses) in results.items() if a < b]
+             for (a, b), (wins, draws, losses) in results.items() if a < b
+             for wins, draws, losses in [bounded_result(wins, draws, losses)]]
     games = sum(wins + draws + losses for (_, _, wins, draws, losses, _) in pairs)
     if not pairs:
         return order, {}, {}, games
@@ -141,7 +163,29 @@ def components(order, results) -> list[list[str]]:
     return sorted(groups.values(), key=lambda group: -len(group))
 
 
+def wilson_lower(wins: float, n: int, z: float = 1.96) -> float:
+    """胜率的 95% 下界：20-0 只说明"至少 0.83"，不足以给出更大的分差。"""
+    if n == 0:
+        return 0.0
+    p = wins / n
+    denom = 1.0 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return max(0.0, centre - half)
+
+
+def elo_gap(score: float) -> float:
+    """400*log10(p/(1-p)), clipped so a 20-0 cell stays a finite lower bound."""
+    score = min(0.99, max(0.01, score))
+    return 400.0 * math.log10(score / (1.0 - score))
+
+
 def render(path: Path, anchor: str = "random") -> list[str]:
+    """One table as a ladder: 每一档只和它下面那一档比。
+
+    实力差太远的对局（20-0）只给出下界，所以名次表旁边写的是"相对下一档"
+    的结果和分差，而不是一个假装精确的绝对值。
+    """
     order, results = read_table(path)
     _, ratings, intervals, games = leaderboard(path, anchor)
     visits = path.stem.split("_")[1]
@@ -149,7 +193,7 @@ def render(path: Path, anchor: str = "random") -> list[str]:
     if not ratings:
         return lines + ["（还没有数据）", ""]
     if anchor not in order:
-        lines += [f"> 这张表没有锚 `{anchor}`：分数只与池内均值可比。", ""]
+        lines += [f"> 这张表没有锚 `{anchor}`：分数是相对池子算的，不是绝对分。", ""]
     groups = components(order, results)
     if len(groups) > 1:
         described = "、".join(
@@ -158,40 +202,37 @@ def render(path: Path, anchor: str = "random") -> list[str]:
         lines += [f"> 这些组之间没有对局：{described}。组与组之间的分数是任意定的，",
                   "> 只有组内比较有意义；补一场跨组对局（往往只需几十局）就能连上。", ""]
     ranked = sorted(order, key=lambda name: -ratings.get(name, -1e9))
-    lines.append("| 模型 | ELO | 95% CI | " + " | ".join(ranked) + " |")
-    lines.append("| --- | ---: | --- | " + " | ".join("---:" for _ in ranked) + " |")
-    for row in ranked:
+    lines.append("| # | 模型 | ELO | 95% CI | 对下一档 | 分差 |")
+    lines.append("| ---: | --- | ---: | --- | --- | ---: |")
+    for index, row in enumerate(ranked):
         ci = intervals.get(row)
         ci_text = f"[{ci[0]:+.0f}, {ci[1]:+.0f}]" if ci else "—"
-        cells = []
-        for col in ranked:
-            if col == row:
-                cells.append("—")
-                continue
-            value = results.get((row, col))
-            cells.append("-".join(str(part) for part in value) if value else "·")
-        lines.append(f"| `{row}` | {ratings.get(row, 0.0):+.0f} | {ci_text} | " +
-                     " | ".join(cells) + " |")
+        below = ranked[index + 1] if index + 1 < len(ranked) else None
+        cell, gap = "·", ""
+        if below:
+            value = results.get((row, below))
+            if value:
+                wins, draws, losses = value
+                total = wins + draws + losses
+                score = (wins + 0.5 * draws) / total
+                cell = f"{wins}-{draws}-{losses}"
+                if wins == total or losses == total:
+                    # 一边全胜：只能读出下界，读不出准确分差。
+                    bound = wilson_lower(wins, total) if wins == total else 1.0 - wilson_lower(losses, total)
+                    gap = f"≥ {abs(elo_gap(bound)):+.0f}" if wins == total else f"≥ -{abs(elo_gap(bound)):+.0f}"
+                else:
+                    gap = f"{elo_gap(score):+.0f}"
+        lines.append(f"| {index + 1} | `{row}` | {ratings.get(row, 0.0):+.0f} | {ci_text} | "
+                     f"{cell} | {gap} |")
     return lines + [""]
 
 
-def pool_score(results) -> dict[str, tuple[float, int]]:
-    """(score, games) per model over the whole table: 胜=1 和=0.5 负=0。
-
-    这张表里大量格子是 20-0，ELO 的数值会被拉到几千分、区间也失去意义；
-    池内胜率是同一批数据的稳当读法，按它看"预算上去有没有变强"不会被饱和格子骗。
-    """
-    total: dict[str, list[float]] = {}
-    for (a, b), (wins, draws, losses) in results.items():
-        for name, won, drew, lost in ((a, wins, draws, losses), (b, losses, draws, wins)):
-            row = total.setdefault(name, [0.0, 0])
-            row[0] += won + 0.5 * drew
-            row[1] += won + drew + lost
-    return {name: (score, int(games)) for name, (score, games) in total.items()}
-
-
 def compare(paths: list[Path], anchor: str) -> list[str]:
-    """同一批模型在不同预算下的分数：涨了还是没涨。"""
+    """同一批模型在不同预算下的绝对分：涨了还是没涨。
+
+    只有 `random` 当锚时这些数才是"绝对棋力"：random 与搜索量无关，拿它当 0
+    分，换预算也不会把零点挪走。用别的锚时数字只能横向看，表头会写明。
+    """
     tables = []
     skipped = []
     sparse = []
@@ -207,21 +248,22 @@ def compare(paths: list[Path], anchor: str) -> list[str]:
             played = sum(1 for (a, b) in results if a < b)
             if need and played < 0.9 * need:
                 sparse.append(f"{label}（{played}/{need} 对）")
-            tables.append((label, ratings, intervals, games, pool_score(results)))
+            tables.append((label, ratings, intervals, games))
     if len(tables) < 2:
         return ["", "（少于两张带锚的表，没有可比的预算）", ""]
     tables.sort(key=lambda item: int(item[0]))
-    names = sorted({name for _, ratings, _, _, _ in tables for name in ratings},
-                   key=lambda name: -sum(r.get(name, -1e9) for _, r, _, _, _ in tables) / len(tables))
+    names = sorted({name for _, ratings, _, _ in tables for name in ratings},
+                   key=lambda name: -sum(r.get(name, -1e9) for _, r, _, _ in tables) / len(tables))
+    kind = "绝对分（random = 0）" if anchor == "random" else f"相对分（{anchor} = 0）"
     lines = ["", "## 同一模型跨预算对比", "",
-             f"锚：`{anchor}`（每张表都减掉它的分数）。括号里是相对最便宜一张表的差。", ""]
-    lines.append("| 模型 | " + " | ".join(f"{label} visits" for label, _, _, _, _ in tables) + " |")
+             f"{kind}。括号里是相对最便宜一张表的差。", ""]
+    lines.append("| 模型 | " + " | ".join(f"{label} visits" for label, _, _, _ in tables) + " |")
     lines.append("| --- | " + " | ".join("---:" for _ in tables) + " |")
-    base_label, base_ratings, _, _, base_pool = tables[0]
+    base_label, base_ratings, _, _ = tables[0]
     for name in names:
         first = base_ratings.get(name)
         cells = []
-        for label, ratings, intervals, _, pool in tables:
+        for label, ratings, intervals, _ in tables:
             value = ratings.get(name)
             if value is None:
                 cells.append("·")
@@ -231,35 +273,13 @@ def compare(paths: list[Path], anchor: str) -> list[str]:
             cells.append(f"{value:+.0f}{mark}")
         lines.append(f"| `{name}` | " + " | ".join(cells) + " |")
 
-    # Same data, but as "score against the whole pool", which stays readable when
-    # a cell is 20-0 and the rating differences run into the thousands.
-    lines += ["", "### 同一模型跨预算：池内胜率", "",
-              "格子是 `(胜+和/2)/局数`，后面的括号是相对最便宜一张表的百分点差。", ""]
-    lines.append("| 模型 | " + " | ".join(f"{label} visits" for label, _, _, _, _ in tables) + " |")
-    lines.append("| --- | " + " | ".join("---:" for _ in tables) + " |")
-    for name in names:
-        first = base_pool.get(name)
-        cells = []
-        for label, _, _, _, pool in tables:
-            entry = pool.get(name)
-            if entry is None or entry[1] == 0:
-                cells.append("·")
-                continue
-            score, games = entry
-            rate = 100.0 * score / games
-            delta = (rate - 100.0 * first[0] / first[1]) if first and first[1] else 0.0
-            mark = "" if label == base_label else f" ({delta:+.1f})"
-            cells.append(f"{rate:.1f}%{mark}")
-        lines.append(f"| `{name}` | " + " | ".join(cells) + " |")
-
-    lines += ["", "> 括号里的差若小于 CI 宽度（通常 ±40~90 ELO，或 ±2~3 个百分点），",
-              "> 就是噪声，不是变强了。", ""]
+    lines += ["", "> 算力变大时同一个模型的绝对分只应该涨或不动；括号里是负的，",
+              "> 说明那个格子被 20-0 压住了，只能当下界读。", ""]
     if skipped:
         lines += ["", f"> 这些预算的表里没有 `{anchor}`，跨表比不了，已略过："
                   + ", ".join(skipped) + "。", ""]
     if sparse:
-        lines += ["", "> 这些表只下了一部分对局（" + "、".join(sparse) + "），"
-                  "池内胜率只按下过的对局算，和满表放一起看会偏高或偏低。", ""]
+        lines += ["", "> 这些表只下了一部分对局（" + "、".join(sparse) + "）。", ""]
     return lines
 
 

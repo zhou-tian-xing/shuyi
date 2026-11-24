@@ -35,12 +35,15 @@ def model_list(directory: Path, include: str, skip: str) -> list[Path]:
     return files
 
 
-def play_pair(binary: Path, a: Path, b: Path, args, out: Path) -> dict:
-    target = out / f"{a.stem}__{b.stem}.json"
+def play_pair(binary: Path, a: Path | str, b: Path | str, args, out: Path) -> dict:
+    """One match.  `b` may be the string "random", which the binary plays itself."""
+    a_path, a_name = (a, Path(str(a)).stem)
+    b_path, b_name = (b, "random") if str(b) == "random" else (b, Path(str(b)).stem)
+    target = out / f"{a_name}__{b_name}.json"
     cmd = [
         str(binary), "--mode", "match",
-        "--model", str(a), "--name-a", a.stem,
-        "--model-b", str(b), "--name-b", b.stem,
+        "--model", str(a_path), "--name-a", a_name,
+        "--model-b", str(b_path), "--name-b", b_name,
         "--ruleset", args.ruleset, "--komi", f"{args.komi}",
         "--visits", str(args.visits), "--games", str(args.games),
         "--batch-games", str(min(args.games, args.batch_games)),
@@ -49,12 +52,12 @@ def play_pair(binary: Path, a: Path, b: Path, args, out: Path) -> dict:
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
-        return {"a": a.stem, "b": b.stem, "error": proc.stderr.strip()[-500:]}
+        return {"a": a_name, "b": b_name, "error": proc.stderr.strip()[-500:]}
     stat = json.loads(target.read_text())
     # `a_wins` counts wins for side A; the cell is from the row model's view.
     return {
-        "a": a.stem,
-        "b": b.stem,
+        "a": a_name,
+        "b": b_name,
         "visits": args.visits,
         "wins": stat["a_wins"],
         "draws": stat["draws"],
@@ -62,6 +65,28 @@ def play_pair(binary: Path, a: Path, b: Path, args, out: Path) -> dict:
         "games": stat["games"],
         "seconds": stat["seconds"],
     }
+
+
+def tasks_for(models: list[Path], args) -> list[tuple[Path | str, Path | str]]:
+    if args.random_only:
+        return [(path, "random") for path in models]
+    if args.ladder:
+        # 只要相邻两档：实力差太远的对局只会给出 20-0 和一个没有意义的下界。
+        order = [line.strip() for line in Path(args.ladder).read_text(encoding="utf-8").splitlines()
+                 if line.strip() and not line.startswith("#")]
+        by_name = {path.stem: path for path in models}
+        missing = [name for name in order if name not in by_name]
+        if missing:
+            raise SystemExit("ladder names not found: " + ", ".join(missing))
+        chain = [by_name[name] for name in order]
+        tasks = list(zip(chain, chain[1:]))
+        if args.random_anchor:
+            tasks.append((chain[0], "random"))
+        return tasks
+    tasks = list(itertools.combinations(models, 2))
+    if args.random_anchor:
+        tasks += [(path, "random") for path in models]
+    return tasks
 
 
 def main() -> int:
@@ -81,12 +106,20 @@ def main() -> int:
                          "core, so more than one only pays off with OMP_NUM_THREADS=1")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--random-anchor", action="store_true",
+                    help="every model (or the bottom of the ladder) also plays uniform random, "
+                         "which is Elo 0 at every budget")
+    ap.add_argument("--random-only", action="store_true",
+                    help="only play model vs random (the absolute anchor), no model pairs")
+    ap.add_argument("--ladder", type=Path, default=None,
+                    help="file with one model name per line, weakest first: play only the "
+                         "adjacent pairs instead of the full round robin")
     args = ap.parse_args()
 
     models = model_list(args.models, args.include, args.skip)
     args.out.mkdir(parents=True, exist_ok=True)
-    pairs = list(itertools.combinations(models, 2))
-    print(f"{len(models)} models, {len(pairs)} pairs, {args.games} games each, "
+    pairs = tasks_for(models, args)
+    print(f"{len(models)} models, {len(pairs)} matches, {args.games} games each, "
           f"visits={args.visits}, workers={args.workers}", flush=True)
 
     started = time.time()
