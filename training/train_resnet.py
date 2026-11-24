@@ -595,8 +595,10 @@ def main(argv=None):
     parser.add_argument("--a-cond", action="store_true",
                         help="train with A as an input (v4 model): the global vector grows "
                              "to 24 and the value target is sign(final raw score + A)")
-    parser.add_argument("--a-range", type=float, default=12.0,
-                        help="training A is drawn uniformly from [-range, range]")
+    parser.add_argument("--a-range", type=float, default=4.0,
+                        help="training A is drawn uniformly from [-range, range].  "
+                             "A small range is deliberate: the engine plays at the "
+                             "anchor, and A far from it is extrapolation either way")
     parser.add_argument("--a-anchor", type=float, default=1.26,
                         help="the A the engine actually plays with (avalue.py measured "
                              "+1.26 at 192 visits); part of every epoch uses it verbatim")

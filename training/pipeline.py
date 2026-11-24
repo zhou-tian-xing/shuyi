@@ -546,8 +546,8 @@ def main(argv=None):
                              "(see training/README.md, 'A as an input')")
     parser.add_argument("--a-anchor", type=float, default=1.26,
                         help="A the engine plays with; part of each epoch trains at it")
-    parser.add_argument("--a-range", type=float, default=12.0,
-                        help="explore A uniformly in [-range, range]")
+    parser.add_argument("--a-range", type=float, default=4.0,
+                        help="explore A uniformly in [-range, range]; small on purpose")
     parser.add_argument("--a-anchor-fraction", type=float, default=0.35)
     parser.add_argument("--max-samples", type=int, default=600000)
     parser.add_argument("--val", type=float, default=0.06)
