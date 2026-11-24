@@ -83,33 +83,38 @@ manifest 里记 `capacity_history`。宽度变了不能热启动，所以升级�
 
 ---
 
-## 3.5 总表：`training/leaderboard.py`
+## 3.5 排行榜：`training/leaderboard.py`
 
-`arena.py` 打的是一次对局，`elo.py` 拟合的是一次矩阵。要回答"现在所有模型谁强多少"，
-需要一张跨模型、跨预算、可增量更新的表，这就是 `leaderboard.py`：
+数据就是一张二维 CSV，`runs/leaderboard/matches_<visits>.csv`：
 
-```bash
-python training/leaderboard.py                     # 500 与 2000 visits 各打一轮
-python training/leaderboard.py --visits 500 --games 20
-python training/leaderboard.py --pairs all         # 不按实力筛选，全打
+```
+model,random,b4c32-s5960-d80938,b6c96-s13520-d183077
+random,—,0-0-120,0-0-120
+b4c32-s5960-d80938,120-0-0,—,87-0-33
 ```
 
-它做四件事：
+格子是行方对列方的 `胜-和-负`，空格 = 没打过，对角线 `—`。想改结果就直接改这个
+文件（改一个三角就够，另一半空着会自动镜像；两边矛盾会警告）。程序**不写表**，
+它只读表算分：
 
-1. **收集**：扫描 `models/*.bin` 和 `runs/training/*/models/*.bin`，按模型头里的
-   `ruleset` 字节过滤——别的规则集训出来的权重不能进这张表（引擎会拒绝它）。
-2. **只打相近的**：第一次跑没有评分，只能全打；之后只打 ELO 距离在 `--max-gap`
-   （默认 250）以内的对局。3000 分的差距用 10 局和 200 局测出来一样，没人需要那个数。
-3. **增量**：每个组合的结果各自存成 `runs/leaderboard/v<visits>/*.json`，
-   重跑只补缺的局。删掉某个文件就等于重新测那一对。
-4. **拟合**：和别的表用同一个 `elo.fit_elo`/`bootstrap_ci`，**random 钉在 0**，
-   所以每个数字都是"比均匀随机走子高多少分"，附带 200 次 bootstrap 的 95% 区间。
+```bash
+python training/leaderboard.py                 # 读所有 matches_*.csv，输出排行榜
+python training/leaderboard.py --visits 500    # 只看一个预算
+python training/leaderboard.py --all           # 连只有引擎种类的表也显示
+```
 
-产物 `runs/leaderboard/leaderboard.md`：每个预算一张二维表，
-行 = 模型，列 = 对手，格子是行方的得分率（和棋算半分）和局数。
+算法就是 `elo.py` 的同一套：逻辑回归最大似然 + 高斯先验，**random 钉在 0**，
+附 200 次 bootstrap 的 95% 区间。每个 `visits` 一张表、各算各的，**从不混预算**。
 
-注意：**全表需要 GPU 时间**。17 个模型在 500 visits 下是 136 对；
-在 3080 上大约 1–2 分钟/对，两轮共 3–5 小时。`--games` 和 `--max-gap` 是那两个旋钮。
+表本身会说它哪里不成立：
+
+- 没有 `random` 的表 → 分数只与池内均值可比，不是"比随机高多少"；
+- 分成互不对局的几组 → 组间的分数是任意定的，只有组内比较有意义
+  （补一场跨组对局就能连上，几十局就够）。
+
+历史评测一次性填进表格：`python training/leaderboard.py --import-existing`
+（`training/leaderboard_import.py` 负责把 `gen_003` 这类旧标签换成累计模型名，
+换不出来、仓库里也没有这个文件的对局直接丢掉）。
 
 ## 3.6 改名字：`training/rename_models.py`
 

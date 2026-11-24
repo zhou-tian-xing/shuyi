@@ -1,385 +1,222 @@
 #!/usr/bin/env python3
-"""The model leaderboard: 2D match matrices at fixed visit budgets, absolute Elo.
+"""模型排行榜：读二维 CSV 里的胜负结果，算 ELO。
 
-Why this exists
----------------
-Training logs answer "did generation N beat N-1".  That is not a rating: a chain
-of 0.55s can climb while the model is still far below an older one, and a single
-pairwise result says nothing about the field.  This tool keeps one table for every
-model in the repository, at one or more fixed visit budgets, and fits an absolute
-Eloh scale anchored at uniform-random play (the only strength unit this repo
-accepts).
+表格就是数据
+------------
+`runs/leaderboard/matches_<visits>.csv`：
 
-How it stays cheap
-------------------
-* `random` is in every table, so every rating is "points above uniform random".
-* Pairs are chosen by strength: the first pass plays everything (there is nothing
-  to sort by yet), later passes only play pairs within `--max-gap` Elo of each
-  other, because a 3000-Elo difference is measured just as well by 10 games as by
-  200 and nobody needs the number.
-* Work is incremental: each pair's games live in their own matrix file, and a
-  re-run only plays what is missing.  Deleting a file re-measures that pair.
+    model,random,b4c32-s5960-d80938,b6c96-s13520-d183077
+    random,—,0-0-120,0-0-120
+    b4c32-s5960-d80938,120-0-0,—,87-0-33
 
-    python training/leaderboard.py                       # 500 and 2000 visits
-    python training/leaderboard.py --visits 500 --games 20
-    python training/leaderboard.py --pairs all            # ignore the gap filter
+格子 = 行方对列方的 `胜-和-负`，空格 = 没打过，对角线是 `—`。
+想改结果就改这个文件：改一个三角就够了，另一边空着会自动镜像；
+两边都填但互相矛盾时会警告。程序不写表格（`--import-existing` 除外，
+那是把历史评测一次性填进来的入口）。
 
-Outputs (under runs/leaderboard/):
-    v<visits>/<n>.json      one arena matrix per group of models
-    ratings.json            Elo + bootstrap CI per budget
-    leaderboard.md          the table, one section per budget
+它只做一件事
+------------
+读表格 → 用 `training/elo.py` 的同一个 `fit_elo`（逻辑回归 + 高斯先验）拟合，
+**random 钉在 0**，附 200 次 bootstrap 的 95% 区间 → 打印排行榜 + 写
+`runs/leaderboard/leaderboard.md`。不同 `visits` 各是一张表、各算各的，
+从不混在一起（混预算等于比较不同搜索量）。
+
+    python training/leaderboard.py                 # 读所有 matches_*.csv
+    python training/leaderboard.py --visits 500    # 只看一个预算
+    python training/leaderboard.py --import-existing   # 把历史评测填进 CSV（一次性）
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import json
-import re
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from elo import bootstrap_ci, fit_elo  # noqa: E402  (same fit as every other table)
+from elo import bootstrap_ci, fit_elo  # noqa: E402  (同一个拟合，别的表才能比)
 
 REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "runs" / "leaderboard"
-ARENA = REPO / "training" / "arena.py"
+PSEUDO = ("random", "pruning", "mcts")
 
 
-def model_label(path: Path) -> str:
-    """The file name without .bin: canonical and unique inside a run."""
-    return path.stem
+# ---------------------------------------------------------------------------
+# 表格 ↔ (名字, 对局)
+# ---------------------------------------------------------------------------
+def parse_cell(text: str):
+    text = (text or "").strip().replace("–", "-").replace("—", "-")
+    if not text or text == "-":
+        return None
+    parts = text.split("-")
+    if len(parts) != 3:
+        raise ValueError(f"格子要写成 胜-和-负，读到 {text!r}")
+    wins, draws, losses = (int(part) for part in parts)
+    if min(wins, draws, losses) < 0 or wins + draws + losses == 0:
+        return None
+    return wins, draws, losses
 
 
-def model_ruleset(path: Path) -> int:
-    """The rule-set byte, read the way the engine reads it (-1 = unreadable)."""
-    try:
-        head = path.read_bytes()[:36]
-    except OSError:
-        return -1
-    if len(head) < 12:
-        return -1
-    magic = head[:8]
-    if magic in (b"SHUYINN3", b"SHUYINN4"):
-        if len(head) < 33:
-            return -1
-        return head[32]
-    if magic == b"SHUYINN2":
-        return 0  # v2 predates the byte: those weights are classic
-    return -1
-
-
-def compatible(ruleset_byte: int, game: str) -> bool:
-    """Same rule as the engine: equality, or blocking weights under nopass."""
-    codes = {"classic": 0, "blocking": 1, "nopass": 2}
-    game_code = codes.get(game, 2)
-    if ruleset_byte < 0:
-        return False
-    return ruleset_byte == game_code or (ruleset_byte == 1 and game_code == 2)
-
-
-def discover(patterns) -> list[Path]:
-    found: list[Path] = []
-    for pattern in patterns:
-        found.extend(sorted(REPO.glob(pattern)))
-    unique = []
-    seen = set()
-    for path in found:
-        if not path.is_file() or path.suffix == ".tmp":
+def read_table(path: Path):
+    """(名字顺序, 对称化的 results[(a, b)] = (win, draw, loss))"""
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.reader(handle))
+    if not rows:
+        return [], {}
+    header = [cell.strip() for cell in rows[0][1:]]
+    order: list[str] = []
+    raw: dict[tuple[str, str], tuple[int, int, int]] = {}
+    for row in rows[1:]:
+        if not row or not row[0].strip():
             continue
-        key = path.resolve()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(path)
-    return unique
-
-
-def arena_matrix(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def load_matrices(visits: int) -> list[dict]:
-    directory = OUT / f"v{visits}"
-    if not directory.exists():
-        return []
-    return [arena_matrix(p) for p in sorted(directory.glob("*.json"))]
-
-
-def merge_pairs(matrices) -> tuple[list[str], list[tuple]]:
-    """Sum games per unordered pair so re-playing a pair adds evidence."""
-    names: list[str] = []
-    totals: dict[tuple[str, str], list[float]] = {}
-    for matrix in matrices:
-        for name in matrix.get("names", []):
-            if name not in names:
-                names.append(name)
-        for entry in matrix.get("pairs", []):
-            a, b, wins_a, draws, wins_b, weight = entry
-            key = (a, b)
-            if key not in totals:
-                totals[key] = [0.0, 0.0, 0.0, 0.0]
-            totals[key][0] += wins_a
-            totals[key][1] += draws
-            totals[key][2] += wins_b
-            totals[key][3] += weight if weight else 1.0
-    pairs = [(a, b, int(v[0]), int(v[1]), int(v[2]), v[3] / max(1.0, v[3]))
-             for (a, b), v in totals.items()]
-    return names, pairs
-
-
-def score_matrix(names, pairs) -> dict[tuple[str, str], tuple[float, int]]:
-    """(score for the row player, games) for every measured pair."""
-    out: dict[tuple[str, str], tuple[float, int]] = {}
-    for a, b, wins_a, draws, wins_b, _weight in pairs:
-        games = wins_a + draws + wins_b
-        if games <= 0:
-            continue
-        out[(a, b)] = ((wins_a + 0.5 * draws) / games, games)
-        out[(b, a)] = ((wins_b + 0.5 * draws) / games, games)
-    return out
-
-
-def ratings_for(names, pairs) -> tuple[dict[str, float], dict[str, tuple[float, float]]]:
-    ratings = fit_elo(names, pairs)
-    ci = bootstrap_ci(names, pairs)
-    anchored = dict(zip(names, ratings))
-    if "random" in anchored:
-        # Uniform random play is the zero point: without this the pool mean is 0
-        # and every table would be on a different scale.
-        zero = anchored["random"]
-        anchored = {name: value - zero for name, value in anchored.items()}
-    result_ci = {}
-    for name, interval in zip(names, ci):
-        if name in anchored and "random" in dict(zip(names, ratings)):
-            zeros = dict(zip(names, ratings))["random"]
-            result_ci[name] = (interval[0] - zeros, interval[1] - zeros)
+        name = row[0].strip()
+        order.append(name)
+        for col, text in zip(header, row[1:]):
+            try:
+                parsed = parse_cell(text)
+            except ValueError as error:
+                raise SystemExit(f"{path.name}: {name} vs {col}: {error}")
+            if parsed:
+                raw[(name, col)] = parsed
+    for name in header:
+        if name not in order:
+            order.append(name)
+    results: dict[tuple[str, str], tuple[int, int, int]] = {}
+    for (a, b), value in raw.items():
+        results[(a, b)] = value
+        mirror = (value[2], value[1], value[0])
+        if (b, a) in raw:
+            if raw[(b, a)] != mirror:
+                print(f"warning: {path.name}: {a} vs {b} 与 {b} vs {a} 矛盾", file=sys.stderr)
         else:
-            result_ci[name] = interval
-    return anchored, result_ci
+            results[(b, a)] = mirror
+    return order, results
 
 
-def pick_pairs(names, ratings, max_gap: float) -> list[tuple[str, str]]:
-    """Every pair closer than max_gap; all pairs when there is no rating yet."""
-    if not ratings:
-        return [(a, b) for i, a in enumerate(names) for b in names[i + 1:]]
-    chosen = []
-    for i, a in enumerate(names):
-        for b in names[i + 1:]:
-            gap = abs(ratings.get(a, 0.0) - ratings.get(b, 0.0))
-            if gap <= max_gap:
-                chosen.append((a, b))
-    return chosen
+# ---------------------------------------------------------------------------
+# 排行榜
+# ---------------------------------------------------------------------------
+def leaderboard(path: Path):
+    order, results = read_table(path)
+    pairs = [(a, b, wins, draws, losses, 1.0)
+             for (a, b), (wins, draws, losses) in results.items() if a < b]
+    games = sum(wins + draws + losses for (_, _, wins, draws, losses, _) in pairs)
+    if not pairs:
+        return order, {}, {}, games
+    names = list(order)
+    ratings = dict(zip(names, fit_elo(names, pairs)))
+    intervals = dict(zip(names, bootstrap_ci(names, pairs)))
+    if "random" in ratings:
+        # 均匀随机走子是 0 分：不换算的话每张表的零点都不同，数字没法比较。
+        zero = ratings["random"]
+        ratings = {name: value - zero for name, value in ratings.items()}
+        intervals = {name: (low - zero, high - zero) for name, (low, high) in intervals.items()}
+    return order, ratings, intervals, games
 
 
-def groups_for(pairs, size: int) -> list[list[str]]:
-    """Collect pairs into groups so one arena call covers `size` models."""
-    parent: dict[str, str] = {}
+def components(order, results) -> list[list[str]]:
+    """Groups that never played each other: their relative Elo is arbitrary.
+
+    A rating is only defined relative to someone.  Two groups with no game between
+    them are connected only through the prior, so the number is a guess dressed up
+    as a measurement -- the table says so instead of hiding it.
+    """
+    seen: dict[str, str] = {}
+    parent: dict[str, str] = {name: name for name in order}
 
     def find(x):
-        parent.setdefault(x, x)
         while parent[x] != x:
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
 
-    def union(a, b):
+    for (a, b), _value in results.items():
         ra, rb = find(a), find(b)
         if ra != rb:
             parent[rb] = ra
-
-    for a, b in pairs:
-        union(a, b)
-    components: dict[str, set[str]] = {}
-    for name in parent:
-        components.setdefault(find(name), set()).add(name)
-    groups = []
-    for members in components.values():
-        ordered = sorted(members)
-        for start in range(0, len(ordered), size):
-            chunk = ordered[start:start + size]
-            if len(chunk) >= 2:
-                groups.append(chunk)
-    return groups
+    groups: dict[str, list[str]] = {}
+    for name in order:
+        groups.setdefault(find(name), []).append(name)
+    del seen
+    return sorted(groups.values(), key=lambda group: -len(group))
 
 
-def have_games(paths, a, b) -> int:
-    games = 0
-    for path in paths:
-        try:
-            matrix = arena_matrix(path)
-        except Exception:  # noqa: BLE001 - a truncated file is just "not measured"
-            continue
-        for entry in matrix.get("pairs", []):
-            pa, pb, wa, d, wb = entry[0], entry[1], entry[2], entry[3], entry[4]
-            if {pa, pb} == {a, b}:
-                games += wa + d + wb
-    return games
-
-
-def run_arena(group, visits, games, extra) -> Path:
-    index = 1
-    while True:
-        out = OUT / f"v{visits}" / f"g{index:02d}.json"
-        if not out.exists():
-            break
-        index += 1
-    out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [sys.executable, str(ARENA), "--players", *group, "--games", str(games),
-           "--visits", str(visits), "--out", str(out), *extra]
-    print("  " + " ".join(cmd[-6:]), flush=True)
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0 or not out.exists():
-        print(proc.stdout[-1500:])
-        print(proc.stderr[-1500:])
-        return out if out.exists() else Path()
-    return out
-
-
-def display_name(name: str) -> str:
-    """Strip the arena player prefix: the table is about models, not specs."""
-    return name[4:] if name.startswith("gpu:") else name
-
-
-def write_markdown(budgets, ratings, cis, matrices, path: Path) -> None:
-    lines = ["# 模型总表（自动生成，勿手改）", ""]
-    lines += ["`python training/leaderboard.py` 生成。ELO 以 **random = 0** 为锚，",
-              "带 200 次 bootstrap 的 95% 置信区间；每格是行方在对局中的得分率",
-              "（和棋算半分），括号里是局数。", ""]
-    for visits in budgets:
-        names, pairs = merge_pairs(matrices[visits])
-        if not names:
-            lines += [f"## {visits} visits", "", "（还没有数据）", ""]
-            continue
-        scores = score_matrix(names, pairs)
-        rating = ratings[visits]
-        order = sorted(names, key=lambda n: -rating.get(n, -1e9))
-        lines += [f"## {visits} visits", "", "| 模型 | ELO | 95% CI | " +
-                  " | ".join(display_name(n) for n in order) + " |"]
-        lines.append("| --- | ---: | --- | " + " | ".join("---:" for _ in order) + " |")
-        for row in order:
-            ci = cis[visits].get(row)
-            ci_text = f"[{ci[0]:+.0f}, {ci[1]:+.0f}]" if ci else "—"
-            cells = []
-            for col in order:
-                if col == row:
-                    cells.append("—")
-                    continue
-                entry = scores.get((row, col))
-                cells.append(f"{entry[0] * 100:.0f}% ({entry[1]})" if entry else "·")
-            lines.append(f"| `{display_name(row)}` | {rating.get(row, 0.0):+.0f} | "
-                         f"{ci_text} | " + " | ".join(cells) + " |")
-        lines.append("")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+def render(path: Path) -> list[str]:
+    order, results = read_table(path)
+    _, ratings, intervals, games = leaderboard(path)
+    visits = path.stem.split("_")[1]
+    lines = [f"## {visits} visits — {games} 局，{len(order)} 个参赛者", ""]
+    if not ratings:
+        return lines + ["（还没有数据）", ""]
+    if "random" not in order:
+        lines += ["> 这张表没有 `random`：分数只与池内均值可比。补几局 random 即可。", ""]
+    groups = components(order, results)
+    if len(groups) > 1:
+        described = "、".join(
+            "{" + ", ".join(group[:3]) + ("…" if len(group) > 3 else "") + "}"
+            for group in groups)
+        lines += [f"> 这些组之间没有对局：{described}。组与组之间的分数是任意定的，",
+                  "> 只有组内比较有意义；补一场跨组对局（往往只需几十局）就能连上。", ""]
+    ranked = sorted(order, key=lambda name: -ratings.get(name, -1e9))
+    lines.append("| 模型 | ELO | 95% CI | " + " | ".join(ranked) + " |")
+    lines.append("| --- | ---: | --- | " + " | ".join("---:" for _ in ranked) + " |")
+    for row in ranked:
+        ci = intervals.get(row)
+        ci_text = f"[{ci[0]:+.0f}, {ci[1]:+.0f}]" if ci else "—"
+        cells = []
+        for col in ranked:
+            if col == row:
+                cells.append("—")
+                continue
+            value = results.get((row, col))
+            cells.append("-".join(str(part) for part in value) if value else "·")
+        lines.append(f"| `{row}` | {ratings.get(row, 0.0):+.0f} | {ci_text} | " +
+                     " | ".join(cells) + " |")
+    return lines + [""]
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--models", nargs="+",
-                    default=["models/*.bin", "runs/training/*/models/*.bin"],
-                    help="globs, relative to the repo root")
-    ap.add_argument("--visits", default="500,2000", help="comma separated budgets")
-    ap.add_argument("--games", type=int, default=10, help="games per pair per budget")
-    ap.add_argument("--max-gap", type=float, default=250.0,
-                    help="only play pairs within this Elo distance (needs a previous run)")
-    ap.add_argument("--pairs", choices=["auto", "all"], default="auto")
-    ap.add_argument("--group", type=int, default=6, help="models per arena call")
-    ap.add_argument("--ruleset", default="nopass")
-    ap.add_argument("--komi", default="",
-                    help="points added to Red; default follows the rule set "
-                         "(classic -0.5, blocking/nopass +1.26) like pipeline.py")
-    ap.add_argument("--gpu-binary", default="", help="shuyi_selfplay_gpu path")
-    ap.add_argument("--engine-binary", default="", help="shuyi_engine path")
-    ap.add_argument("--force", action="store_true", help="ignore existing matrices")
-    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--visits", default="",
+                    help="只看一个预算（默认读 runs/leaderboard/matches_*.csv 全部）")
+    ap.add_argument("--all", action="store_true",
+                    help="also show tables that hold only engine kinds")
+    ap.add_argument("--import-existing", action="store_true",
+                    help="把 runs/ 下已有的评测结果一次性填进 CSV，然后照常算榜")
     args = ap.parse_args(argv)
 
-    budgets = [int(v) for v in args.visits.split(",") if v.strip()]
-    models = discover(args.models)
-    if not models:
-        print("no models found")
+    if args.import_existing:
+        from leaderboard_import import import_all
+        import_all(OUT)
+
+    paths = []
+    for path in sorted(OUT.glob("matches_*.csv")):
+        if args.visits and path.stem != f"matches_{args.visits}":
+            continue
+        order, _results = read_table(path)
+        # A table of engine kinds (random/pruning/mcts) is a fine measurement but
+        # not a model ranking: leave it out unless it is asked for.
+        if args.all or any(name not in PSEUDO for name in order):
+            paths.append(path)
+    if not paths:
+        print(f"{OUT} 下没有 matches_*.csv：先用 --import-existing 填，或手工建一张表")
         return 1
-    labels = {}
-    for path in models:
-        label = model_label(path)
-        if label in labels.values():
-            label = f"{label}-{path.parent.parent.name}"
-        labels[path] = label
-    # A model trained for another rule set cannot play these games: the engine
-    # refuses it, and silently playing on would rate weights that never ran.
-    skipped = [label for path, label in labels.items()
-               if not compatible(model_ruleset(path), args.ruleset)]
-    for path in [p for p, label in labels.items() if label in skipped]:
-        del labels[path]
-    if skipped:
-        print("skipped (other rule set): " + ", ".join(sorted(skipped)), flush=True)
-    print(f"{len(models)} models: " + ", ".join(sorted(labels.values())), flush=True)
 
-    ratings_path = OUT / "ratings.json"
-    previous = json.loads(ratings_path.read_text(encoding="utf-8")) if ratings_path.exists() else {}
-    OUT.mkdir(parents=True, exist_ok=True)
-
-    extra = []
-    if args.ruleset:
-        extra += ["--ruleset", args.ruleset]
-    komi = args.komi or ("-0.5" if args.ruleset == "classic" else "1.26")
-    extra += ["--komi", komi]
-    if args.gpu_binary:
-        extra += ["--gpu-binary", args.gpu_binary]
-    if args.engine_binary:
-        extra += ["--engine-binary", args.engine_binary]
-
-    ratings: dict[int, dict[str, float]] = {}
-    cis: dict[int, dict[str, tuple[float, float]]] = {}
-    matrices: dict[int, list[dict]] = {}
-
-    for visits in budgets:
-        directory = OUT / f"v{visits}"
-        if args.force and directory.exists():
-            for path in directory.glob("*.json"):
-                path.unlink()
-        by_label = {label: f"gpu:{path.resolve()}" for path, label in labels.items()}
-        names = sorted(by_label)
-        prior = (previous.get(str(visits)) or {}).get("ratings") or {}
-        pairs = ([(a, b) for i, a in enumerate(names) for b in names[i + 1:]]
-                 if args.pairs == "all" else pick_pairs(names, prior, args.max_gap))
-        existing = sorted(directory.glob("*.json")) if directory.exists() else []
-        todo = [pair for pair in pairs
-                if args.force or have_games(existing, pair[0], pair[1]) < args.games]
-        print(f"[{visits} visits] {len(pairs)} pairs selected, {len(todo)} need games",
-              flush=True)
-        if todo and not args.dry_run:
-            for group in groups_for(todo, args.group):
-                run_arena([by_label[name] for name in group], visits, args.games, extra)
-        found = load_matrices(visits)
-        matrices[visits] = found
-        names_all, merged = merge_pairs(found)
-        if merged:
-            ratings[visits], cis[visits] = ratings_for(names_all, merged)
-        else:
-            ratings[visits], cis[visits] = {}, {}
-
-    if args.dry_run:
-        return 0
-
-    OUT.mkdir(parents=True, exist_ok=True)
-    payload = {}
-    for visits in budgets:
-        payload[str(visits)] = {
-            "ratings": ratings.get(visits, {}),
-            "ci": {k: list(v) for k, v in cis.get(visits, {}).items()},
-        }
-    ratings_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-                            encoding="utf-8")
-    write_markdown(budgets, ratings, cis, matrices, OUT / "leaderboard.md")
-    for visits in budgets:
-        best = ratings.get(visits) or {}
-        if best:
-            top = sorted(best.items(), key=lambda kv: -kv[1])[:3]
-            print(f"{visits} visits: " +
-                  ", ".join(f"{display_name(n)} {v:+.0f}" for n, v in top), flush=True)
-    print(f"wrote {OUT / 'leaderboard.md'}")
+    lines = ["# 模型排行榜", "",
+             "由 `training/leaderboard.py` 从 `runs/leaderboard/matches_<visits>.csv` 算出。",
+             "格子是 `胜-和-负`（从行方看），`·` = 没打过。ELO 以 **random = 0** 为锚，",
+             "95% 区间是 200 次 bootstrap；不同 visits 从不混算。", ""]
+    for path in paths:
+        lines += render(path)
+        _, ratings, _, _ = leaderboard(path)
+        if ratings:
+            top = sorted(ratings.items(), key=lambda kv: -kv[1])[:5]
+            print(f"{path.stem.split('_')[1]:>5} visits: " +
+                  ", ".join(f"{name} {value:+.0f}" for name, value in top))
+    path = OUT / "leaderboard.md"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"wrote {path}")
     return 0
 
 

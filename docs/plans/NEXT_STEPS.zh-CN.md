@@ -76,6 +76,49 @@ BLOCKS=6 CHANNELS=96 GAMES=1500 VISITS=1024 GENERATIONS=8 ELO_EVERY=2 ELO_VISITS
 
 ---
 
+## 下一步（2026-11-24 晚，按顺序）
+
+**1. 把排行榜的表格连起来，再上正式预算**
+
+现在 `runs/leaderboard/matches_1024.csv` 有 1200 局、10 个模型，但断成两块
+（b4c32 链 / b6c96 链），而且没有 `random` 锚——这两件事都会让分数看起来比实际确定。
+补起来很便宜：
+
+```bash
+# 两个连通块之间各打一场（40 局 1024 visits + 40 局 800 visits，约 40 分钟）
+python training/arena.py --players gpu:models/b4c32-s42012-d595499.bin     gpu:runs/training/b6c96-nopass-20261124/models/b6c96-s13520-d183077.bin     --games 40 --visits 1024 --out runs/leaderboard/seed_1024.json
+# 每个模型对 random 各 20 局，锚就接上了
+python training/arena.py --players random gpu:models/b4c32-s42012-d595499.bin     gpu:runs/training/b6c96-nopass-20261124/models/b6c96-s13520-d183077.bin     --games 20 --visits 1024 --out runs/leaderboard/anchor_1024.json
+```
+
+把结果按 `胜-和-负` 填进 `matches_1024.csv`（或让 `--import-existing` 重新扫一遍），
+`leaderboard.py` 会自动给出接到 random 的绝对分。之后 **500 / 2000** 两个预算各跑一轮
+（17 个模型、相近实力才打，合计 3–5 小时 GPU），表格就固定下来了。
+
+**2. 下一轮训练：b6c96 + 分数头 + 离散 A**
+
+```bash
+BLOCKS=6 CHANNELS=96 GAMES=1500 VISITS=1024 GENERATIONS=8 SCORE_WEIGHT=0.5 A_VALUES=-2.5,-1.5,-0.5,0.5,1.5,2.5 bash training/run_generation.sh
+```
+
+这一轮才会真正产生**中局预计目差**（分数头），也是第一次用离散 A 训练。
+出模型后按顺序验三件事：`set_model` 回复里 `a_input=1`、`has_score=1` 出现在中局、
+界面第三行不是 `--`。
+
+**3. A 值定标（nopass）**
+
+```bash
+python training/avalue.py --ruleset nopass --komis -1,-0.5,0,0.5,1,1.5,2     --games 200 --visits 256
+```
+
+同时验一句结论：整数 A 会出现和棋、半整数不会。结果决定 `shuyi-ui.ini` 的 `a_value`
+（现在是 1.5，等价的标定值 1.26 也在这个区间）。
+
+**4. 排行榜常态化**
+
+每轮训练结束后只做两件事：把新模型加进 CSV 的行列，补它和"相近实力"模型的对局。
+`matches_1024.csv` 就是唯一的历史，手工可改、可 diff。
+
 ## 0. 先把"太小"量化
 
 | 模型 | 残差块 × 通道 | 参数量 | 单局面 MACs | 相对当前 |
