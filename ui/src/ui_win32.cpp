@@ -1732,23 +1732,20 @@ void drawAnalysisMarks(HDC dc, const Layout& layout) {
         bestCell = chosen->move.cell;
     }
     double bestScore = -1.0;
-    double bestExactScore = 0.0;
-    bool bestProven = false;
     if (bestCell >= 0) {
         bestScore = cellScore(g_engineAnalysis.cells[bestCell]);
-        bestProven = g_engineAnalysis.cells[bestCell].proven;
-        bestExactScore = g_engineAnalysis.cells[bestCell].averageScore;
     }
     for (int cellIndex = 0; cellIndex < kCells && bestCell < 0; ++cellIndex) {
         if (g_position.stoneAt(cellIndex) != 0) continue;  // only empty cells can be played
         if (!g_engineAnalysis.hasCell[cellIndex]) continue;
         const auto& info = g_engineAnalysis.cells[cellIndex];
-        if (!info.hasData || info.visits <= 0) continue;
+        // A solved cell is a result even with zero visits: the exact endgame
+        // solver answers without sampling, so requiring visits here dropped every
+        // cell of a solved position.
+        if (!info.hasData || (info.visits <= 0 && !info.proven)) continue;
         if (cellScore(info) > bestScore) {
             bestCell = cellIndex;
             bestScore = cellScore(info);
-            bestProven = info.proven;
-            bestExactScore = info.averageScore;
         }
     }
     g_markedBestCell = bestCell;
@@ -1803,20 +1800,27 @@ void drawAnalysisMarks(HDC dc, const Layout& layout) {
         // and "loses by 18" are both 0% and would read identically.  An estimate
         // shows the Wilson lower bound, so a single lucky sample is never printed
         // as "100%" -- that reads like a proof, and only `proven` is a proof.
-        const bool exact = info.proven && info.hasScore;
-        drawTextAt(dc, exact ? formatPoints(info.averageScore) : formatWinRate(cellScore(info)),
-                   cx - radius, y, radius * 2, rowHeight, g_fontSmall, RGB(28, 32, 38));
+        // Row 1 is always the win rate: a solved cell is exactly 0 / 50 / 100, an
+        // estimate is its Wilson lower bound (so one lucky sample is never printed
+        // as 100% -- only `proven` is a proof).
+        drawTextAt(dc, formatWinRate(cellScore(info)), cx - radius, y, radius * 2, rowHeight,
+                   g_fontSmall, RGB(28, 32, 38));
         y += rowHeight;
-        // An exactly solved cell has no visit count to show: the answer did not
-        // come from sampling, and printing "0" would look like an empty search.
+        // Row 2 is the visit count, and a solved cell has none: the answer did not
+        // come from sampling, so "0" would read as an empty search.  The row stays
+        // reserved so the margin sits on the same line on every cell.
         if (info.visits > 0) {
             drawTextAt(dc, formatVisits(info.visits), cx - radius, y, radius * 2, rowHeight,
                        g_fontSmall, RGB(28, 32, 38));
         }
-        if (exact) continue;  // the margin is already the first row
         y += rowHeight;
-        const std::wstring scoreText = info.hasScore ? formatAverageScore(info.averageScore)
-                                                     : std::wstring(L"--");
+        // Row 3 is the margin: exact (whole points) when solved, an average from a
+        // score head otherwise, and "--" when no visit carried a real score.
+        std::wstring scoreText = L"--";
+        if (info.hasScore) {
+            scoreText = info.proven ? formatPoints(info.averageScore)
+                                    : formatAverageScore(info.averageScore);
+        }
         drawTextAt(dc, scoreText, cx - radius, y, radius * 2, rowHeight, g_fontSmall,
                    RGB(28, 32, 38));
     }
@@ -2141,8 +2145,10 @@ void drawStatus(HDC dc, const Layout& layout) {
         const double shown = info.proven ? info.winrate : winRateLowerBound(info.winrate, info.visits);
         left = L"格 " + widen(squareName(g_hoverCell)) + L" · 数字 " +
                std::to_wstring(static_cast<int>(info.move.number)) + L" · 胜率 " +
-               std::to_wstring(static_cast<int>(std::lround(shown * 100.0))) +
-               L"% · 访问 " + std::to_wstring(info.visits);
+               std::to_wstring(static_cast<int>(std::lround(shown * 100.0))) + L"%";
+        // A solved cell has no sample to count: the exact endgame solver answers
+        // without running a simulation, so "访问 0" would read as an empty search.
+        if (info.visits > 0) left += L" · 访问 " + std::to_wstring(info.visits);
         if (info.hasScore) {
             // A solved cell's number is the exact margin; anything else is an
             // average over the visits that carried a score.
@@ -2151,7 +2157,6 @@ void drawStatus(HDC dc, const Layout& layout) {
         } else {
             left += L" · 均分 --";
         }
-        if (!info.hasData) left += L"（未搜索）";
         if (info.proven) left += L"（已解算）";
     } else if (g_thinking) {
         left = L"电脑思考中，请稍候…";

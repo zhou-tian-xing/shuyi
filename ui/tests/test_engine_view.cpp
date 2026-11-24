@@ -69,6 +69,40 @@ void testAnalysis() {
     check(!view.hasCell[sq("b2")], "a cell without data stays empty");
 }
 
+// The exact endgame solver answers with `visits: 0` and a proven, exact margin on
+// every legal move: no simulation ran, the answer is a full minimax.  The board
+// must still draw those cells -- requiring a visit count here threw the whole
+// solved position away and left the board blank at the end of the game.
+const char* kExactAnalysis =
+    "{\"engine\":\"mcts_nn\",\"turn\":\"red\",\"backend\":\"cpu\","
+    "\"visits\":0,\"nodes\":41,\"depth\":1,\"proven\":true,"
+    "\"winrate\":1.0,\"has_score\":true,\"score\":3.0,"
+    "\"best\":\"e5:3\",\"elapsed_ms\":1,\"nn\":\"b4c32-s42012-d595499.bin\","
+    "\"a_input\":1,"
+    "\"cells\":[{\"cell\":\"e5\",\"number\":3,\"winrate\":1.0,\"visits\":0,"
+    "\"score\":3.0,\"has_score\":true,\"proven\":true},"
+    "{\"cell\":\"a1\",\"number\":1,\"winrate\":0.0,\"visits\":0,"
+    "\"score\":-12.0,\"has_score\":true,\"proven\":true},"
+    "{\"cell\":\"c3\",\"number\":2,\"winrate\":0.5,\"visits\":0,"
+    "\"score\":0.0,\"has_score\":true,\"proven\":true}]}";
+
+void testExactAnalysisCells() {
+    EngineAnalysisView view;
+    std::string error;
+    check(parseAnalysis(kExactAnalysis, view, &error), "an exact solve must parse");
+    check(view.valid && view.proven, "the position is proven");
+    check(view.visits == 0, "an exact solve carries no visits");
+    check(view.best.valid() && view.best.cell == sq("e5"), "best move survives");
+    check(view.hasCell[sq("e5")] && view.hasCell[sq("a1")] && view.hasCell[sq("c3")],
+          "every solved cell is present");
+    check(view.cells[sq("e5")].hasData, "a solved cell with zero visits is data");
+    check(view.cells[sq("a1")].hasData, "a losing solved cell is data too");
+    check(view.cells[sq("a1")].proven && view.cells[sq("a1")].averageScore == -12.0,
+          "the losing cell keeps its exact margin");
+    check(view.cells[sq("c3")].winrate == 0.5 && view.cells[sq("c3")].hasScore,
+          "a drawn cell is 50% with an exact zero margin");
+}
+
 void testBrokenInput() {
     EngineAnalysisView view;
     std::string error;
@@ -91,6 +125,7 @@ void testMoveTokens() {
 
 int main() {
     testAnalysis();
+    testExactAnalysisCells();
     testBrokenInput();
     testMoveTokens();
     if (failures == 0) std::printf("engine view tests passed\n");

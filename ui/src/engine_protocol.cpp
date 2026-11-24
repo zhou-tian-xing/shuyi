@@ -118,7 +118,12 @@ bool parseAnalysis(const std::string& json, EngineAnalysisView& out, std::string
             info.winrate = doubleOf(item, "winrate", 0.5);
             info.visits = intOf(item, "visits");
             info.averageScore = doubleOf(item, "score");
-            info.hasData = info.visits > 0;
+            // The engine publishes a cell only when it has something to say about
+            // it, so presence is the flag.  Visits are not: the exact endgame
+            // solver answers without running a single simulation, and a front end
+            // that required visits > 0 threw every solved cell away -- the board
+            // went blank exactly in the phase where the numbers are certain.
+            info.hasData = true;
             info.proven = boolOf(item, "proven");
             // Per cell, not per position: a solved move has an exact margin even
             // when the network has no score head, and an unsolved one may have no

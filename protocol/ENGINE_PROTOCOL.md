@@ -171,6 +171,15 @@ A cell that is not in `cells` has no analysis. Nothing in this object is derived
 by the front end: if `has_score` is false there is no score, and the front end
 shows nothing rather than inventing one.
 
+**Presence is the flag, `visits` is not.** The exact endgame solver answers a
+position in the last few plies with a full minimax and runs no simulation at all,
+so its analysis has `visits: 0` and every cell in it has `visits: 0` — while
+carrying `proven: true` and an exact `score`. A front end that reads "no visits"
+as "no data" throws the solved position away and leaves the board blank in exactly
+the phase where the numbers are certain; the window did that until it was fixed.
+Rank and draw a cell by `proven`/`has_score`, and treat a *missing* cell — not a
+zero visit count — as "not analysed".
+
 ## 5. Errors and the no-fallback rule
 
 Every command either does what it says or fails with `?`.
