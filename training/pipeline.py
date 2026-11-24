@@ -577,8 +577,9 @@ def main(argv=None):
     parser.add_argument("--a-cond", action="store_true",
                         help="train a v4 model that takes the A value as an input "
                              "(see training/README.md, 'A as an input')")
-    parser.add_argument("--a-anchor", type=float, default=1.26,
-                        help="A the engine plays with; part of each epoch trains at it")
+    parser.add_argument("--a-anchor", type=float, default=None,
+                        help="A the engine plays with; part of each epoch trains at it "
+                             "(default: the same value as the game komi)")
     parser.add_argument("--a-range", type=float, default=4.0,
                         help="explore A uniformly in [-range, range]; small on purpose")
     parser.add_argument("--a-anchor-fraction", type=float, default=0.35)
@@ -644,14 +645,18 @@ def main(argv=None):
         args.run_name = (f"b{args.blocks}c{args.channels}-{args.ruleset}-"
                          f"{time.strftime('%Y%m%d')}")
     if args.komi is None:
-        # Measured, not guessed: classic -0.5 (Red 52% at 0 on the 3080 run),
-        # blocking +1.26 (training/avalue.py: A* = +1.26, SE 0.22, 240 games per
-        # point at 192 visits -- going first is a liability under this rule).
-        # nopass reuses the blocking value: the starved endings that the rule
-        # adds are 0.3% of games under a trained model, so the A* measurement is
-        # dominated by the same positions.  Re-measure with
-        # `training/avalue.py --ruleset nopass` before trusting it further.
-        args.komi = -0.5 if args.ruleset == "classic" else 1.26
+        # Measured, not guessed.  classic -0.5 (Red 52% at 0 on the 3080 run).
+        # blocking +1.26 (avalue.py: A* = +1.26, SE 0.22, 192 visits).
+        # nopass +0.5: its own calibration (2026-11-24) gives A* = +0.55 +- 0.17
+        # with an A-blind model at 64 visits and +0.28 +- 0.36 with the A-aware
+        # b6c96 at 1024 visits; 0.5 is the half-integer inside both intervals and
+        # half-integers cannot draw, so it is the fair, draw-free choice.
+        args.komi = -0.5 if args.ruleset == "classic" else (
+            0.5 if args.ruleset == "nopass" else 1.26)
+    if args.a_anchor is None:
+        # The A the net is told about and the A the games are scored with have to
+        # be the same number, otherwise the feature is a lie for every position.
+        args.a_anchor = args.komi
     if args.promotion_games:
         args.arena_games = args.promotion_games
 
@@ -664,7 +669,7 @@ def main(argv=None):
         pass
     if args.init_model and not Path(args.init_model).exists():
         raise SystemExit(f"--init-model does not exist: {args.init_model}")
-    if not args.init_model and not args.train_from_scratch and not args.plan:
+    if not args.init_model and not args.train_from_scratch and not args.plan and not args.resume:
         # 库里已经有能用的模型时不再从随机权重起步：那会把 s/d 清零，也扔掉已经
         # 训出来的棋力。要继续练就给它 --init-model；真要重来就明说。
         best = best_available_model()
@@ -919,7 +924,10 @@ def main(argv=None):
         manifest["generations"].append(record)
         manifest["generations"].sort(key=lambda item: item.get("gen", -1))
         manifest["updated"] = now()
-        write_json(manifest_path, manifest)
+        # A dry run trains nothing, so writing the record would hand the next
+        # --resume a generation that points at a model file that does not exist.
+        if not args.dry_run:
+            write_json(manifest_path, manifest)
         previous_model = final_model
 
         if summary:

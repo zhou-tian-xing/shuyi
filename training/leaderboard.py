@@ -188,9 +188,11 @@ def render(path: Path, anchor: str = "random") -> list[str]:
         lines += [f"> 表里 {total_cells} 个格子里有 {onesided} 个是一边倒（20-0 之类）。"
                   "它们只说明「强很多」，读不出分差，所以**不参与拟合、也没有被改写成别的比分**；"
                   "评分只用两边都赢过至少一局的格子。", ""]
-    if anchor not in ratings:
-        lines += [f"> `{anchor}` 在这张表里没有能读出分差的对局（全是 40-0），"
-                  "所以这版分数是相对池子算的，不是绝对分。", ""]
+    if anchor not in order:
+        lines += [f"> 这张表没有 `{anchor}`，分数是相对池子算的，不是绝对分。", ""]
+    elif anchor not in ratings:
+        lines += [f"> `{anchor}` 在这张表里的对局全是一边倒，读不出分差，"
+                  "所以这版分数仍是相对池子算的。", ""]
     ranked = sorted((name for name in order if name in ratings),
                     key=lambda name: -ratings[name])
     unrated = [name for name in order if name not in ratings]

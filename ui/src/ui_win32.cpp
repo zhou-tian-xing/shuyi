@@ -107,7 +107,9 @@ std::wstring g_enginePathUsed;  // what the running process actually is
 bool g_engineAuto = true;       // no explicit path: fall back to discovery
 HINSTANCE g_instance = nullptr;
 Position g_position;
-double g_aValue = 1.5;
+// nopass 的标定值是 +0.5（A* = 0.28~0.55，见 docs/RULES.zh-CN.md §4.4）：
+// 半整数、不会和棋。INI 里的 a_value 会覆盖它。
+double g_aValue = 0.5;
 int g_selected = 1;
 int g_hoverCell = -1;
 bool g_thinking = false;
