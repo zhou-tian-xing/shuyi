@@ -891,6 +891,13 @@ def main(argv=None):
             # started from, or the fine-tune threw the old model away.
             record["arena"] = arena(args, gen_dir, gen, candidate, args.init_model,
                                     name_b="warm_start")
+        elif gen == 0 and args.init_model:
+            # A continued run's first generation is not a bootstrap: it plays with
+            # the init weights and trains on those games, so "did generation 0
+            # improve on what we started from" is a real question and the only
+            # point that is measured against the outside of this run.
+            record["arena"] = arena(args, gen_dir, gen, candidate, args.init_model,
+                                    name_b="start")
         elif gen == 0 or previous_model is None:
             record["arena"] = {"note": "bootstrap generation; nothing to compare against"}
         else:

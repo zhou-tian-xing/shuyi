@@ -73,9 +73,11 @@ fi
 
 python "$REPO/training/budget.py" --rate "$RATE" --hours "$HOURS" --params "$PARAMS" \
     --visits "$VISITS" --arena-games "$ARENA_GAMES" --train-rate "$TRAIN_RATE" \
+    --replay-gens "$REPLAY_GENS" \
     --json > "$RUN_DIR/plan.json"
 python "$REPO/training/budget.py" --rate "$RATE" --hours "$HOURS" --params "$PARAMS" \
-    --visits "$VISITS" --arena-games "$ARENA_GAMES" --train-rate "$TRAIN_RATE" \n    --replay-gens "$REPLAY_GENS"
+    --visits "$VISITS" --arena-games "$ARENA_GAMES" --train-rate "$TRAIN_RATE" \
+    --replay-gens "$REPLAY_GENS"
 
 # Read the plan from inside the run directory: a run path may contain non-ASCII
 # characters, and passing it through `python -c` breaks on Windows code pages.
