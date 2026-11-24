@@ -69,9 +69,10 @@ def main():
     sides = d["side"].astype(np.int64)
     remaining = hands[np.arange(n), sides]
     legal = (boards == 0)[:, :, None] & (remaining[:, None, :] > 0)
-    if ruleset == 1:
-        # Blocking rule: number n is illegal on a cell with an adjacent enemy
-        # stone of number >= n.  Same four-neighbour reach the engine uses.
+    if ruleset >= 1:
+        # Blocking rule (nopass keeps it: it only changes what happens when a side
+        # has no legal placement): number n is illegal on a cell with an adjacent
+        # enemy stone of number >= n.  Same four-neighbour reach the engine uses.
         board3 = boards.reshape(n, 9, 9)
         enemy_max = np.zeros((n, 81), dtype=np.int16)
         for side, sign in ((0, 1), (1, -1)):
@@ -99,7 +100,7 @@ def main():
     top8 = -np.sort(-p, axis=1)[:, :8].sum(1)
 
     v = d["value"]
-    print(f"ruleset              {ruleset} (0 classic, 1 blocking)")
+    print(f"ruleset              {ruleset} (0 classic, 1 blocking, 2 nopass)")
     print(f"positions            {n}")
     print(f"games                {len(np.unique(d['game']))}")
     print(f"legal moves mean     {nmoves.mean():.1f}  min {nmoves.min()} max {nmoves.max()}")

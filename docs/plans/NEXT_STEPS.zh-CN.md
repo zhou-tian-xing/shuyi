@@ -8,6 +8,47 @@
 
 ---
 
+## 2026-11-24 更新：规则定成 nopass，下一次 run 起这个
+
+**规则**：`nopass`（无过手）是产品默认——没有过手回合，轮到一方而它无子可落就立刻终局计分。
+引擎、界面、协议、训练流水线的默认值全部改成它（`core/include/shuyi/rules.h` 的
+`kDefaultRuleset`、`pipeline.py`/`train_resnet.py`/`arena.py`/`elo.py`/`avalue.py`/
+`cross_eval.py` 的 `--ruleset`、`shuyi-ui.ini`）。
+
+**对现有模型的影响（已测，不是估计）**
+
+| 指标 | 数值 |
+| --- | --- |
+| 阻挡规则训练的网络在 nopass 下自对弈，54 子前就结束的对局 | 1500 局里 5 局（0.3%） |
+| 随机对局 | 1500 局里 20 局（1.3%） |
+| 这些对局的分数差 | 平均 0.8 目，最大 2 目 |
+| 赢家因此翻转 | 上述约 1/5，即总体 0.06% |
+| 饥饿终局出现的步数 | 第 50–52 手 |
+
+所以**旧模型不用重训也能直接下**：`models/b4c32-s42012-d595499` 在 nopass 下对 α-β 剪枝
+仍是 20-0，和在阻挡规则下一样（这一点曾被 `mcts.cpp` 的 `ruleset ==` 判断掩盖过）。
+
+**下一次 run（warm start，不换架构）**
+
+```bash
+INIT_MODEL=models/b4c32-s42012-d595499.bin INIT_DATA="runs/training/b4c32-blocking-20261122/gen_00*/selfplay" VISITS=3000 GAMES=1200 GENERATIONS=6 LR=5e-4 ELO_EVERY=1 ELO_VISITS=800 RULESET=nopass bash training/run_generation.sh
+```
+
+`run_generation.sh` 现在默认 `RULESET=nopass`、默认目录 `runs/training/b4c32-nopass-<date>`，
+所以 `RULESET=nopass` 只是写明白。`INIT_DATA` 用阻挡链的 SYSELF4 分片是合法的：
+`rulesetCompatible(blocking, nopass)` 为真，训练器只拒反向。
+
+**开跑前还欠一件事**：`python training/avalue.py --ruleset nopass --komis -2,-1,0,1,2`
+重标 A\*。现在 `pipeline.py` 给 nopass 沿用阻挡的 +1.26（饥饿局只占 0.3%，A\* 应几乎不变，
+但这是"应该"不是"测过"）。
+
+**尺寸仍待决定**：v4 那一轮 4 代对上一代是 0.675 → 0.650 → 0.625 → 0.617，没有爬升。
+按 §1 的判断标准，这已经是"b4c32 抓不到特征"的形状；要么这一轮 nopass 直接用
+`BLOCKS=6 CHANNELS=96` 起（代价见 §1 的预算表），要么先用 b4c32 把 nopass 的数据口径跑通。
+两者都不改协议和数据格式。
+
+---
+
 ## 0. 先把"太小"量化
 
 | 模型 | 残差块 × 通道 | 参数量 | 单局面 MACs | 相对当前 |
