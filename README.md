@@ -130,7 +130,7 @@ tools/         开发工具：proof_check / endgame_probe / nnbench / 自对弈 
 training/      训练流水线、评测（arena/elo）、训练手册（不发布）
 release/       alpha 打包脚本
 data/          共享夹具：147 个终局分数见证
-models/        随包发布的模型（b<blocks>c<channels>-s<steps>-d<data>.bin）
+models/        随包发布的模型（b<blocks>c<channels>-s<steps>-d<data>.bin）+ 测试夹具（v1/v2）
 runs/          训练与评测输出（不入库，只有 runs/README.md 入库）
 docs/          规则 / 架构 / 评测方法；plans/ 计划；reports/ 历次运行报告
 ```
