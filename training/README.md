@@ -94,27 +94,53 @@ b4c32-s5960-d80938,120-0-0,—,87-0-33
 ```
 
 格子是行方对列方的 `胜-和-负`，空格 = 没打过，对角线 `—`。想改结果就直接改这个
-文件（改一个三角就够，另一半空着会自动镜像；两边矛盾会警告）。程序**不写表**，
-它只读表算分：
+文件（改一个三角就够，另一半空着会自动镜像；两边矛盾会警告）。程序**只读表算分**，
+不自己收集对局：
 
 ```bash
 python training/leaderboard.py                 # 读所有 matches_*.csv，输出排行榜
-python training/leaderboard.py --visits 500    # 只看一个预算
+python training/leaderboard.py --visits 128    # 只看一个预算
+python training/leaderboard.py --anchor b4c32-s5960-d80938   # 换锚（没有 random 时）
 python training/leaderboard.py --all           # 连只有引擎种类的表也显示
 ```
 
-算法就是 `elo.py` 的同一套：逻辑回归最大似然 + 高斯先验，**random 钉在 0**，
-附 200 次 bootstrap 的 95% 区间。每个 `visits` 一张表、各算各的，**从不混预算**。
+算法就是 `elo.py` 的同一套：逻辑回归最大似然 + 高斯先验，**锚钉在 0**（默认
+`random`），附 200 次 bootstrap 的 95% 区间。每个 `visits` 一张表、各算各的，
+**从不混预算**。
+
+**新数据怎么进表**（跑一次预算 = 一批对局 → 填进那张预算的表）：
+
+```bash
+# 1) GPU 机器上：所有模型两两对局，一局一对、颜色交替，直接落 pair JSON
+python training/roundrobin.py --visits 128 --games 20 --out runs/eval/v128
+# 2) 拉回本地
+python training/pull.py --remote /root/eval/v128 --local runs/eval/v128
+# 3) 填表（已经数过的文件记在 imported_sources.json，重复跑不会重复加）
+python training/leaderboard_import.py
+# 4) 算分
+python training/leaderboard.py --anchor b4c32-s5960-d80938
+```
+
+`roundrobin.py` 一个进程就能吃满整台机器的 CPU（实测 8 核全占），所以
+`--workers` 默认 1；要并行必须给每个进程 `OMP_NUM_THREADS=1`，否则互相抢核，
+总吞吐反而掉十几倍（64 visits 实测：单进程 7.9 局/秒，4 进程不断言 0.8 局/秒）。
+
+`--anchor <模型>`：没有 `random` 的表，用池里最弱的那个当 0 分，这样不同预算的
+表能用同一把尺子比。`--compare` 那一节会把同一模型在各预算下的分数和**池内胜率**
+并排列出来——格子大量是 20-0 时 ELO 数值会冲到几千分、区间失去意义，池内胜率是
+同一批数据更稳的读法。
 
 表本身会说它哪里不成立：
 
-- 没有 `random` 的表 → 分数只与池内均值可比，不是"比随机高多少"；
+- 没有锚的表 → 分数只与池内均值可比，不是"比某物高多少"；
 - 分成互不对局的几组 → 组间的分数是任意定的，只有组内比较有意义
   （补一场跨组对局就能连上，几十局就够）。
 
-历史评测一次性填进表格：`python training/leaderboard.py --import-existing`
-（`training/leaderboard_import.py` 负责把 `gen_003` 这类旧标签换成累计模型名，
-换不出来、仓库里也没有这个文件的对局直接丢掉）。
+历史评测（32/96/512/800/1024）是一次性从旧 arena JSON 导入的，名字按
+`rename_models.py` 之后的累计名对齐；**64 visits 那张因此被整张重建过**：旧格子
+自相矛盾（同一对局两个三角给出相反结果），和 2026-11-24 新跑的数据也冲突
+（旧表说 `b4c32-s5960` 13-7 赢 `b6c96-s2800`，新的 2100 局表说 0-20）。跨 run 的
+旧 JSON 只能当历史参考，以 `runs/eval/` 里按文件名直接产出的数据为准。
 
 ## 3.6 改名字：`training/rename_models.py`
 

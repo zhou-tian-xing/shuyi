@@ -57,6 +57,10 @@ runs/
 │   ├── avalue/                     A 值标定（komi 扫描）
 │   ├── branching/                  分支因子测量
 │   └── elo/                        早期 elo 合并结果
+├── eval/                           按预算组织的两两对局（排行榜的原始数据）
+│   ├── v64/                        15 个模型 × 105 对 × 20 局，2100 局
+│   ├── v128/                       同一批模型，128 visits
+│   └── v256/                       6 个代表模型，256 visits（跨预算对照）
 └── archive/                        已结束的历史 run，不再追加
     ├── b2c16-classic-20261122/     onehour：16×2，15 代
     ├── b10c128-classic-20261122/   b10c128 三小时（结论：容量不是瓶颈）
@@ -139,4 +143,25 @@ runs/
 **这些就是全部结果**；要复现某一代的数据，用 manifest 里的配置重跑。
 
 以后再有 run：跑完（或窗口结束）就删这两类目录，别攒着。
+
+## 2026-11-24 晚：跨预算评测（runs/eval/）
+
+一个预算一个目录，每对模型一个 JSON（`shuyi_selfplay_gpu --mode match` 的原样输出）
+加一张 `results.csv`。`training/roundrobin.py` 产生它，`training/leaderboard_import.py`
+把它加进 `runs/leaderboard/matches_<visits>.csv`（已数过的文件记在
+`runs/leaderboard/imported_sources.json`，不会加两遍）。
+
+| 目录 | 预算 | 模型 | 对局 | 用途 |
+| --- | ---: | ---: | ---: | --- |
+| `eval/v64` | 64 visits | 15 | 2100 | 便宜的全表：先看名次和"容量还是步数"的问题 |
+| `eval/v128` | 128 visits | 15 | 2100 | 同一批模型换计算量，看名次/胜率是否变化 |
+
+`probes/avalue/nopass-{v3,v4}-v64/` 是同一晚的 A 值标定原始输出（`komi_*.csv` 逐局
+结果 + 每个点的 match JSON）：v3 模型不带 A 输入，量规则本身的先手优势；v4 模型带
+A 输入，会自己补偿。结论在 `docs/RULES.zh-CN.md` §4.4。
+
+**64 visits 那张表被整张重建过**：一次性导入的旧格子自相矛盾（同一对局的上下三角
+给出相反结果），且与新的 2100 局冲突（旧表说 `b4c32-s5960` 13-7 赢 `b6c96-s2800`，
+新表说 0-20）。32/96/512/800/1024 仍是旧 JSON 导入的历史表，只作参考；新的比较一律
+以 `runs/eval/` 里按文件名直接产出的数据为准。
 

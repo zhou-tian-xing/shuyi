@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""一次性把 runs/ 下已有的评测结果填进 `matches_<visits>.csv`。
+"""把评测结果（`roundrobin.py` 的 pair JSON）填进 `matches_<visits>.csv`。
 
 只做"填表"，不算 ELO —— 那是 `leaderboard.py` 的事。
 名字要落到真实存在的模型上：`gen_003` 用该 run 的 manifest 换成累计模型名，
 `gpu:`/`mcts_nn:` 前缀和旧的 `-blk`/`-cls` 后缀去掉；换不出来、仓库里也没有
 这个文件的对局直接丢掉（宁愿少一行，也不要一行指不到模型的分）。
+
+已经数过的文件记在 `runs/leaderboard/imported_sources.json`，所以重复运行不会
+把同一批对局加两遍。默认只扫 `runs/eval/`（新跑的数据放这里）；历史的
+runs/training/**/ 结果在 2026-11-24 已经一次性导入过。
 """
 from __future__ import annotations
 
@@ -102,11 +106,17 @@ def add(cells, a, b, wins, draws, losses) -> None:
     cells[(b, a)] = (total[2], total[1], total[0])
 
 
-def import_all(out_dir: Path) -> dict[int, int]:
+def import_all(out_dir: Path, roots: list[Path] | None = None) -> dict[int, int]:
     known = known_models()
     imported: dict[int, int] = {}
     skipped = 0
     seen: set[Path] = set()
+    # Every file counted into the tables is remembered, so running the import
+    # twice does not add the same games twice.
+    ledger_path = out_dir / "imported_sources.json"
+    ledger: set[str] = set()
+    if ledger_path.exists():
+        ledger = set(json.loads(ledger_path.read_text(encoding="utf-8")))
 
     def record(visits, a, b, wins, draws, losses):
         nonlocal skipped
@@ -124,8 +134,14 @@ def import_all(out_dir: Path) -> dict[int, int]:
         write_table(path, order, cells)
         imported[visits] = imported.get(visits, 0) + wins + draws + losses
 
-    for path in sorted((REPO / "runs").rglob("*.json")):
+    scanned: list[Path] = []
+    for root in roots or [REPO / "runs"]:
+        scanned.extend(sorted(root.rglob("*.json")))
+    for path in scanned:
         if path in seen or "leaderboard" in path.parts:
+            continue
+        key = path.relative_to(REPO).as_posix() if path.is_relative_to(REPO) else str(path)
+        if key in ledger:
             continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -140,6 +156,7 @@ def import_all(out_dir: Path) -> dict[int, int]:
             seen.add(path)
             record(visits, data["a"], data["b"], int(data["a_wins"]),
                    int(data.get("draws", 0)), int(data["b_wins"]))
+            ledger.add(key)
             continue
         if "names" not in data or "pairs" not in data:
             continue
@@ -157,6 +174,10 @@ def import_all(out_dir: Path) -> dict[int, int]:
             a = mapping.get(a, a)
             b = mapping.get(b, b)
             record(visits, a, b, int(entry[2]), int(entry[3]), int(entry[4]))
+        ledger.add(key)
+
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(json.dumps(sorted(ledger), indent=0) + "\n", encoding="utf-8")
 
     if skipped:
         print(f"skipped {skipped} pair(s) naming a model that is not in the repo",
@@ -169,7 +190,14 @@ def import_all(out_dir: Path) -> dict[int, int]:
 
 
 def main() -> int:
-    import_all(REPO / "runs" / "leaderboard")
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", action="append", default=None,
+                    help="directory to scan (repeatable, default runs/eval)")
+    ap.add_argument("--out", type=Path, default=REPO / "runs" / "leaderboard")
+    args = ap.parse_args()
+    roots = [Path(item) for item in args.root] if args.root else [REPO / "runs" / "eval"]
+    import_all(args.out, roots)
     return 0
 
 

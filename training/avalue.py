@@ -160,6 +160,8 @@ def main() -> int:
                     help="fixed budget per move (see training/evalconfig.py)")
     ap.add_argument("--batch-games", type=int, default=128)
     ap.add_argument("--chunk", type=int, default=1024)
+    ap.add_argument("--workers", type=int, default=1,
+                    help="run this many komi points at once (each is a separate process)")
     ap.add_argument("--seed", type=int, default=20261201)
     ap.add_argument("--binary", type=Path,
                     default=REPO / "build" / "shuyi_selfplay_gpu")
@@ -192,8 +194,18 @@ def main() -> int:
     workdir.mkdir(parents=True, exist_ok=True)
 
     points = []
-    for komi in komis:
-        points.append(play_one(args.binary, args.model, args.model_b, args, komi, workdir))
+    if args.workers <= 1:
+        for komi in komis:
+            points.append(play_one(args.binary, args.model, args.model_b, args, komi, workdir))
+    else:
+        # One process per komi: a single game batch leaves most of the CPU idle,
+        # and the GPU is far from saturated at the cheap evaluation budgets.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            points = list(pool.map(
+                lambda k: play_one(args.binary, args.model, args.model_b, args, k, workdir),
+                komis))
+        points.sort(key=lambda point: point["komi"])
 
     print("\nA-value probe (%s, %s visits, %d games per point)" %
           (args.model.name, args.visits, args.games))
