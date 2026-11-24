@@ -510,6 +510,20 @@ def lineage_start(init_model) -> tuple[int, int]:
         f"cannot continue a monotonic counter from a name it cannot read")
 
 
+def best_available_model() -> Path | None:
+    """The model with the most training behind it, or None if the repo has none."""
+    best = None
+    for pattern in ("models/*.bin", "runs/training/*/models/*.bin"):
+        for path in REPO.glob(pattern):
+            match = re.search(r"-s(\d+)-d(\d+)$", path.stem)
+            if not match:
+                continue  # test fixtures have no counters
+            steps, data = int(match.group(1)), int(match.group(2))
+            if best is None or data > best[0]:
+                best = (data, path)
+    return best[1] if best else None
+
+
 def replay_shards(run_dir, gen, count):
     shards = []
     for index in range(max(0, gen - count + 1), gen + 1):
@@ -644,10 +658,21 @@ def main(argv=None):
     if args.generations < 1:
         raise SystemExit("--generations must be >= 1")
     if args.init_model and not args.init_data:
-        raise SystemExit("--init-model needs --init-data: the warm-start generation "
-                         "trains on shards that already exist")
+        # Weights-only continuation: generation 0 self-plays with the init model and
+        # trains on that, instead of replaying old shards.  That is what "keep the
+        # good model" means after the shard cleanup -- the old shards are gone.
+        pass
     if args.init_model and not Path(args.init_model).exists():
         raise SystemExit(f"--init-model does not exist: {args.init_model}")
+    if not args.init_model and not args.train_from_scratch and not args.plan:
+        # 库里已经有能用的模型时不再从随机权重起步：那会把 s/d 清零，也扔掉已经
+        # 训出来的棋力。要继续练就给它 --init-model；真要重来就明说。
+        best = best_available_model()
+        if best is not None:
+            raise SystemExit(
+                "generation 0 would start from a random net while models exist.\n"
+                f"  continue from the best one:  --init-model {best}\n"
+                "  or say so explicitly:         --train-from-scratch")
     if args.oneply_gens < 0:
         raise SystemExit("--oneply-gens must be >= 0")
     if not Path(args.selfplay_gpu).exists() and not args.dry_run:
@@ -748,11 +773,10 @@ def main(argv=None):
             continue
 
         if gen == 0 and args.init_model:
-            # Warm start: the chain does not begin from a random net, it begins
-            # from an existing model trained on data that already exists.  The
-            # alternative (gen0 = random moves, gen1/gen2 = oneply) throws away
-            # everything the previous run learned before it produces anything.
-            mode = "warm"
+            # 接着已有的模型练：有旧分片就重训它们（warm），没有就让这个模型自对弈
+            # 出新分片（selfplay）。两条路都不从随机权重开始，计数器也接着它的 s/d。
+            previous_model = args.init_model
+            mode = "warm" if args.init_data else "selfplay"
         elif gen == 0:
             mode = "random"
         elif gen <= args.oneply_gens:
@@ -760,7 +784,7 @@ def main(argv=None):
         else:
             mode = "selfplay"
         if mode not in ("random", "warm") and (
-            previous_model is None or not Path(previous_model).exists()
+            previous_model is None or (not Path(previous_model).exists() and not args.dry_run)
         ):
             raise RuntimeError(f"generation {gen}: no model to generate {mode} data with")
 
@@ -781,15 +805,18 @@ def main(argv=None):
             # A warm start has no self-play shard of its own, so the data it
             # trained on would leave the replay window immediately.  Keep it for
             # as long as the window would have kept generation 0.
-            if args.init_model and gen <= args.replay_gens:
+            if args.init_model and args.init_data and gen <= args.replay_gens:
                 shards = expand_shards(args.init_data) + shards
         log(f"generation {gen}: training on {len(shards)} shard(s)")
 
         if mode == "warm":
             candidate, summary = train(args, gen_dir, gen, shards, args.init_model)
         else:
-            candidate, summary = train(args, gen_dir, gen, shards,
-                                       None if gen == 0 else previous_model)
+            # Generation 0 of a continued run still starts from the init weights;
+            # every later generation starts from the model it just produced.
+            weights_from = args.init_model if (gen == 0 and args.init_model) else (
+                None if gen == 0 else previous_model)
+            candidate, summary = train(args, gen_dir, gen, shards, weights_from)
         train_samples = sum(shard_stats(path) for path in shards)
         steps_per_epoch = max(
             1, (int(train_samples * (1.0 - args.val)) + args.batch - 1) // args.batch
