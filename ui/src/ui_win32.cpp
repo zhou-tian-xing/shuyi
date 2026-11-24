@@ -1090,8 +1090,15 @@ bool startEngineProcess() {
     run("set_a " + formatAValue(g_aValue));
     if (g_engineChoice == EngineChoice::MctsNn) {
         if (g_nnModelPath.empty()) g_nnModelPath = defaultModelPath();
-        // The model must be accepted before the engine that needs it is selected.
-        run("set_model " + g_nnModelPath);
+        if (g_nnModelPath.empty()) {
+            // A package without weights is a supported download, so say what to do
+            // instead of starting an engine that cannot analyse anything.
+            failure = L"没有可用模型：把 b<blocks>c<channels>-s<steps>-d<data>.bin 放进 "
+                      L"models/（或引擎菜单 → MCTS + 网络 → 重新扫描）";
+        } else {
+            // The model must be accepted before the engine that needs it is selected.
+            run("set_model " + g_nnModelPath);
+        }
     }
     run(std::string("set_engine ") + engineChoiceName(g_engineChoice));
     run("set_backend auto");

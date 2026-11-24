@@ -83,6 +83,60 @@ manifest 里记 `capacity_history`。宽度变了不能热启动，所以升级�
 
 ---
 
+## 3.5 总表：`training/leaderboard.py`
+
+`arena.py` 打的是一次对局，`elo.py` 拟合的是一次矩阵。要回答"现在所有模型谁强多少"，
+需要一张跨模型、跨预算、可增量更新的表，这就是 `leaderboard.py`：
+
+```bash
+python training/leaderboard.py                     # 500 与 2000 visits 各打一轮
+python training/leaderboard.py --visits 500 --games 20
+python training/leaderboard.py --pairs all         # 不按实力筛选，全打
+```
+
+它做四件事：
+
+1. **收集**：扫描 `models/*.bin` 和 `runs/training/*/models/*.bin`，按模型头里的
+   `ruleset` 字节过滤——别的规则集训出来的权重不能进这张表（引擎会拒绝它）。
+2. **只打相近的**：第一次跑没有评分，只能全打；之后只打 ELO 距离在 `--max-gap`
+   （默认 250）以内的对局。3000 分的差距用 10 局和 200 局测出来一样，没人需要那个数。
+3. **增量**：每个组合的结果各自存成 `runs/leaderboard/v<visits>/*.json`，
+   重跑只补缺的局。删掉某个文件就等于重新测那一对。
+4. **拟合**：和别的表用同一个 `elo.fit_elo`/`bootstrap_ci`，**random 钉在 0**，
+   所以每个数字都是"比均匀随机走子高多少分"，附带 200 次 bootstrap 的 95% 区间。
+
+产物 `runs/leaderboard/leaderboard.md`：每个预算一张二维表，
+行 = 模型，列 = 对手，格子是行方的得分率（和棋算半分）和局数。
+
+注意：**全表需要 GPU 时间**。17 个模型在 500 visits 下是 136 对；
+在 3080 上大约 1–2 分钟/对，两轮共 3–5 小时。`--games` 和 `--max-gap` 是那两个旋钮。
+
+## 3.6 改名字：`training/rename_models.py`
+
+`s`/`d` 是**整条链**的累计值：接着 `b4c32-s34760-d470705` 训出来的 gen0 是
+`-s36776-`，不是 `-s2016-`。`pipeline.py` 现在从 `--init-model` 的名字里读出起点
+（读不出来就报错，而不是从 0 重新数），`rename_models.py` 负责把历史文件对齐：
+
+```bash
+python training/rename_models.py            # 只打印计划
+python training/rename_models.py --apply    # 改名并同步更新 manifest 里的路径
+```
+
+## 3.7 编译与发包：`release/build_release.py`
+
+一条命令做完"编译 → 测试 → 打包"，**包里不带模型**：
+
+```bash
+python release/build_release.py --cuda-build build-cuda     # 引擎与界面都取 CUDA 树
+python release/build_release.py --cuda-build build-cuda --model models/b4c32-s42012-d595499.bin
+```
+
+- 权重是数据，不是产品：模型几乎每天都在变，二进制不是。没有模型也能启动，
+  界面会直接说"把 b<blocks>c<channels>-s<steps>-d<data>.bin 放进 models/"。
+- `ctest` 不通过就不发包；UI 和引擎必须同时存在（两个程序才是一个产品）。
+- CUDA 树在 Windows 上要先 `vcvars64`，所以默认**不替它编译**，只取它的产物；
+  `--build-cuda` 才会去编（Linux 上直接可用）。
+
 ## 4. 横评（所有线路、所有模型）
 
 ### 4.1 预算只有一个数字：visits

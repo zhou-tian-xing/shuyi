@@ -30,6 +30,7 @@ happens, and promotion is decided by a GPU arena with alternating colours.
 import argparse
 import glob
 import json
+import re
 import os
 import shutil
 import struct
@@ -496,6 +497,19 @@ def plateau_report(manifest, args, gen):
     return status
 
 
+def lineage_start(init_model) -> tuple[int, int]:
+    """(steps, data) already behind `init_model`, read from its canonical name."""
+    if not init_model:
+        return 0, 0
+    name = Path(init_model).stem
+    match = re.search(r"-s(\d+)-d(\d+)$", name)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    raise SystemExit(
+        f"--init-model {init_model} does not carry -s<steps>-d<data>: the chain "
+        f"cannot continue a monotonic counter from a name it cannot read")
+
+
 def replay_shards(run_dir, gen, count):
     shards = []
     for index in range(max(0, gen - count + 1), gen + 1):
@@ -707,8 +721,15 @@ def main(argv=None):
     write_json(manifest_path, manifest)
 
     completed = {int(item["gen"]): item for item in manifest["generations"] if "gen" in item}
-    cumulative_steps = sum(int(item.get("optimizer_steps", 0)) for item in manifest["generations"])
-    cumulative_data = sum(int(item.get("selfplay_samples", 0)) for item in manifest["generations"])
+    # Counters are cumulative over the whole lineage, not over this process: a model
+    # that continues another one keeps counting up, because "s" and "d" are how much
+    # training the weights have seen.  Restarting them at zero renames the same
+    # weights to a smaller number and makes two different models look comparable.
+    base_steps, base_data = lineage_start(args.init_model)
+    cumulative_steps = base_steps + sum(
+        int(item.get("optimizer_steps", 0)) for item in manifest["generations"])
+    cumulative_data = base_data + sum(
+        int(item.get("selfplay_samples", 0)) for item in manifest["generations"])
     previous_model = None
     # Models produced by this process, by generation.  The ELO pool used to read
     # `completed` (the manifest as it was at start-up), so a fresh run reached the
@@ -775,7 +796,11 @@ def main(argv=None):
         )
         optimizer_steps = steps_per_epoch * args.epochs
         cumulative_steps += optimizer_steps
-        cumulative_data += samples
+        # A warm start trains on data the init model already counted, so gen 0 adds
+        # steps but not samples.  Counting them again is how `d` stopped matching
+        # the number of positions the weights had actually seen.
+        if mode != "warm":
+            cumulative_data += samples
 
         record = {
             "gen": gen,

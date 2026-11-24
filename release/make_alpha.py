@@ -58,11 +58,16 @@ README = """数弈 alpha
 * 引擎菜单 → MCTS + 网络 子菜单列出扫描到的全部模型，按规则集标注；
 * shuyi-ui.ini 里 engine= 支持相对路径（相对本目录）。
 
+模型在哪
+--------
+引擎和界面是两个产品，**权重是数据**，不随包固定：把任意 `b<blocks>c<channels>-s<steps>-d<data>.bin`
+放进 `models/`，界面菜单（引擎 → MCTS + 网络）里就会出现；没有模型也能启动，
+双人对弈照常，只是没有分析。
+
 这个 alpha 包含
 ---------------
 * shuyi.exe            Win32 界面（规则与显示；不含搜索）
 * shuyi_engine.exe     NN-MCTS 引擎，CUDA 12.4 构建；没有可用 GPU 时自动用 CPU
-* models/*.bin         最新网络（阻挡规则训练，无过手规则直接可用）
 * DESIGN.md            引擎设计、网络形状、训练思路、现有训练量与已知短板
 * RULES.zh-CN.md       规则全文
 * ENGINE_PROTOCOL.md   引擎协议（行协议 + JSON 分析流）
@@ -111,7 +116,9 @@ def buildInfo(args):
         f"engine   {args.engine.name}  sha256:{digest(args.engine)}"
         "  (CUDA 12.4 build; CPU forward when no GPU is available)",
         f"ui       {args.ui.name}  sha256:{digest(args.ui)}",
-        f"model    {args.model.name}  sha256:{digest(args.model)}",
+        f"model    {args.model.name}  sha256:{digest(args.model)}"
+        if args.model
+        else "model    (none: download a .bin and drop it in models/)",
         "",
         "Rebuild: see release/make_alpha.py in the source repository.",
     ]
@@ -122,11 +129,15 @@ def main(argv):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", required=True, type=Path)
     parser.add_argument("--ui", required=True, type=Path)
-    parser.add_argument("--model", required=True, type=Path)
+    parser.add_argument("--model", type=Path, default=None,
+                        help="network to ship; omit for a package without models.  The "
+                             "UI and the engine are the products; weights are a download "
+                             "and change far more often than the binaries")
     parser.add_argument("--out", type=Path, default=DIST)
     args = parser.parse_args(argv[1:])
 
-    for path in (args.engine, args.ui, args.model):
+    binaries = [args.engine, args.ui] + ([args.model] if args.model else [])
+    for path in binaries:
         if not path.exists():
             print(f"missing {path}", file=sys.stderr)
             return 1
@@ -134,11 +145,13 @@ def main(argv):
     stage = args.out / NAME
     if stage.exists():
         shutil.rmtree(stage)
-    (stage / "models").mkdir(parents=True)
+    stage.mkdir(parents=True)
 
     shutil.copy2(args.ui, stage / "shuyi.exe")
     shutil.copy2(args.engine, stage / "shuyi_engine.exe")
-    shutil.copy2(args.model, stage / "models" / args.model.name)
+    if args.model:
+        (stage / "models").mkdir()
+        shutil.copy2(args.model, stage / "models" / args.model.name)
     shutil.copy2(REPO / "protocol" / "ENGINE_PROTOCOL.md", stage / "ENGINE_PROTOCOL.md")
     shutil.copy2(REPO / "docs" / "RULES.zh-CN.md", stage / "RULES.zh-CN.md")
     # The design/training notes are part of the package: this alpha is meant to be

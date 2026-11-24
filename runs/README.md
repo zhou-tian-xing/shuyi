@@ -30,10 +30,15 @@
 3. **数据分片**保持 `gen_XXX/selfplay/shard_XXX.bin`：它属于哪一代写在路径里，
    再在名字里重复一遍没有意义。
 
-4. **同一份权重只出现一次**：`models/` 里的发布副本和 `runs/training/<run>/models/`
+4. **`s`/`d` 是整条链的累计值**，不是"这次训练"的计数：接着
+   `b4c32-s34760-d470705` 训出来的 gen0 是 `-s36776-`。历史文件已用
+   `training/rename_models.py` 对齐，所以 `training/b4c32-blocking-20261123`
+   的第三代现在就叫 `b4c32-s42012-d595499.bin`，与 `models/` 里发出去的是同一个名字。
+
+5. **同一份权重只出现一次**：`models/` 里的发布副本和 `runs/training/<run>/models/`
    里产出它的副本字节相同，界面菜单按内容去重、只显示路径更浅的那个
-   （`models/b4c32-s42012-d595499.bin` 与那个 run 的 `b4c32-s7252-d202770.bin`
-   就是这样一对：前者是累计口径，后者是 run 内口径）。
+   （`models/b4c32-s42012-d595499.bin` 与那个 run 里同名的那份就是一对，
+   只是发布副本在 `models/`，产出副本在 run 目录）。
 
 ## 布局
 
