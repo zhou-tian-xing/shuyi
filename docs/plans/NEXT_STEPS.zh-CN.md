@@ -3,8 +3,8 @@
 一句话：**模型太小、训练太少，这是唯一的主因。** 其余（A值特征、分数头、回放窗口、EMA）
 都是次要项——它们能让同一份算力多出几十 Elo，但改变不了"8.6 万参数的网络撑不起这个游戏"。
 
-数字来自 `runs/blocking/blk1`（6 代）、`runs/arena/blocking512`（512 visits 横评）、
-`runs/avalue`（A值标定）。
+数字来自 `runs/training/b4c32-blocking-20261122`（6 代）、`runs/probes/arena/blocking512`（512 visits 横评）、
+`runs/probes/avalue`（A值标定）。
 
 ---
 

@@ -502,7 +502,7 @@ def replay_shards(run_dir, gen, count):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run-name", default=time.strftime("run_%Y%m%d_%H%M%S"))
+    parser.add_argument("--run-name", default="")
     parser.add_argument("--run-dir", default="")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--force", action="store_true")
@@ -520,12 +520,14 @@ def main(argv=None):
     parser.add_argument("--top-k", type=int, default=16, help="interior children kept, 0 = all")
     parser.add_argument("--batch-games", type=int, default=128)
     parser.add_argument("--chunk", type=int, default=1024)
-    parser.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="classic",
-                        help="rule set: data, models and run directory are tagged with it")
+    parser.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass",
+                        help="rule set: data and models are tagged with it (default nopass)")
     parser.add_argument("--komi", type=float, default=None,
                         help="points added to Red; default is per rule set: -0.5 classic "
                              "(Red 52%% at 0 in the 3080 run) and +1.26 blocking "
-                             "(training/avalue.py measured A* = +1.26 at 192 visits)")
+                             "(training/avalue.py measured A* = +1.26 at 192 visits); "
+                             "nopass inherits the blocking value until it is measured "
+                             "for that rule set")
     parser.add_argument("--opening", type=int, default=2)
     parser.add_argument("--temp-moves", type=int, default=12)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -594,10 +596,20 @@ def main(argv=None):
     args = parser.parse_args(argv)
     args.selfplay_gpu = str(resolve_binary(args.selfplay_gpu))
     args.trainer = str(resolve_binary(args.trainer))
+    if not args.run_name:
+        # One directory per run, always named the same way: b4c32-nopass-20261124.
+        # The architecture and rule set say what the run *is*; the date keeps two
+        # runs of the same shape apart.  Nothing else belongs in the name.
+        args.run_name = (f"b{args.blocks}c{args.channels}-{args.ruleset}-"
+                         f"{time.strftime('%Y%m%d')}")
     if args.komi is None:
         # Measured, not guessed: classic -0.5 (Red 52% at 0 on the 3080 run),
         # blocking +1.26 (training/avalue.py: A* = +1.26, SE 0.22, 240 games per
         # point at 192 visits -- going first is a liability under this rule).
+        # nopass reuses the blocking value: the starved endings that the rule
+        # adds are 0.3% of games under a trained model, so the A* measurement is
+        # dominated by the same positions.  Re-measure with
+        # `training/avalue.py --ruleset nopass` before trusting it further.
         args.komi = -0.5 if args.ruleset == "classic" else 1.26
     if args.promotion_games:
         args.arena_games = args.promotion_games
@@ -616,13 +628,14 @@ def main(argv=None):
 
     run_dir = (
         Path(args.run_dir) if args.run_dir
-        else REPO / "runs" / args.ruleset / args.run_name
+        else REPO / "runs" / "training" / args.run_name
     )
     models_dir = run_dir / "models"
     if args.plan:
-        models_dir.mkdir(parents=True, exist_ok=True)
-        # A random net is enough to measure the forward pass.
-        probe = models_dir / "probe.bin"
+        (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+        # A random net is enough to measure the forward pass.  It is not a model:
+        # keep it out of models/ so it never shows up in the engine's model menu.
+        probe = run_dir / "probe.bin"
         if not probe.exists():
             probe_cmd = [
                 args.python, str(args.trainer), "--init-only", "--out", str(probe),
@@ -784,7 +797,11 @@ def main(argv=None):
         final_model = models_dir / f"{model_name}.bin"
         record["final_model"] = str(final_model)
         if not args.dry_run:
-            shutil.copyfile(candidate, final_model)
+            # Move, not copy: one model file per generation, under the name that
+            # says what it is.  A copy left behind as gen_XXX/candidate.bin is a
+            # second, differently named file holding the same weights.
+            shutil.move(str(candidate), str(final_model))
+            record["candidate"] = str(final_model)
             log(f"generation {gen}: model {final_model.name}")
 
         if not args.dry_run:

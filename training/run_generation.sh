@@ -5,7 +5,7 @@
 #   bash training/run_generation.sh                        # 8 generations
 #   GENERATIONS=6 VISITS=3000 bash training/run_generation.sh
 #   INIT_MODEL=models/b4c32-s34760-d470705.bin \
-#   INIT_DATA="runs/blocking/blk1/gen_00*/selfplay" bash training/run_generation.sh
+#   INIT_DATA="runs/training/b4c32-blocking-20261122/gen_00*/selfplay" bash training/run_generation.sh
 #
 # INIT_MODEL/INIT_DATA continue from an existing model instead of starting a
 # chain from a random net: generation 0 fine-tunes INIT_MODEL on the shards in
@@ -17,7 +17,6 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${SHUYI_BUILD_DIR:-$REPO/build}"
-RUN_NAME="${RUN_NAME:-run_$(date +%Y%m%d_%H%M%S)}"
 GENERATIONS="${GENERATIONS:-8}"
 ONEPLY_GENS="${ONEPLY_GENS:-2}"
 GAMES="${GAMES:-2000}"
@@ -28,10 +27,12 @@ CHANNELS="${CHANNELS:-32}"
 # Empty -> the pipeline picks the measured value per rule set (blocking
 # +1.3, classic -0.5).  A hard-coded default here silently overrode that.
 KOMI="${KOMI:-}"
-# Empty -> the pipeline default (classic).  A blocking run MUST set this: the
-# trainer refuses data from the other rule set, so the failure is loud, but it
-# wastes a launch.
-RULESET="${RULESET:-}"
+# nopass is the product rule set: no pass anywhere, a side with no legal
+# placement ends the game immediately.  Every run defaults to it.
+RULESET="${RULESET:-nopass}"
+# One directory per run: b4c32-nopass-20261124.  Architecture, rule set, date --
+# the same three things the model name carries, in the same order.
+RUN_NAME="${RUN_NAME:-b${BLOCKS}c${CHANNELS}-${RULESET}-$(date +%Y%m%d)}"
 ARENA_GAMES="${ARENA_GAMES:-160}"
 BATCH_GAMES="${BATCH_GAMES:-128}"
 # A as a network input (model format v4).  Needs SYSELF4 data, which every run
@@ -52,14 +53,8 @@ ELO_VISITS="${ELO_VISITS:-}"
 BIN="$BUILD/shuyi_selfplay_gpu"
 [ -x "$BIN" ] || { echo "build first: bash training/server_setup.sh" >&2; exit 1; }
 
-mkdir -p "$REPO/runs/$RUN_NAME"
-LOG="$REPO/runs/$RUN_NAME/pipeline.log"
-
-python3 - "$REPO" "$RUN_NAME" <<'EOF'
-import json, sys
-repo, name = sys.argv[1], sys.argv[2]
-print(json.dumps({"run": name, "started_by": "run_generation.sh"}, indent=2))
-EOF
+mkdir -p "$REPO/runs/training/$RUN_NAME"
+LOG="$REPO/runs/training/$RUN_NAME/pipeline.log"
 
 EXTRA=()
 if [ "$A_COND" = "1" ]; then
@@ -108,7 +103,7 @@ nohup python3 -u "$REPO/training/pipeline.py" \
     "${EXTRA[@]}" \
     >"$LOG" 2>&1 &
 
-echo "$!" > "$REPO/runs/$RUN_NAME/pipeline.pid"
-echo "started pid $(cat "$REPO/runs/$RUN_NAME/pipeline.pid")"
+echo "$!" > "$REPO/runs/training/$RUN_NAME/pipeline.pid"
+echo "started pid $(cat "$REPO/runs/training/$RUN_NAME/pipeline.pid")"
 echo "log:  $LOG"
 echo "tail: tail -f $LOG"

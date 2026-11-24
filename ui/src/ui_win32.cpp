@@ -557,12 +557,20 @@ std::string normalizedPath(const std::string& path) {
     return result;
 }
 
+bool skipDirectory(const char* name);  // defined below; the root check needs it
+
 std::vector<std::string> modelRoots() {
     std::vector<std::string> roots;
     const auto add = [&](const std::string& candidate) {
         if (candidate.empty()) return;
         const std::string full = normalizedPath(candidate);
         if (GetFileAttributesA(full.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+        // A build tree carries its own copy of the test fixtures, so scanning it
+        // lists the same model twice under the same name.  Skip the root, not the
+        // copy: the source tree one directory up is the one that ships.
+        const std::size_t slash = full.find_last_of("\\/");
+        const char* base = slash == std::string::npos ? full.c_str() : full.c_str() + slash + 1;
+        if (skipDirectory(base)) return;
         for (const std::string& seen : roots) {
             if (_stricmp(seen.c_str(), full.c_str()) == 0) return;
         }
@@ -591,7 +599,7 @@ std::vector<std::string> modelRoots() {
 }
 
 // The menu has to say which run a file came from: three runs all ship gen_000.bin.
-// `relative` is the path below the scanned root, e.g. "runs/blocking/blk1/models/x.bin".
+// `relative` is the path below the scanned root, e.g. "runs/training/b4c32-nopass-20261124/models/x.bin".
 std::string modelLabelFor(const std::string& relative) {
     std::string path = relative;
     for (char& c : path) {
@@ -647,7 +655,11 @@ int readModelRuleset(const std::string& utf8Path) {
     if (v2) return 0;  // v2 has no ruleset byte; those weights are classic
     if (got < 33) return 0;
     // magic(8) version(4) channels(4) blocks(4) inputs(4) globals(4) flags(4) ruleset(1)
-    return header[32] == 1 ? 1 : 0;
+    const int ruleset = header[32];
+    // Not `== 1 ? 1 : 0`: that maps a nopass model (2) onto classic, and the menu
+    // then hides it, because it only lists models compatible with the rule set in
+    // force.  An unknown byte is "not a model this build understands".
+    return ruleset < static_cast<int>(kRulesetCount) ? ruleset : -1;
 }
 
 void addModelsInDirectory(const std::string& dir, const std::string& relative,
@@ -669,9 +681,12 @@ void addModelsInDirectory(const std::string& dir, const std::string& relative,
 }
 
 bool skipDirectory(const char* name) {
-    // Build trees contain copies of the same models; caches are noise.
+    // Build trees and the package directory contain copies of the same models;
+    // caches are noise; runs/archive holds finished experiments whose weights are
+    // history, not candidates.
     return _strnicmp(name, "build", 5) == 0 || name[0] == '.' ||
-           _stricmp(name, "__pycache__") == 0 || _stricmp(name, "node_modules") == 0;
+           _stricmp(name, "__pycache__") == 0 || _stricmp(name, "node_modules") == 0 ||
+           _stricmp(name, "archive") == 0 || _stricmp(name, "dist") == 0;
 }
 
 // Depth-limited walk: collect *.bin from every directory named "models".
@@ -696,24 +711,60 @@ void walkForModels(const std::string& dir, const std::string& relative, int dept
     FindClose(find);
 }
 
+std::uint64_t modelFingerprint(const std::string& utf8Path, std::uint64_t* sizeOut) {
+    // FNV-1a over the bytes.  Two copies of one weights file (the package next to
+    // the exe, the source tree, a server mirror) must not become two menu entries
+    // that look like a choice between different networks.
+    std::FILE* file = shuyi::fopenUtf8(utf8Path, "rb");
+    if (!file) return 0;
+    std::uint64_t hash = 1469598103934665603ULL;
+    std::uint64_t total = 0;
+    unsigned char chunk[65536];
+    std::size_t got = 0;
+    while ((got = std::fread(chunk, 1, sizeof(chunk), file)) > 0) {
+        total += got;
+        for (std::size_t i = 0; i < got; ++i) {
+            hash ^= chunk[i];
+            hash *= 1099511628211ULL;
+        }
+    }
+    std::fclose(file);
+    if (sizeOut) *sizeOut = total;
+    return hash;
+}
+
 void scanModels() {
     std::vector<ModelEntry> found;
     for (const std::string& root : modelRoots()) walkForModels(root, std::string(), 4, found);
     std::sort(found.begin(), found.end(),
               [](const ModelEntry& a, const ModelEntry& b) { return a.label < b.label; });
-    // The same file is reachable through several roots (the exe directory and its
-    // parent, for instance).  Two menu entries for one model would let the user
-    // "switch" between identical networks, so keep the first path only.
+    // The same model is reachable through several roots (the exe directory, its
+    // parent, the current directory) and is often copied byte for byte into more
+    // than one of them.  Keep one entry per file path and one per distinct file
+    // content.
     std::vector<ModelEntry> unique;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> seen;
+    const auto depthOf = [](const std::string& path) {
+        return static_cast<std::size_t>(std::count(path.begin(), path.end(), '/') +
+                                        std::count(path.begin(), path.end(), '\\'));
+    };
     for (ModelEntry& entry : found) {
-        bool seen = false;
-        for (const ModelEntry& kept : unique) {
-            if (_stricmp(normalizedPath(kept.path).c_str(), normalizedPath(entry.path).c_str()) == 0) {
-                seen = true;
-                break;
-            }
+        std::uint64_t size = 0;
+        const std::uint64_t print = modelFingerprint(entry.enginePath, &size);
+        bool duplicate = false;
+        for (std::size_t i = 0; i < seen.size(); ++i) {
+            if (seen[i].first != size || seen[i].second != print) continue;
+            duplicate = true;
+            // Keep the shallower copy: models/x.bin is the name the package ships
+            // and the one a user recognises, runs/<run>/models/x.bin is the same
+            // bytes under the run that produced them.
+            if (depthOf(entry.path) < depthOf(unique[i].path)) unique[i] = entry;
+            break;
         }
-        if (!seen) unique.push_back(std::move(entry));
+        if (!duplicate) {
+            seen.emplace_back(size, print);
+            unique.push_back(std::move(entry));
+        }
     }
     g_modelList = std::move(unique);
 }

@@ -173,13 +173,13 @@ runs/<run-name>/
     arena/match.json            与上一代的 40 局结果
     arena/games.csv
   gen_001/ ...
-  models/gen_000.bin ...        每代最终模型（C++ 可直接加载）
+  models/b4c32-s<steps>-d<data>.bin   每代最终模型（C++ 可直接加载）
 ```
 
 断点续跑：
 
 ```bash
-python training/pipeline.py --run-dir runs/run_20261201 --resume ...
+python training/pipeline.py --run-dir runs/training/b4c32-nopass-20261201 --resume ...
 ```
 
 - 已完成的代直接跳过；
@@ -258,7 +258,7 @@ GPU 上约 1 分钟（首 epoch 有 CUDA 预热）。这次开局诊断 `corner=
 二进制格式 `SHUYINN2` 头部记录 `channels / blocks / inputs / globals`，
 C++ `PolicyValueNet` 运行时按头部加载。因此服务器训练的 32×4 模型可以
 直接被 Windows UI 的 `mcts_nn` 使用；旧的 16×2 `shuyi_resnet_v1.bin`
-也仍能加载。
+（v2 头 + 19 平面，`kResInputPlanes`）也仍能加载。
 
 ## 7. 自对弈数据格式（v2）
 
@@ -305,8 +305,8 @@ policy 仍偏好边角，应优先增加自对弈数据/时间、检查 policy t
 
 ```bash
 python training/diagnose_openings.py \
-  --model runs/<run>/models/gen_014.bin \
-  --data runs/<run>/gen_014/selfplay/shard_*.bin \
+  --model runs/training/<run>/models/b4c32-s<steps>-d<data>.bin \
+  --data runs/training/<run>/gen_014/selfplay/shard_*.bin \
   --channels 32 --blocks 4 --ply 10
 ```
 
@@ -314,8 +314,9 @@ python training/diagnose_openings.py \
 
 - 每代晋升只看对上一代的 40 局，置信区间很宽；不要把单代 0.55 当作真实
   ELO 提升。正式结论用 `shuyi_tournament`/`shuyi_match` 跑更多局。
-- 服务器训练完成后，把 `runs/<run>/models/gen_014.bin` 复制回
-  `models/shuyi_resnet_v2.bin`，在 UI 里选择 MCTS+NN 即可；
+- 服务器训练完成后，把 `runs/training/<run>/models/b4c32-s<steps>-d<data>.bin`
+  放进仓库 `models/`，在 UI 里选择 MCTS+NN 即可（名字保持原样，别改成
+  `shuyi_resnet_*.bin`：UI 按名字里的 `s`/`d` 排序显示）；
 - 如果 final ELO 仍不理想，优先增加 `--games-per-gen`、`--time-ms` 和
   `--promotion-games`，而不是只堆 epoch。自对弈数据质量比重复拟合旧数据更重要。
 

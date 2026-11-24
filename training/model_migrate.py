@@ -50,7 +50,7 @@ def migrate(path, ruleset, dry_run=False):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("models", nargs="+")
-    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="classic")
+    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     code = {"classic": 0, "blocking": 1, "nopass": 2}[args.ruleset]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn a run's manifest.json into a markdown table for the training notes.
 
-    python training/summarize_run.py runs/blocking/blk1/manifest.json
+    python training/summarize_run.py runs/training/b4c32-blocking-20261122/manifest.json
 
 Columns: generation, mode, self-play positions, the model it produced, the
 head-to-head arena against the previous generation and the pool Elo that was

@@ -6,7 +6,7 @@
 models trained for that rule set -- equal models on both sides, so the colour
 imbalance is the only thing left in the result.
 
-  python training/avalue.py --model runs/blocking/blk1/models/b4c32-s34760-d470705.bin \
+  python training/avalue.py --model runs/training/b4c32-blocking-20261122/models/b4c32-s34760-d470705.bin \
       --ruleset blocking --komis -2,-1,0,1 --games 300 --visits 256 --json out.json
 
 Each komi runs `shuyi_selfplay_gpu --mode match` with the same model on both
@@ -152,7 +152,7 @@ def main() -> int:
                     help="model to probe; required unless --self-test")
     ap.add_argument("--model-b", type=Path, default=None,
                     help="optional second model; default is the same model on both sides")
-    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="blocking")
+    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass")
     ap.add_argument("--komis", default="-2,-1,0,1",
                     help="comma separated A values to probe")
     ap.add_argument("--games", type=int, default=300)

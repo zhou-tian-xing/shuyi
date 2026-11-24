@@ -188,7 +188,8 @@ info engine=mcts visits=20000 winrate=0.57 best=e5:7 moves=e5:7:0.57:9000,c4:3:0
   v3/v4 是 37 个（再加 18 个手牌平面）；全局向量 v3 为 22 维、v4 为 24 维
   （末尾 A/10 与 |A|/10，这样 A 才是网络的输入而不只是终局判定的一部分）。
   策略头输出 729 个 `(格子,数字)` logits，价值头融合双方手牌、行棋方、当前局面分、
-  手数、空格数。仓库基线模型 `models/shuyi_resnet_v1.bin` 是 16×2；
+  手数、空格数。仓库基线模型 `models/shuyi_resnet_v1.bin` 是 16×2，
+  随包发布的 `models/b4c32-*.bin` 是 4 块 32 通道；
   服务器训练脚本默认 32×4，导出格式相同。
 - 根节点支持 Dirichlet 噪声；`shuyi_selfplay` 以根访问分布为 policy target、
   终局胜负为 value target 生成 v2 数据，`training/train_resnet.py` 用 PyTorch

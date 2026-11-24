@@ -7,8 +7,8 @@ walks the remote tree and copies anything missing or with a different size --
 run it repeatedly while training is still going and the final sync is nearly
 free.
 
-    python training/pull.py --remote /root/blk/runs/blocking/blk1 \
-        --local runs/blocking/blk1
+    python training/pull.py --remote /root/blk/runs/training/b4c32-nopass-20261124 \
+        --local runs/training/b4c32-nopass-20261124
 """
 from __future__ import annotations
 

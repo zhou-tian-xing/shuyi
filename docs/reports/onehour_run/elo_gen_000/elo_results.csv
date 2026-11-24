@@ -1,5 +1,0 @@
-engine,games,wins,draws,losses,score_rate,elo,ci_low,ci_high
-random,12,0,0,12,0,0,0,0
-pruning,12,12,0,0,1,1185.83,1034.59,1360.96
-mcts,12,7,0,5,0.583333,614.037,417.601,893.524
-mcts_nn,12,5,0,7,0.416667,453.56,277.795,679.033

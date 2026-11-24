@@ -130,8 +130,8 @@ tools/         开发工具：proof_check / endgame_probe / nnbench / 自对弈 
 training/      训练流水线、评测（arena/elo）、训练手册（不发布）
 release/       alpha 打包脚本
 data/          共享夹具：147 个终局分数见证
-models/        随包发布的模型 + 测试夹具（v1/v2）
-runs/          训练与评测输出（不入库）
+models/        随包发布的模型（b<blocks>c<channels>-s<steps>-d<data>.bin）
+runs/          训练与评测输出（不入库，只有 runs/README.md 入库）
 docs/          规则 / 架构 / 评测方法；plans/ 计划；reports/ 历次运行报告
 ```
 
@@ -146,7 +146,9 @@ docs/          规则 / 架构 / 评测方法；plans/ 计划；reports/ 历次�
    同一张表里所有参赛者必须是同一个数，**不许用时间预算**；`elo.py` 会拒绝合并不同预算的矩阵。
 
 模型命名沿用 KataGo 形式：`b{blocks}c{channels}-s{steps}-d{data}`（步数 = 累计优化步，
-数据 = 累计局面数）。规则不写进文件名——它是模型头里的一个字节，运行目录也已经分开。
+数据 = 累计局面数）。规则不写进文件名——它是模型头里的一个字节，run 目录名
+（`runs/training/b4c32-nopass-20261124`）里才有。仓里没有第二种模型文件名：
+`runs/README.md` 是这套约定唯一的地方，`pipeline.py` 照它落盘。
 
 ## 已知限制（按影响排序）
 

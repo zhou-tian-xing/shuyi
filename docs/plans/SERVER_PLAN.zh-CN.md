@@ -179,8 +179,8 @@ tail -f runs/run_*/pipeline.log
    不同输入平面），用带先验的最大似然拟合 Elo，并给出 bootstrap 90% 区间。
 
 ```bash
-python training/elo.py --models runs/srv1/models/gen_00{0,1,2}.bin     --labels gen0 gen1 gen2 --games 40 --visits 128
-python training/elo.py --report runs/elo/matrix.json      # 从已存对局重新拟合
+python training/elo.py --models runs/archive/b4c32-classic-20261122/models/b4c32-s{7960-d108000,15600-d212000,23240-d316000}.bin \n    --labels gen0 gen1 gen2 --games 40 --visits 128
+python training/elo.py --report runs/probes/elo/matrix.json      # 从已存对局重新拟合
 ```
 
 部署模型取 ELO 最高者，而不是"最后一代"；`manifest.json` 里记 `elo` 与 `elo_best`。

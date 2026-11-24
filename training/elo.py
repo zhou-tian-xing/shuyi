@@ -198,7 +198,7 @@ def main(argv=None):
     ap.add_argument("--visits", type=int, default=EVAL_VISITS,
                     help="fixed budget per move, identical for every player")
     ap.add_argument("--komi", type=float, default=-0.5)
-    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="classic")
+    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass")
     ap.add_argument("--opening", type=int, default=2)
     ap.add_argument("--seed", type=int, default=20261123)
     ap.add_argument("--gauntlet", default="", help="play only against this model")

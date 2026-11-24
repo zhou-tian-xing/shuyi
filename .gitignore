@@ -10,8 +10,10 @@ __pycache__/
 *.pyc
 # Training runs: models, self-play data and logs are big binaries produced by the
 # training scripts (and on the server), not source.  models/ stays tracked: the
-# tests and the release package load files from it.
-runs/
+# tests and the release package load files from it.  runs/README.md is tracked: it
+# is the document that says what the layout is and how things are named.
+runs/*
+!runs/README.md
 *.log
 # Scratch output of the headless UI probes
 engine_choice.txt

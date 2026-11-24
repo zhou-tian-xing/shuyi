@@ -17,8 +17,8 @@
 ├── training/        Python 训练流水线。不随发布
 ├── release/         打包脚本（alpha 包由这里生成）
 ├── data/            共享测试夹具（终局见证等）
-├── models/          随包发布的模型 + 测试夹具
-├── runs/            训练与评测输出（不入库）
+├── models/          随包发布的模型（b<blocks>c<channels>-s<steps>-d<data>.bin）
+├── runs/            训练与评测输出（不入库；布局与命名见 runs/README.md）
 ├── docs/            规则、架构、评测方法、计划、历次运行报告
 ├── build/           CPU 构建目录（MinGW）
 └── build-cuda/      CUDA 构建目录（MSVC + nvcc）

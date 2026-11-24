@@ -11,19 +11,19 @@
 ```
 shuyi.exe                  Win32 界面（规则与显示；不含任何搜索）
 shuyi_engine.exe           无头引擎：NN-MCTS，CUDA 12.4 构建
-models/b4c32-s42012-d595499.bin   当前最强的阻挡规则网络（v4，A 是输入，3000 visits/步）
-shuyi-ui.ini               随包设置：阻挡规则、A=1、512 visits、引擎同目录
+models/b4c32-s42012-d595499.bin   当前最强的网络（v4，A 是输入，3000 visits/步；阻挡规则训练，无过手直接可用）
+shuyi-ui.ini               随包设置：无过手规则、A=1、512 visits、引擎同目录
 ENGINE_PROTOCOL.md         引擎协议 v2（命令 + JSON 流式分析）
 RULES.zh-CN.md             规则全文
 ```
 
-双击 `shuyi.exe`：默认双人对弈 + 阻挡规则，同目录引擎自动加载。空格开始/停止分析，
+双击 `shuyi.exe`：默认双人对弈 + 无过手规则，同目录引擎自动加载。空格开始/停止分析，
 引擎菜单里可以换模型、换规则、改访问上限和 A值。
 
 引擎也可以脱离界面单独用（`shuyi_engine.exe` 读写 stdin/stdout）：
 
 ```
-ruleset blocking
+ruleset nopass
 set_model models/b4c32-s42012-d595499.bin
 set_engine mcts_nn
 set_backend auto
@@ -204,6 +204,8 @@ b8c128 = 241 万，b10c128 = 300 万。这一轮连涨 4 代还没见平台，�
 3. **残局表**：最后 4–6 手的完全解算可以离线生成/在线查表，能把"已解算"的比例再推高。
 4. **开局**：没有开局库；开局靠网络先验 + 搜索，对称性让前几手很快收敛。
 5. **界面**：当前 alpha 只有 Win32；协议是语言无关的，其他前端可以直接写。
+6. **无过手规则刚定为默认**：包里这个网络是阻挡规则训练的，无过手下可直接用；
+   下一次训练开始按无过手产数据、出模型（引擎与界面已经全部支持，不需要再改协议）。
 
 ---
 

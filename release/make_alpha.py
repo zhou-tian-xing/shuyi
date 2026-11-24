@@ -9,7 +9,7 @@ what a player needs:
 
     shuyi.exe                 the Win32 front end
     shuyi_engine.exe          the headless engine (CUDA 12.4 build)
-    models/<name>.bin         the newest blocking-rule network
+    models/<name>.bin         the shipped network (plays under nopass)
     shuyi-ui.ini              the settings the package ships with
     ENGINE_PROTOCOL.md        the contract, for anyone writing another front end
     README.txt                how to start it, and what each number means
@@ -34,7 +34,7 @@ README = """数弈 alpha
 
 一分钟上手
 ----------
-1. 启动后默认是“双人对弈 + 阻挡规则”。如果引擎加载成功，状态栏会写
+1. 启动后默认是“双人对弈 + 无过手规则”。如果引擎加载成功，状态栏会写
    “引擎已启动：shuyi_engine.exe (CUDA)”。
 2. 按空格开始分析当前局面；再按空格停止。达到访问上限会自动停下，
    再按一次空格则不计上限、继续同一棵搜索树。
@@ -60,7 +60,7 @@ README = """数弈 alpha
 ---------------
 * shuyi.exe            Win32 界面（规则与显示；不含搜索）
 * shuyi_engine.exe     NN-MCTS 引擎，CUDA 12.4 构建；没有可用 GPU 时自动用 CPU
-* models/*.bin         最新阻挡规则网络
+* models/*.bin         最新网络（阻挡规则训练，无过手规则直接可用）
 * DESIGN.md            引擎设计、网络形状、训练思路、现有训练量与已知短板
 * RULES.zh-CN.md       规则全文
 * ENGINE_PROTOCOL.md   引擎协议（行协议 + JSON 分析流）

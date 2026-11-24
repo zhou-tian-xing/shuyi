@@ -580,7 +580,7 @@ def main(argv=None):
     parser.add_argument("--blocks", type=int, default=4)
     parser.add_argument("--input-planes", type=int, default=INPUT_PLANES,
                         choices=[INPUT_PLANES, INPUT_PLANES_V3])
-    parser.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="classic",
+    parser.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass",
                         help="rule set the data and the model belong to")
     parser.add_argument("--epochs", type=int, default=60)
     parser.add_argument("--batch", type=int, default=512)

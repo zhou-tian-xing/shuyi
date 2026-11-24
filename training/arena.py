@@ -21,7 +21,7 @@ third-party result reporting is involved.
     python training/arena.py --games 16 --visits 128 \
         --players random pruning mcts mcts_nn:models/shuyi_resnet_v2.bin \
                   gpu:docs/srv1_run/models/gen_002.bin
-    python training/elo.py --report runs/arena/classic.json --anchor random
+    python training/elo.py --report runs/probes/arena/classic.json --anchor random
 """
 import argparse
 import importlib.util
@@ -247,7 +247,7 @@ def main(argv=None):
     ap.add_argument("--time", type=int, default=0,
                     help="deprecated, ignored; kept so old command lines still parse")
     ap.add_argument("--komi", type=float, default=KOMI)
-    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="classic")
+    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass")
     ap.add_argument("--root-k", type=int, default=32)
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--out", default="")

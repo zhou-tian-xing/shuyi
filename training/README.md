@@ -121,15 +121,15 @@ EVAL_VISITS = 512      # 每一步、每个参赛者，都用这个数
 ```bash
 export OMP_NUM_THREADS=1     # 必须：多个 serve 进程各吃满线程会假死
 python training/arena.py --players random pruning mcts \
-    mcts_nn:runs/blocking/blk1/models/b4c32-s34760-d470705.bin \
-    gpu:runs/blocking/blk1/models/b4c32-s34760-d470705.bin \
+    mcts_nn:runs/training/b4c32-blocking-20261122/models/b4c32-s34760-d470705.bin \
+    gpu:runs/training/b4c32-blocking-20261122/models/b4c32-s34760-d470705.bin \
     --games 6 --visits 512 --komi 1.26 --ruleset blocking --workers 2 \
-    --out runs/arena/blocking512/table.json
-python training/elo.py --report runs/arena/blocking512/table.json --anchor random
+    --out runs/probes/arena/blocking512/table.json
+python training/elo.py --report runs/probes/arena/blocking512/table.json --anchor random
 ```
 
 - 每局记录全部着法，终局分用 `training/rule_probe.py` 的计分函数算（和引擎同一公式）。
-- 结果 `runs/arena/<ruleset>.json` 可直接喂给 `elo.py --report`（可传多份，预算必须一致）。
+- 结果 `runs/probes/arena/<ruleset>.json` 可直接喂给 `elo.py --report`（可传多份，预算必须一致）。
 - 样本量：50% 附近，20 局 ≈ ±20pp、60 局 ≈ ±12pp、200 局 ≈ ±7pp、400 局 ≈ ±5pp。
   **每对少于 60 局的表只用来排序，不要比小数点。**
 
@@ -154,7 +154,8 @@ python training/elo.py --report runs/arena/blocking512/table.json --anchor rando
   阻挡模型配经典规则直接拒绝。
 - 旧文件用 `training/model_migrate.py --ruleset classic` 显式升级（只改头，不动权重）。
 - v2 的 37 平面文件（side 平面写在 36 的旧布局）会被拒绝——那批权重不能用。
-- 目录 `runs/<ruleset>/`，模型名后缀 `-cls` / `-blk`。
+- 目录 `runs/training/<arch>-<ruleset>-<YYYYMMDD>/`，模型名
+  `b<blocks>c<channels>-s<steps>-d<data>.bin`（规则集在模型头里，不进名字）。
 
 ---
 
@@ -298,7 +299,7 @@ komi 仍用 1.26——不过要重新标定，因为终局更早、颜色平衡�
 
 ```bash
 # 从现有模型继续：gen0 用已有数据微调，并与起点模型打一场 arena
-INIT_MODEL=models/b4c32-s34760-d470705.bin INIT_DATA="runs/blocking/blk1/gen_00*/selfplay" VISITS=3000 GAMES=1200 GENERATIONS=6 bash training/run_generation.sh
+INIT_MODEL=models/b4c32-s34760-d470705.bin INIT_DATA="runs/training/b4c32-blocking-20261122/gen_00*/selfplay" VISITS=3000 GAMES=1200 GENERATIONS=6 bash training/run_generation.sh
 ```
 
 - gen0 的 `mode=warm`：不产新数据，`train_resnet --init-model <起点> --data <init-data>`，
@@ -364,8 +365,8 @@ INIT_MODEL=models/b4c32-s34760-d470705.bin INIT_DATA="runs/blocking/blk1/gen_00*
 
 1. **一条命令跑通阻挡规则**：`python training/pipeline.py --ruleset blocking ...`
    → 数据（`SYSELF4`）、模型（`SHUYINN3`，ruleset 字节）、训练器（`--ruleset`）、
-   arena/ELO（`--ruleset`）全部带标签，run 目录在 `runs/blocking/<name>`，
-   模型名带 `-blk` 后缀。经典侧仍是 `runs/classic/...` + `-cls`。
+   arena/ELO（`--ruleset`）全部带标签，run 目录在
+   `runs/training/b4c32-blocking-<date>/`，模型名 `b4c32-s<steps>-d<data>.bin`。
 2. **UI 规则菜单**：`规则(&R)` → 现行规则 / 阻挡规则；开赛后不允许切换（会提示先开新局），
    切换时重启引擎进程并把 `ruleset` 下发给引擎。
 3. `target_stats.py` 的"合法着法数"按规则算（阻挡下随机对局均值 308，经典是 390）。
@@ -721,11 +722,12 @@ CPU MCTS-NN ~100 s/局。所以 512 的表能完整跑前三种，CPU MCTS-NN �
 
 ```bash
 python training/arena.py --games 6 --time 80 --visits 96 --workers 2 \
-  --players random pruning mcts mcts_nn:models/shuyi_resnet_v2.bin \
-            gpu:docs/srv1_run/models/gen_001.bin gpu:docs/srv1_run/models/gen_002.bin \
-            gpu:docs/srv1_run/models/gen_004.bin gpu:docs/srv1_run/models/gen_006.bin \
+  --players random pruning mcts \
+            gpu:runs/archive/b4c32-classic-20261122/models/b4c32-s7960-d108000.bin \
+            gpu:runs/archive/b4c32-classic-20261122/models/b4c32-s15600-d212000.bin \
+            gpu:runs/archive/b4c32-classic-20261122/models/b4c32-s23240-d316000.bin \
   --gpu-binary <build>/shuyi_selfplay_gpu
-python training/elo.py --report runs/arena/classic.json --anchor random
+python training/elo.py --report runs/probes/arena/classic.json --anchor random
 ```
 
 ---
@@ -739,7 +741,7 @@ python training/elo.py --report runs/arena/classic.json --anchor random
 工具 `training/avalue.py`：
 
 ```bash
-python training/avalue.py --model runs/blocking/blk1/models/b4c32-s34760-d470705.bin \
+python training/avalue.py --model runs/training/b4c32-blocking-20261122/models/b4c32-s34760-d470705.bin \
     --ruleset blocking --komis "-2,-1,0,1" --games 240 --visits 192
 ```
 
@@ -819,18 +821,18 @@ refusing to merge reports with different visit budgets
 ```bash
 export OMP_NUM_THREADS=1
 python training/arena.py --players random pruning mcts \
-    gpu:runs/blocking/blk1/models/b4c32-s5960-d80938.bin \
-    gpu:runs/blocking/blk1/models/b4c32-s17480-d236807.bin \
-    gpu:runs/blocking/blk1/models/b4c32-s34760-d470705.bin \
+    gpu:runs/training/b4c32-blocking-20261122/models/b4c32-s5960-d80938.bin \
+    gpu:runs/training/b4c32-blocking-20261122/models/b4c32-s17480-d236807.bin \
+    gpu:runs/training/b4c32-blocking-20261122/models/b4c32-s34760-d470705.bin \
     --games 6 --visits 512 --komi 1.26 --ruleset blocking --workers 2 \
-    --out runs/arena/blocking512/table.json
-python training/arena.py --players mcts_nn:runs/blocking/blk1/models/b4c32-s34760-d470705.bin pruning \
+    --out runs/probes/arena/blocking512/table.json
+python training/arena.py --players mcts_nn:runs/training/b4c32-blocking-20261122/models/b4c32-s34760-d470705.bin pruning \
     --games 4 --visits 512 --komi 1.26 --ruleset blocking \
-    --out runs/arena/blocking512/mctsnn_vs_pruning.json
-python training/elo.py --report runs/arena/blocking512/table.json \
-    --report runs/arena/blocking512/cpu_lines.json \
-    --report runs/arena/blocking512/mctsnn_vs_pruning.json \
-    --report runs/arena/blocking512/mctsnn_probe.json \
+    --out runs/probes/arena/blocking512/mctsnn_vs_pruning.json
+python training/elo.py --report runs/probes/arena/blocking512/table.json \
+    --report runs/probes/arena/blocking512/cpu_lines.json \
+    --report runs/probes/arena/blocking512/mctsnn_vs_pruning.json \
+    --report runs/probes/arena/blocking512/mctsnn_probe.json \
     --anchor random --bootstrap 200
 ```
 

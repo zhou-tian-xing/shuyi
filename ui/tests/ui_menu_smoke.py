@@ -15,7 +15,12 @@ What is asserted:
 * both rule sets show up, because the repository ships classic and blocking
   models -- this is the regression that made the menu look empty;
 * every *.bin under models/ is offered, so the window cannot silently hide
-  hand-made fixtures.
+  hand-made fixtures;
+* no two entries carry the same label: the build tree holds a copy of the
+  fixtures, and listing it produced the same model twice;
+* a model whose header says `nopass` (2) is listed as such.  `readModelRuleset`
+  used to collapse every non-blocking byte onto classic, which hid a nopass model
+  under the nopass rule set -- the same way the v4 header bug emptied the menu.
 """
 import re
 import subprocess
@@ -26,37 +31,33 @@ REPO = Path(__file__).resolve().parents[2]
 ID_MODEL_BASE = 6100
 ID_MODEL_LIMIT = 6400
 ID_MODEL_RESCAN = 6090
-TAGS = ("[现行]", "[阻挡]", "[未知]")
+TAGS = ("[现行]", "[阻挡]", "[无过手]", "[未知]")
 
 
-def main(argv):
-    if len(argv) < 2:
-        print(__doc__)
-        return 2
-    binary = Path(argv[1])
-    if not binary.exists():
-        print(f"missing {binary}")
-        return 1
-
-    # Absolute path with a Chinese component on purpose: the UI has to decode it.
-    out = (REPO / "build" / "ui_models_dump.txt").resolve()
-    out.parent.mkdir(parents=True, exist_ok=True)
+def dump(binary, out):
     proc = subprocess.run([str(binary), "--dump-models", str(out)],
                           cwd=str(REPO), capture_output=True, text=True)
     if proc.returncode != 0 or not out.exists():
-        print(f"dump failed rc={proc.returncode} {proc.stdout} {proc.stderr}")
-        return 1
+        raise RuntimeError(f"dump failed rc={proc.returncode} {proc.stdout} {proc.stderr}")
     lines = out.read_text(encoding="utf-8").splitlines()
-    out.unlink(missing_ok=True)
+    out.unlink()
+    return lines
 
-    problems = []
+
+def entries_of(lines):
     header = re.fullmatch(r"models=(\d+)", lines[0])
     if not header:
-        print(f"bad header: {lines[0]!r}")
-        return 1
-    count = int(header.group(1))
-    entries = [line.split("\t", 1) for line in lines[1:]]
-    model_entries = [(int(i), label) for i, label in entries if label and int(i) >= ID_MODEL_BASE]
+        raise RuntimeError(f"bad header: {lines[0]!r}")
+    entries = [line.split("\t", 1) for line in lines[1:] if "\t" in line]
+    models = [(int(i), label) for i, label in entries if label and int(i) >= ID_MODEL_BASE]
+    return int(header.group(1)), models
+
+
+def check_first_dump(binary, problems):
+    out = (REPO / "build" / "ui_models_dump.txt").resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    lines = dump(binary, out)
+    count, model_entries = entries_of(lines)
 
     if count != len(model_entries):
         problems.append(f"header says {count} models, listed {len(model_entries)}")
@@ -69,7 +70,8 @@ def main(argv):
             problems.append(f"id {ident} collides with the model limit")
         if not label.rstrip().endswith(TAGS):
             problems.append(f"entry {label!r} has no rule-set tag")
-    if not any(int(ident) == ID_MODEL_RESCAN for ident, _ in entries if ident.isdigit()):
+    entries = [line.split("\t", 1) for line in lines[1:] if "\t" in line]
+    if not any(ident.isdigit() and int(ident) == ID_MODEL_RESCAN for ident, _ in entries):
         problems.append("missing the rescan entry")
 
     labels = [label for _, label in model_entries]
@@ -77,17 +79,63 @@ def main(argv):
         problems.append("no blocking model in the menu (the header byte should tag it)")
     if not any(label.rstrip().endswith("[现行]") for label in labels):
         problems.append("no classic model in the menu")
+    if len(labels) != len(set(labels)):
+        duplicates = sorted({label for label in labels if labels.count(label) > 1})
+        problems.append(f"the same model is listed more than once: {duplicates}")
 
     offered = {label.split("  [")[0].split("/")[-1] for label in labels}
     for fixture in sorted((REPO / "models").glob("*.bin")):
         if fixture.name not in offered:
             problems.append(f"models/{fixture.name} is not offered in the menu")
 
+
+def check_nopass_tag(binary, problems):
+    """One temporary copy of a blocking model with ruleset byte 2 must be tagged."""
+    sources = sorted((REPO / "models").glob("b*.bin"))
+    if not sources:
+        problems.append("no blocking model to build the nopass probe from")
+        return
+    probe = REPO / "models" / "zz-nopass-probe.bin"
+    data = bytearray(sources[0].read_bytes())
+    if len(data) < 36:
+        problems.append(f"{sources[0].name} is too short to be a model")
+        return
+    data[32] = 2
+    try:
+        probe.write_bytes(bytes(data))
+        out = (REPO / "build" / "ui_models_nopass.txt").resolve()
+        _, model_entries = entries_of(dump(binary, out))
+    finally:
+        probe.unlink(missing_ok=True)
+    matches = [label for _, label in model_entries if label.rstrip().endswith("[无过手]")]
+    if not matches:
+        problems.append("a model with ruleset byte 2 is not tagged [无过手]")
+    elif not any("zz-nopass-probe.bin" in label for label in matches):
+        problems.append(f"the nopass probe is not offered: {matches}")
+
+
+def main(argv):
+    if len(argv) < 2:
+        print(__doc__)
+        return 2
+    binary = Path(argv[1])
+    if not binary.exists():
+        print(f"missing {binary}")
+        return 1
+
+    problems = []
+    try:
+        check_first_dump(binary, problems)
+        check_nopass_tag(binary, problems)
+    except RuntimeError as error:
+        print(f"FAIL {error}")
+        return 1
+
     if problems:
         for problem in problems:
             print("FAIL " + problem)
         return 1
-    print(f"ok: {count} models listed from every scanned root, tags and ids consistent")
+    print("ok: models listed once from every scanned root, tags and ids consistent")
     return 0
 
 

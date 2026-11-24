@@ -14,8 +14,8 @@ rule sets are never mixed: the models carry a ruleset and the engines refuse a
 mismatched pair.
 
     python training/cross_eval.py --ruleset blocking \
-        --models runs/blocking/blk1/models/b4c32-s*-d*.bin \
-        --out-dir runs/arena/blocking --lines-games 8 --gens-games 40
+        --models runs/training/b4c32-blocking-20261122/models/b4c32-s*-d*.bin \
+        --out-dir runs/probes/arena/blocking --lines-games 8 --gens-games 40
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def main(argv=None):
                     help="generation models in training order")
     ap.add_argument("--labels", nargs="*", default=[],
                     help="labels for --models; default is the file stem")
-    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="blocking")
+    ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass")
     ap.add_argument("--komi", type=float, default=0.0)
     ap.add_argument("--visits", type=int, default=EVAL_VISITS,
                     help="fixed budget per move, identical for every player")
