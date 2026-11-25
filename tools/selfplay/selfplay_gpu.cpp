@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -40,10 +41,12 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <random>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _OPENMP
@@ -134,6 +137,11 @@ struct Options {
     int tempMoves = 12;
     int chunk = 1024;
     int threads = 0; // 0 = all hardware threads
+    // Independent game groups, each on its own thread with its own model
+    // instance and CUDA stream.  With one group the CPU halves of a tick
+    // (descend / expand) run while the GPU is idle and the GPU idles while the
+    // CPU walks the trees; two groups overlap those halves across threads.
+    int groups = 1;
     bool stats = false;      // per-phase timing of a tick
     Ruleset ruleset = kDefaultRuleset;
     double temperature = 1.0;
@@ -176,6 +184,8 @@ void usage() {
         << "  --cpuct C            PUCT constant\n"
         << "  --oneply-temp T      softmax temperature for oneply targets\n"
         << "  --chunk N            positions per CUDA call inside one batch\n"
+        << "  --groups N           concurrent game groups (default 1); each group runs\n"
+        << "                       one CUDA batch and overlaps the other's CPU phases\n"
         << "  --out PATH           shard path (selfplay/oneply)\n"
         << "  --json PATH / --csv PATH   match results\n"
         << "  --seed N\n"
@@ -231,6 +241,8 @@ bool parse(int argc, char** argv, Options& o) {
             o.stats = true;
         } else if (arg == "--threads") {
             o.threads = std::max(1, std::stoi(next("--threads")));
+        } else if (arg == "--groups") {
+            o.groups = std::clamp(std::stoi(next("--groups")), 1, 16);
         } else if (arg == "--chunk") {
             o.chunk = std::clamp(std::stoi(next("--chunk")), 64, 65536);
         } else if (arg == "--temperature" || arg == "--temp") {
@@ -1079,63 +1091,148 @@ int runRandom(const Options& o) {
 
 // -------------------------------------------------------------- self-play ---
 
+// One CUDA batch's worth of games, start to finish.  Self-contained: it owns its
+// trees and its RNG (seeded by game index), so several of these can run at once.
+struct ChunkResult {
+    std::vector<Sample> samples;
+    int redWins = 0;
+    int blackWins = 0;
+    int draws = 0;
+    TickTiming timing;
+};
+
+ChunkResult playSelfplayChunk(Evaluator& evaluator, const Options& o, int start, int count) {
+    ChunkResult out;
+    std::vector<Search> games(static_cast<std::size_t>(count));
+    std::vector<int> active;
+    Scratch scratch;
+    for (int g = 0; g < count; ++g) {
+        seedOpenings(games[static_cast<std::size_t>(g)], o,
+                     o.seed + 7919ULL * static_cast<std::uint64_t>(start + g));
+    }
+    for (int moveNo = 0; moveNo < kMaxPlies + 4; ++moveNo) {
+        active.clear();
+        for (int g = 0; g < count; ++g) {
+            if (!terminalState(games[static_cast<std::size_t>(g)].tree.nodes[0])) active.push_back(g);
+        }
+        if (active.empty()) break;
+        for (int visit = 0; visit < o.visits; ++visit) {
+            tick(evaluator, games, active, scratch, o, o.stats ? &out.timing : nullptr);
+        }
+        for (int g : active) {
+            if (!advance(games[static_cast<std::size_t>(g)], o, moveNo, true, true)) {
+                games[static_cast<std::size_t>(g)].tree.terminal[0] = 1;
+            }
+        }
+    }
+    for (int g = 0; g < count; ++g) {
+        const Node& final = games[static_cast<std::size_t>(g)].tree.nodes[0];
+        const double total = static_cast<double>(final.raw) + o.komi;
+        const double red = total > 0.0 ? 1.0 : (total < 0.0 ? 0.0 : 0.5);
+        if (terminalState(final)) {
+            if (red > 0.5) ++out.redWins;
+            else if (red < 0.5) ++out.blackWins;
+            else ++out.draws;
+        } else {
+            ++out.draws;
+        }
+        for (Sample& sample : games[static_cast<std::size_t>(g)].samples) {
+            sample.value = static_cast<float>(sample.side == 0 ? red : 1.0 - red);
+            sample.game = static_cast<std::uint32_t>(start + g);
+            const int rawScore = static_cast<int>(final.raw);
+            sample.finalScore = clampScoreByte(sample.side == 0 ? rawScore : -rawScore);
+            out.samples.push_back(sample);
+        }
+    }
+    return out;
+}
+
 int runSelfplay(Evaluator& evaluator, const Options& o) {
     const auto started = std::chrono::steady_clock::now();
     std::vector<Sample> all;
     int redWins = 0;
     int blackWins = 0;
     int draws = 0;
-    Scratch scratch;
     TickTiming timing;
 
-    for (int start = 0; start < o.games; start += o.batchGames) {
-        const int count = std::min(o.batchGames, o.games - start);
-        std::vector<Search> games(count);
-        std::vector<int> active;
-        for (int g = 0; g < count; ++g) {
-            seedOpenings(games[g], o,
-                         o.seed + 7919ULL * static_cast<std::uint64_t>(start + g));
+    // A "batch" is one CUDA call's worth of games.  `--groups` runs several of
+    // them at once, each on its own thread with its own model instance and
+    // stream: the CPU half of one batch then overlaps the kernels of another.
+    // Every game seeds its own RNG from (seed, game index), so the samples are
+    // identical to the single-group run; only the order of collection changes,
+    // and that is restored below.
+    const int chunks = (o.games + o.batchGames - 1) / o.batchGames;
+    const int groups = std::min(std::max(1, o.groups), chunks);
+    std::vector<ChunkResult> results(static_cast<std::size_t>(chunks));
+    std::atomic<int> nextChunk{0};
+    std::atomic<int> doneGames{0};
+    std::atomic<long long> donePositions{0};
+    std::mutex printMutex;
+
+    auto work = [&](Evaluator& ev) {
+#ifdef _OPENMP
+        if (groups > 1) {
+            // The outer groups already provide the parallelism; give each one a
+            // slice of the cores instead of letting every batch spawn the lot.
+            const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+            omp_set_num_threads(static_cast<int>(std::max(1u, hw / static_cast<unsigned>(groups))));
         }
-        for (int moveNo = 0; moveNo < kMaxPlies + 4; ++moveNo) {
-            active.clear();
-            for (int g = 0; g < count; ++g) {
-                if (!terminalState(games[g].tree.nodes[0])) active.push_back(g);
-            }
-            if (active.empty()) break;
-            for (int visit = 0; visit < o.visits; ++visit) {
-                tick(evaluator, games, active, scratch, o, o.stats ? &timing : nullptr);
-            }
-            for (int g : active) {
-                if (!advance(games[g], o, moveNo, true, true)) {
-                    games[g].tree.terminal[0] = 1;
-                }
-            }
+#endif
+        while (true) {
+            const int c = nextChunk.fetch_add(1);
+            if (c >= chunks) break;
+            const int start = c * o.batchGames;
+            const int count = std::min(o.batchGames, o.games - start);
+            results[static_cast<std::size_t>(c)] = playSelfplayChunk(ev, o, start, count);
+            const int done = doneGames.fetch_add(count) + count;
+            const long long positions =
+                donePositions.fetch_add(static_cast<long long>(results[static_cast<std::size_t>(c)].samples.size())) +
+                static_cast<long long>(results[static_cast<std::size_t>(c)].samples.size());
+            const double elapsed =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+            std::lock_guard<std::mutex> lock(printMutex);
+            std::printf("batch games=%d/%d positions=%lld %.1fs %.3f games/s\n", done, o.games,
+                        positions, elapsed, done / elapsed);
+            std::fflush(stdout);
         }
-        for (int g = 0; g < count; ++g) {
-            const Node& final = games[g].tree.nodes[0];
-            const double total = static_cast<double>(final.raw) + o.komi;
-            const double red = total > 0.0 ? 1.0 : (total < 0.0 ? 0.0 : 0.5);
-            if (terminalState(final)) {
-                if (red > 0.5) ++redWins;
-                else if (red < 0.5) ++blackWins;
-                else ++draws;
-            } else {
-                ++draws;
+    };
+
+    if (groups == 1) {
+        work(evaluator);
+    } else {
+        std::vector<std::string> paths;
+        for (int i = 0; i < evaluator.count(); ++i) paths.push_back(evaluator.name(i));
+        std::vector<std::unique_ptr<Evaluator>> extra;
+        for (int g = 1; g < groups; ++g) {
+            auto ev = std::make_unique<Evaluator>();
+            std::string error;
+            if (!ev->init(paths, o.chunk, &error)) {
+                std::cerr << "cannot load model for group " << g << ": " << error << "\n";
+                return 1;
             }
-            for (Sample& sample : games[g].samples) {
-                sample.value = static_cast<float>(sample.side == 0 ? red : 1.0 - red);
-                sample.game = static_cast<std::uint32_t>(start + g);
-                const int rawScore = static_cast<int>(final.raw);
-                sample.finalScore = clampScoreByte(sample.side == 0 ? rawScore : -rawScore);
-                all.push_back(sample);
-            }
+            ev->setA(o.komi);
+            extra.push_back(std::move(ev));
         }
-        const double elapsed =
-            std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-        const int done = std::min(start + count, o.games);
-        std::printf("batch games=%d/%d positions=%zu %.1fs %.3f games/s\n", done, o.games,
-                    all.size(), elapsed, done / elapsed);
-        std::fflush(stdout);
+        std::vector<std::thread> workers;
+        for (int g = 1; g < groups; ++g) workers.emplace_back(work, std::ref(*extra[static_cast<std::size_t>(g - 1)]));
+        work(evaluator);
+        for (std::thread& t : workers) t.join();
+    }
+
+    for (ChunkResult& r : results) {
+        // Move, not copy: a generation is ~113k samples of 3 KB each, and holding
+        // two copies of that is 700 MB for nothing.
+        all.insert(all.end(), std::make_move_iterator(r.samples.begin()),
+                   std::make_move_iterator(r.samples.end()));
+        r.samples.clear();
+        r.samples.shrink_to_fit();
+        redWins += r.redWins;
+        blackWins += r.blackWins;
+        draws += r.draws;
+        timing.descend += r.timing.descend;
+        timing.eval += r.timing.eval;
+        timing.expand += r.timing.expand;
+        timing.ticks += r.timing.ticks;
     }
 
     const double seconds =
@@ -1146,16 +1243,19 @@ int runSelfplay(Evaluator& evaluator, const Options& o) {
     }
     std::printf("wrote %zu samples to %s\n", all.size(), o.out.c_str());
     std::printf(
-        "games=%d batch=%d visits=%d seconds=%.1f games/s=%.3f positions/s=%.1f sims/s=%.0f\n",
-        o.games, o.batchGames, o.visits, seconds, o.games / seconds, all.size() / seconds,
+        "games=%d batch=%d groups=%d visits=%d seconds=%.1f games/s=%.3f positions/s=%.1f sims/s=%.0f\n",
+        o.games, o.batchGames, groups, o.visits, seconds, o.games / seconds, all.size() / seconds,
         static_cast<double>(all.size()) * o.visits / seconds);
     std::printf("red=%d black=%d draw=%d\n", redWins, blackWins, draws);
     if (timing.ticks > 0) {
         const double per = 1000.0 / static_cast<double>(timing.ticks);
-        std::printf(
-            "TICK_MS descend=%.2f eval=%.2f expand=%.2f (batch=%d threads=%d ticks=%lld)\n",
-            timing.descend * per, timing.eval * per, timing.expand * per, o.batchGames, o.threads,
-            timing.ticks);
+        // `eval` summed over groups is the GPU busy time; dividing by wall time
+        // gives the utilisation that this whole option exists to raise.
+        std::printf("TICK_MS descend=%.2f eval=%.2f expand=%.2f (batch=%d groups=%d ticks=%lld "
+                    "wall=%.1f gpu=%.0f%%)\n",
+                    timing.descend * per, timing.eval * per, timing.expand * per, o.batchGames,
+                    groups, timing.ticks, seconds,
+                    seconds > 0.0 ? 100.0 * timing.eval / seconds : 0.0);
     }
     reportTargets(all, o.ruleset);
     return 0;

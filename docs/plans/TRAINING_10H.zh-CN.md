@@ -201,10 +201,43 @@ SHUYI_PYTHON=/home/vipuser/miniconda3/bin/python \
 bash training/run_session.sh
 ```
 
-3080 上预期还是 6 代 × ≈2,200 局（113k 局面/代、27 epoch、每代 ≈11.2k 步、91 分钟/代）。
-按这十小时的斜率（每代对上一代 54–60%），再跑一轮的预期收益是 **+150~250 Elo**。
+### 11.1 这一次的吞吐改了什么（2026-11-25 晚）
 
-想换变量就只换一个：
+上次十小时的账：每代 91 分钟，其中**自对弈 82 分钟**、竞技场 5 分钟、训练 4 分钟。
+自对弈 23,417 sims/s，而同一张卡纯前向是 36,756 evals/s —— 差的 25–30% 是 tick 里
+卡在空转：`descend(CPU) → eval(GPU) → expand(CPU)` 严格串行。详见
+`docs/ENGINE_ARCHITECTURE.zh-CN.md` §12。
+
+改动：
+
+1. `--groups N`：N 组对局各自一个线程、一份模型实例、一条非阻塞 stream。A 组在卡上
+   跑 kernel 时 B 组在 CPU 上走树。样本逐字节不变（每局 RNG 由 `(seed, 局号)` 决定），
+   本机已验证 groups=1/2/4 的 shard md5 相同。
+2. CUDA 端改用 pinned 缓冲 + `cudaMemcpyAsync` + 每实例一条 stream，去掉了每行 12 KB
+   的 pageable 拷贝（pageable 拷贝会先把整个设备排空）。
+3. 竞技场的 batch 翻倍：`match` 一次 tick 要分给两个网络，batch 32 时每个网络只有 ~16 行。
+4. 自对弈默认带 `--stats`，每代日志里都有一行 `TICK_MS ... gpu=%`。
+
+`run_session.sh` 会**先探测再决定**：用真实模型和真实 visits 分别跑 1 组和 2 组，
+取 games/s 高的那个，把两次的 `gpu=` 都写进 `logs/probe_g*.log`。所以这一条命令
+在 3080 上如果重叠没收益（卡本来就满），会自动退回 1 组，不赌。
+
+看日志的第一处：
+
+```bash
+grep -E "groups=|fastest" runs/training/<run>/logs/probe_g*.log runs/training/<run>/logs/*.log
+```
+
+预期：3080 上 2 组能把 0.44 games/s 提到 0.55–0.60（+25~35%），十小时从 6 代变 7–8 代，
+同样的数据/梯度规则（`training/budget.py`）会把多出来的时间换成更多局数。
+
+### 11.2 一句话的验证（跑起来之后 3 分钟）
+
+自对弈第一代的日志里，`gpu=` 应该比上次的单组 tick 高（上次是"卡忙 70–75%"）。
+如果 `gpu=` 依然是 100% 附近并且 games/s 没变，说明这台 3080 的 CPU 或 PCIe 是瓶颈，
+组数会自动退回 1，这一轮等于没改。
+
+### 11.3 想换变量就只换一个
 
 | 变量 | 代价 | 什么时候换 |
 | --- | --- | --- |
@@ -213,3 +246,4 @@ bash training/run_session.sh
 | `BLOCKS=8 CHANNELS=128` | 前向慢 2 倍 → 3 代 | 只在"连续 10 代没有新高"之后（见 §1.1） |
 
 现在**不要**换网络结构：这条曲线还在涨，换大网等于把已经买到的 60 万局面重新学一遍。
+

@@ -206,6 +206,8 @@ def generate(args, gen_dir, gen, mode, model):
         "--mode", mode,
         "--games", str(args.games_per_gen),
         "--batch-games", str(min(args.games_per_gen, args.batch_games)),
+        "--groups", str(args.groups),
+        "--stats",
         "--ruleset", args.ruleset,
         "--opening", str(args.opening),
         "--komi", str(args.komi),
@@ -385,7 +387,10 @@ def arena(args, gen_dir, gen, candidate, previous, name_b=None):
         "--name-a", f"gen_{gen:03d}",
         "--name-b", name_b or f"gen_{gen - 1:03d}",
         "--games", str(args.arena_games),
-        "--batch-games", str(min(args.arena_games, args.batch_games)),
+        # Two networks are loaded, and a tick splits its batch between them: at
+        # batch B each net only sees ~B/2 positions.  Doubling the batch keeps
+        # the per-net CUDA call the same size as in self-play.
+        "--batch-games", str(min(args.arena_games, max(1, args.batch_games * 2))),
         "--visits", str(args.arena_visits or args.visits),
         "--ruleset", args.ruleset,
         "--opening", str(args.opening),
@@ -553,6 +558,9 @@ def main(argv=None):
     parser.add_argument("--root-k", type=int, default=32, help="root children kept, 0 = all")
     parser.add_argument("--top-k", type=int, default=16, help="interior children kept, 0 = all")
     parser.add_argument("--batch-games", type=int, default=128)
+    parser.add_argument("--groups", type=int, default=1,
+                        help="concurrent game groups in self-play, each with its own model "
+                             "instance and CUDA stream (1 = the pre-2026-11-25 behaviour)")
     parser.add_argument("--chunk", type=int, default=1024)
     parser.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass",
                         help="rule set: data and models are tagged with it (default nopass)")

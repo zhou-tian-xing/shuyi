@@ -166,6 +166,11 @@ struct CudaPolicyValueNet::Impl {
     std::string name;
     bool ready = false;
     cublasHandle_t blas = nullptr;
+    // One stream per instance.  Self-play runs several worker threads, each with
+    // its own model instance; with a shared default stream every host->device
+    // copy would serialize the whole device and the CPU half of a tick could
+    // never overlap the other thread's kernels.
+    cudaStream_t stream = nullptr;
 
     float* dStemW = nullptr;
     float* dStemB = nullptr;
@@ -208,10 +213,23 @@ struct CudaPolicyValueNet::Impl {
     float hValueBias = 0.0f;
     float hScoreB = 0.0f;
 
+    // Pinned staging for the per-call copies.  Pageable `cudaMemcpy` drains the
+    // device before it starts, which is exactly the overlap we are trying to buy
+    // -- at 32 positions the staging buffer is 384 KB per call.
+    float* hIn = nullptr;
+    float* hHandBias = nullptr;
+    float* hLogits = nullptr;
+    float* hVsum = nullptr;
+    float* hScoreSum = nullptr;
+
     void release() {
         if (blas) {
             cublasDestroy(blas);
             blas = nullptr;
+        }
+        if (stream) {
+            cudaStreamDestroy(stream);
+            stream = nullptr;
         }
         for (float** p : {&dStemW, &dStemB, &dPolicyW, &dPolicyB, &dHandW, &dHandB, &dValueW,
                           &dValueBias, &dFc1W, &dFc1B, &dFc2W, &dFc2B, &dIn, &dXin, &dCol, &dA, &dB,
@@ -226,6 +244,10 @@ struct CudaPolicyValueNet::Impl {
                 p = nullptr;
             }
             list->clear();
+        }
+        for (float** p : {&hIn, &hHandBias, &hLogits, &hVsum, &hScoreSum}) {
+            if (*p) cudaFreeHost(*p);
+            *p = nullptr;
         }
         capacity = 0;
         ready = false;
@@ -276,6 +298,30 @@ struct CudaPolicyValueNet::Impl {
               "cudaMalloc handbias", error);
         if (!dIn || !dXin || !dCol || !dA || !dB || !dC || !dLogits || !dVsum || !dScoreSum ||
             !dHandBias) return false;
+        // Pinned host staging, sized with the device buffers.  cudaHostAlloc is
+        // the only way to keep `cudaMemcpyAsync` truly asynchronous.
+        for (float** p : {&hIn, &hHandBias, &hLogits, &hVsum, &hScoreSum}) {
+            if (*p) cudaFreeHost(*p);
+            *p = nullptr;
+        }
+        check(cudaHostAlloc(reinterpret_cast<void**>(&hIn), inCount * sizeof(float),
+                            cudaHostAllocDefault),
+              "cudaHostAlloc in", error);
+        check(cudaHostAlloc(reinterpret_cast<void**>(&hHandBias),
+                            static_cast<std::size_t>(next) * 9 * sizeof(float),
+                            cudaHostAllocDefault),
+              "cudaHostAlloc handbias", error);
+        check(cudaHostAlloc(reinterpret_cast<void**>(&hLogits),
+                            static_cast<std::size_t>(next) * kNnPolicy * sizeof(float),
+                            cudaHostAllocDefault),
+              "cudaHostAlloc logits", error);
+        check(cudaHostAlloc(reinterpret_cast<void**>(&hVsum),
+                            static_cast<std::size_t>(next) * sizeof(float), cudaHostAllocDefault),
+              "cudaHostAlloc vsum", error);
+        check(cudaHostAlloc(reinterpret_cast<void**>(&hScoreSum),
+                            static_cast<std::size_t>(next) * sizeof(float), cudaHostAllocDefault),
+              "cudaHostAlloc scoresum", error);
+        if (!hIn || !hHandBias || !hLogits || !hVsum || !hScoreSum) return false;
         capacity = next;
         return true;
     }
@@ -287,7 +333,7 @@ struct CudaPolicyValueNet::Impl {
         const int K = cin * 9;
         const long long work = static_cast<long long>(n) * K;
         int grid = static_cast<int>(std::min<long long>((work + kBlock - 1) / kBlock, 4096));
-        im2colKernel<<<grid, kBlock>>>(x, dCol, n, cin);
+        im2colKernel<<<grid, kBlock, 0, stream>>>(x, dCol, n, cin);
         const float alpha = 1.0f;
         const float beta = 0.0f;
         // C[n][cout] = A[K][n]^T * B[K][cout]; all three are the same memory as the
@@ -301,7 +347,7 @@ struct CudaPolicyValueNet::Impl {
         }
         const long long total = static_cast<long long>(cout) * n;
         biasReluKernel<<<static_cast<int>(std::min<long long>((total + kBlock - 1) / kBlock, 4096)),
-                         kBlock>>>(y, bias, cout, n, relu);
+                         kBlock, 0, stream>>>(y, bias, cout, n, relu);
     }
 };
 
@@ -355,6 +401,11 @@ bool CudaPolicyValueNet::load(const PolicyValueNet& net, std::string* error) {
         if (error) *error = "cublasCreate failed";
         return false;
     }
+    if (cudaStreamCreateWithFlags(&d.stream, cudaStreamNonBlocking) != cudaSuccess) {
+        if (error) *error = "cudaStreamCreate failed";
+        return false;
+    }
+    cublasSetStream(d.blas, d.stream);
     if (prop.major >= 8) {
         // Ampere+: FP32 GEMMs may use TF32 tensor cores.  Inference only, and the
         // check in shuyi_selfplay_gpu --check still passes at 1e-3.
@@ -426,7 +477,6 @@ void CudaPolicyValueNet::evaluate(const float* x, const float* globals, int batc
 
     // Hand-conditioned policy bias is cheap and stays on the host.
     const int globalsWidth = d.globals;
-    std::vector<float> handBias(static_cast<std::size_t>(batch) * 9);
     for (int b = 0; b < batch; ++b) {
         for (int n = 0; n < 9; ++n) {
             float sum = d.hHandB[n];
@@ -434,52 +484,60 @@ void CudaPolicyValueNet::evaluate(const float* x, const float* globals, int batc
                 sum += d.hHandW[static_cast<std::size_t>(n) * globalsWidth + g] *
                        globals[static_cast<std::size_t>(b) * globalsWidth + g];
             }
-            handBias[static_cast<std::size_t>(b) * 9 + n] = sum;
+            d.hHandBias[static_cast<std::size_t>(b) * 9 + n] = sum;
         }
     }
-    cudaMemcpy(d.dHandBias, handBias.data(), handBias.size() * sizeof(float),
-               cudaMemcpyHostToDevice);
+    const std::size_t planeFloats = static_cast<std::size_t>(batch) * planes * kCells;
+    std::memcpy(d.hIn, x, planeFloats * sizeof(float));
+    cudaMemcpyAsync(d.dHandBias, d.hHandBias, static_cast<std::size_t>(batch) * 9 * sizeof(float),
+                    cudaMemcpyHostToDevice, d.stream);
     // The planes arrive as [sample][plane][cell]; the GEMM path wants
     // [plane][sample*81+cell], so upload once and transpose on the device.
-    cudaMemcpy(d.dIn, x, static_cast<std::size_t>(batch) * planes * kCells * sizeof(float),
-               cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(d.dIn, d.hIn, planeFloats * sizeof(float), cudaMemcpyHostToDevice, d.stream);
 
     const int chunk = d.chunkFor();
-    std::vector<float> spatial(batch);
     for (int base = 0; base < batch; base += chunk) {
         const int m = std::min(chunk, batch - base);
         const int n = m * kCells;
         const long long inWork = static_cast<long long>(planes) * n;
         transposeInputKernel<<<static_cast<int>(std::min<long long>((inWork + kBlock - 1) / kBlock, 4096)),
-                               kBlock>>>(d.dIn + static_cast<std::size_t>(base) * planes * kCells,
+                               kBlock, 0, d.stream>>>(d.dIn + static_cast<std::size_t>(base) * planes * kCells,
                                          d.dXin, planes, n);
         d.conv(d.dXin, planes, channels, d.dStemW, d.dStemB, d.dA, n, 1);
         for (int i = 0; i < d.blocks; ++i) {
             d.conv(d.dA, channels, channels, d.dW1[i], d.dB1[i], d.dB, n, 1);
             d.conv(d.dB, channels, channels, d.dW2[i], d.dB2[i], d.dC, n, 0);
             const long long total = static_cast<long long>(channels) * n;
-            addReluKernel<<<static_cast<int>((total + kBlock - 1) / kBlock), kBlock>>>(
+            addReluKernel<<<static_cast<int>((total + kBlock - 1) / kBlock), kBlock, 0, d.stream>>>(
                 d.dA, d.dC, total, 1);
         }
         dim3 policyGrid(m, 9);
-        policyKernel<<<policyGrid, kThreads>>>(
+        policyKernel<<<policyGrid, kThreads, 0, d.stream>>>(
             d.dA, d.dPolicyW, d.dPolicyB, d.dHandBias,
             d.dLogits + static_cast<std::size_t>(base) * kNnPolicy, channels, n);
-        valueSpatialKernel<<<m, kThreads>>>(d.dA, d.dValueW,
-                                            d.dVsum + base, channels, n);
+        valueSpatialKernel<<<m, kThreads, 0, d.stream>>>(d.dA, d.dValueW,
+                                                        d.dVsum + base, channels, n);
         if (d.hasScore) {
-            valueSpatialKernel<<<m, kThreads>>>(d.dA, d.dScoreW,
-                                                d.dScoreSum + base, channels, n);
+            valueSpatialKernel<<<m, kThreads, 0, d.stream>>>(d.dA, d.dScoreW,
+                                                            d.dScoreSum + base, channels, n);
         }
     }
 
-    cudaMemcpy(logitsOut, d.dLogits, static_cast<std::size_t>(batch) * kNnPolicy * sizeof(float),
-               cudaMemcpyDeviceToHost);
-    cudaMemcpy(spatial.data(), d.dVsum, static_cast<std::size_t>(batch) * sizeof(float),
-               cudaMemcpyDeviceToHost);
-    if (const cudaError_t status = cudaGetLastError(); status != cudaSuccess) {
-        std::fprintf(stderr, "cuda forward failed: %s\n", cudaGetErrorString(status));
+    cudaMemcpyAsync(d.hLogits, d.dLogits, static_cast<std::size_t>(batch) * kNnPolicy * sizeof(float),
+                    cudaMemcpyDeviceToHost, d.stream);
+    cudaMemcpyAsync(d.hVsum, d.dVsum, static_cast<std::size_t>(batch) * sizeof(float),
+                    cudaMemcpyDeviceToHost, d.stream);
+    if (d.hasScore && scoreOut) {
+        cudaMemcpyAsync(d.hScoreSum, d.dScoreSum, static_cast<std::size_t>(batch) * sizeof(float),
+                        cudaMemcpyDeviceToHost, d.stream);
     }
+    if (const cudaError_t status = cudaStreamSynchronize(d.stream); status != cudaSuccess) {
+        std::fprintf(stderr, "cuda forward failed: %s\n", cudaGetErrorString(status));
+        return;
+    }
+    std::memcpy(logitsOut, d.hLogits,
+                static_cast<std::size_t>(batch) * kNnPolicy * sizeof(float));
+    const float* spatial = d.hVsum;
 
     for (int b = 0; b < batch; ++b) {
         float hidden[kResValueHidden];
@@ -499,9 +557,7 @@ void CudaPolicyValueNet::evaluate(const float* x, const float* globals, int batc
     }
 
     if (scoreOut && d.hasScore) {
-        std::vector<float> scoreSpatial(batch);
-        cudaMemcpy(scoreSpatial.data(), d.dScoreSum,
-                   static_cast<std::size_t>(batch) * sizeof(float), cudaMemcpyDeviceToHost);
+        const float* scoreSpatial = d.hScoreSum;
         for (int b = 0; b < batch; ++b) {
             float hidden[kResValueHidden];
             const std::size_t stride = 1 + static_cast<std::size_t>(globalsWidth);

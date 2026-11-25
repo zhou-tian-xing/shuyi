@@ -34,6 +34,13 @@ ARENA_GAMES="${ARENA_GAMES:-100}"
 # where the run actually does 0.45, which sizes the whole session for a box half
 # as fast as the one that is running.
 BATCH_GAMES="${BATCH_GAMES:-32}"
+# Independent game groups running concurrently, each with its own model instance
+# and CUDA stream.  One group leaves the card idle while the CPU descends and
+# expands; more groups overlap those halves.  The probe below measures each
+# candidate on this box and keeps the fastest.
+# (Not `GROUPS`: that is a bash builtin array, so the assignment would be
+# ignored and the flag would receive the caller's group ids.)
+PLAY_GROUPS="${PLAY_GROUPS:-1 2}"
 SEED="${SEED:-20261201}"
 RUN_NAME="${RUN_NAME:-b${BLOCKS}c${CHANNELS}-${RULESET}-$(date +%Y%m%d)}"
 PYTHON="${SHUYI_PYTHON:-$REPO/.venv/bin/python}"
@@ -61,19 +68,37 @@ mkdir -p "$RUN_DIR/logs"
 
 if [ -n "${SHUYI_FAKE_RATE:-}" ]; then
     RATE="$SHUYI_FAKE_RATE"
-    echo "using fake probe rate $RATE games/s"
+    PLAY_GROUPS=$(echo "$PLAY_GROUPS" | awk '{print $1}')
+    echo "using fake probe rate $RATE games/s, $PLAY_GROUPS group(s)"
 else
-    echo "probing self-play throughput (24 games, $VISITS visits)..."
-    PROBE="$RUN_DIR/logs/probe_selfplay.log"
-    "$BIN" --mode selfplay --model "$MODEL" --games 24 --batch-games "$BATCH_GAMES" \
-        --visits "$VISITS" --ruleset "$RULESET" --komi "$KOMI" \
-        --root-k 32 --top-k 16 --noise 0.25 --dirichlet 0.3 \
-        --temp-moves 12 --temperature 1.0 --opening 2 --seed "$SEED" \
-        --chunk 1024 --out "$RUN_DIR/logs/probe.bin" > "$PROBE" 2>&1
-    RATE=$(grep -o 'games/s=[0-9.]*' "$PROBE" | head -1 | cut -d= -f2)
-    [ -n "$RATE" ] || { echo "no games/s in $PROBE" >&2; exit 1; }
+    # Probe every candidate group count on the real model and the real visit
+    # budget, then keep the fastest.  Overlapping the CPU half of a tick with
+    # another group's kernels only pays when the card is idle between calls; on a
+    # box that is already saturated the extra groups cost nothing but buy
+    # nothing either.  Measuring beats assuming, and it takes minutes.
+    BEST_RATE=0
+    BEST_GROUPS=$(echo "$PLAY_GROUPS" | awk '{print $1}')
+    for g in $PLAY_GROUPS; do
+        PROBE="$RUN_DIR/logs/probe_g$g.log"
+        echo "probing self-play: $((BATCH_GAMES * g)) games, $VISITS visits, $g group(s)..."
+        "$BIN" --mode selfplay --model "$MODEL" --games $((BATCH_GAMES * g)) \
+            --batch-games "$BATCH_GAMES" --groups "$g" --stats \
+            --visits "$VISITS" --ruleset "$RULESET" --komi "$KOMI" \
+            --root-k 32 --top-k 16 --noise 0.25 --dirichlet 0.3 \
+            --temp-moves 12 --temperature 1.0 --opening 2 --seed "$SEED" \
+            --chunk 1024 --out "$RUN_DIR/logs/probe.bin" > "$PROBE" 2>&1
+        r=$(grep -o 'games/s=[0-9.]*' "$PROBE" | head -1 | cut -d= -f2)
+        [ -n "$r" ] || { echo "no games/s in $PROBE" >&2; exit 1; }
+        echo "  groups=$g: $r games/s  $(grep -o 'gpu=[0-9]*%' "$PROBE" | head -1)"
+        if awk "BEGIN{exit !($r > $BEST_RATE)}"; then
+            BEST_RATE="$r"
+            BEST_GROUPS="$g"
+        fi
+    done
     rm -f "$RUN_DIR/logs/probe.bin"
-    echo "measured $RATE games/s at $VISITS visits"
+    RATE="$BEST_RATE"
+    PLAY_GROUPS="$BEST_GROUPS"
+    echo "fastest: $RATE games/s with $PLAY_GROUPS group(s)"
 fi
 
 "$PYTHON" "$REPO/training/budget.py" --rate "$RATE" --hours "$HOURS" --params "$PARAMS" \
@@ -109,6 +134,7 @@ exec "$PYTHON" "$REPO/training/pipeline.py" \
     --games-per-gen "$GAMES" \
     --visits "$VISITS" \
     --batch-games "$BATCH_GAMES" \
+    --groups "$PLAY_GROUPS" \
     --komi "$KOMI" --ruleset "$RULESET" \
     --a-cond --a-anchor "$KOMI" \
     --score-weight "$SCORE_WEIGHT" \
