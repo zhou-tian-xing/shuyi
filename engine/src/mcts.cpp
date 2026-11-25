@@ -43,6 +43,11 @@ struct PathStep {
     int child = 0;
 };
 
+// Node budget of the cheap, pre-search exact solve (<= exactEndgamePlies).
+// Measured with tools/research/endgame_cost.cpp: every 6-ply position finished
+// inside it (2k-80k nodes), so it is a ceiling, not a target.
+constexpr long long kExactEndgameNodes = 250000;
+
 class MctsEngine final : public Engine {
 public:
     MctsEngine(const EngineOptions& options, bool useNn) : options_(options), useNn_(useNn), rng_(options.seed) {
@@ -146,7 +151,7 @@ public:
         // winning line and leaves the margin unpublished.
         if (options_.exactEndgamePlies > 0 &&
             pliesRemaining(position) <= options_.exactEndgamePlies) {
-            Analysis exact = exactAnalysis(position);
+            Analysis exact = exactAnalysis(position, kExactEndgameNodes);
             if (exact.valid) {
                 // Publish it like any other snapshot: a front end learns the
                 // position from the info stream, and a search that returns without
@@ -195,12 +200,38 @@ public:
             }
         } while (true);
 
+        // The search ran and could not finish the proof (or could not make the
+        // margin exact).  With one more ply left, the tree is a sampling tool and
+        // the solver is the right tool: solve it outright.  The answer is cached
+        // for this position, because an extending analysis must not pay seconds for
+        // the same solve on every refresh.
+        if (lateExactHasScore_) {
+            if (request.onUpdate) request.onUpdate(lateExactCached_);
+            return lateExactCached_;
+        }
         Analysis analysis = snapshot();
+        const int pliesLeft = pliesRemaining(position);
+        if (options_.exactEndgameAfterPlies > options_.exactEndgamePlies &&
+            pliesLeft <= options_.exactEndgameAfterPlies &&
+            !(analysis.proven && analysis.hasScore)) {
+            Analysis exact = exactAnalysis(position, options_.exactEndgameAfterNodes);
+            if (exact.valid) {
+                lateExactCached_ = exact;
+                lateExactHasScore_ = true;
+                if (request.onUpdate) request.onUpdate(exact);
+                return exact;
+            }
+        }
         if (request.onUpdate) request.onUpdate(analysis);
         return analysis;
     }
 
 private:
+    // The exact answer for a one-ply-too-deep endgame, kept for this position so
+    // an extending analysis does not pay the solve again.
+    Analysis lateExactCached_{};
+    bool lateExactHasScore_ = false;
+
     bool nodesEmpty() const { return nodeMove_.empty(); }
 
     int newNode(int parent, Move move, bool terminal, std::uint8_t symmetry = 1) {
@@ -220,6 +251,8 @@ private:
     }
 
     void resetTree() {
+        lateExactCached_ = Analysis{};
+        lateExactHasScore_ = false;
         nodeMove_.clear();
         parent_.clear();
         firstEdge_.clear();
@@ -846,11 +879,11 @@ private:
     // result: proven, with a margin on every cell.  `visits` stays 0 because no
     // simulation ran -- the front end shows that as "solved", not as an empty
     // search.
-    Analysis exactAnalysis(const Position& position) const {
+    Analysis exactAnalysis(const Position& position, long long nodeBudget) const {
         Analysis analysis;
         analysis.kind = kind();
         analysis.valid = false;
-        const EndgameSolution solved = solveEndgame(position, options_.aValue);
+        const EndgameSolution solved = solveEndgame(position, options_.aValue, nodeBudget);
         if (!solved.solved) return analysis;
         analysis.valid = true;
         analysis.proven = true;

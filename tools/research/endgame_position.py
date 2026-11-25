@@ -4,8 +4,11 @@ Used by hand: it writes cmds.txt, the engine reads it via stdin and its output
 lands in out.txt, so no pipes are needed.
 """
 import random
+import sys
 
-random.seed(20261124)
+PLIES_LEFT = int(sys.argv[1]) if len(sys.argv) > 1 else 6
+SEED = int(sys.argv[2]) if len(sys.argv) > 2 else 20261124
+random.seed(SEED)
 cells = [(x, y) for y in range(9) for x in range(9)]
 
 
@@ -53,7 +56,7 @@ def legal(side, cell):
 lines = ["protocol_version", "ruleset nopass", "clear_board", "set_engine mcts",
          "set_a 0.5"]
 side = 0
-for ply in range(48):
+for ply in range(54 - PLIES_LEFT):
     options = [(c, n) for c in cells for n in legal(side, c)]
     if not options:
         raise SystemExit(f"no legal move at ply {ply}")
@@ -76,7 +79,9 @@ for ply in range(48):
     lines.append(f"play {'red' if side == 0 else 'black'} {name(cell)} {number}")
     side ^= 1
 
-lines.append("analyze red 512 interval 50")
+if not any(legal(side, c) for c in cells):
+    raise SystemExit(f"side to move has no legal placement at {len(board)} stones (seed {SEED})")
+lines.append(f"analyze {'red' if side == 0 else 'black'} 512 interval 50")
 lines.append("quit")
 open("cmds.txt", "w").write("\n".join(lines) + "\n")
-print("plies", 48, "stones", len(board))
+print("plies", 54 - PLIES_LEFT, "stones", len(board), "left", PLIES_LEFT)

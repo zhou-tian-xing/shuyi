@@ -54,6 +54,13 @@ struct EngineOptions {
     // Measured on a 3080 laptop CPU: 3-6 stones left costs 1-34 ms (the hands are
     // nearly empty, so the branching is small); 7 costs seconds.  0 disables.
     int exactEndgamePlies = 6;
+    // After the search, one more ply is still worth solving outright.  Measured
+    // with tools/research/endgame_cost.cpp: a 7-ply position needs 0.5-1.8 M nodes
+    // (1-4 s) with alpha-beta, so a few thousand visits can never prove it, while
+    // the solver usually can; 8 plies already needs 10 M nodes and 15-25 s, so the
+    // second gate stops at 7.  0 disables the second-chance solve.
+    int exactEndgameAfterPlies = 7;
+    long long exactEndgameAfterNodes = 2000000;
     int aspirationWindow = 24;
     bool usePvs = true;
     // There is deliberately no tree-size cap: a cap silently changed how leaves

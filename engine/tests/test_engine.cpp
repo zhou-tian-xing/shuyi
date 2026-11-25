@@ -237,6 +237,85 @@ void testExactEndgamePublished() {
     }
 }
 
+// One ply past the exact gate.  A 7-ply position is ~50^7 nodes wide, so a few
+// hundred visits cannot prove it: the tree never gets the complete move lists a
+// loss proof needs, and the margin stays a sample.  The solver can finish it
+// (0.5-1.8 M nodes), so the search hands the position over instead of reporting
+// an estimate that will be replaced one move later, when the position is 6 plies
+// deep and the cheap gate applies.
+void testExactEndgameAfterSearch() {
+    int checked = 0;
+    for (int game = 0; game < 2; ++game) {
+        Position late;
+        late.setRuleset(Ruleset::NoPass);
+        std::uint64_t seed = 4242 + static_cast<std::uint64_t>(game) * 977;
+        while (kTotalMoves - late.stones() > 7) {
+            const std::vector<Move> moves = late.legalMoves();
+            if (moves.empty()) break;
+            seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+            late.play(moves[seed % moves.size()]);
+        }
+        if (kTotalMoves - late.stones() != 7) continue;
+
+        EngineOptions options = optionsFor(51 + game);
+        auto engine = makeEngine(EngineKind::Mcts, options);  // no model needed
+        SearchRequest request;
+        request.visits = 128;
+        const Analysis analysis = engine->search(late, request);
+        CHECK(analysis.valid);
+        // If the solver ran out of budget the answer is an honest estimate; when it
+        // answered, it must be the exact answer for every legal move.
+        if (!analysis.proven) continue;
+        CHECK(analysis.hasScore);
+        CHECK(analysis.visits == 0);           // solved, not sampled
+        CHECK(late.isLegal(analysis.best));
+        CHECK(!analysis.cells.empty());
+        double best = -1e18;
+        for (const CellAnalysis& info : analysis.cells) {
+            CHECK(info.proven);
+            CHECK(info.hasScore);
+            CHECK(late.isLegal(info.move));
+            Position child = late;
+            child.play(info.move);
+            const double value = -bruteForceScore(child, options.aValue);
+            CHECK(std::fabs(info.averageScore - value) < 1e-9);
+            best = std::max(best, value);
+        }
+        CHECK(std::fabs(analysis.averageScore - best) < 1e-9);
+        // The cached answer must be returned again, without re-solving: an
+        // extending analysis calls search() repeatedly on the same position.
+        const Analysis again = engine->search(late, request);
+        CHECK(again.proven && again.hasScore && again.visits == 0);
+        CHECK(std::fabs(again.averageScore - analysis.averageScore) < 1e-9);
+        ++checked;
+    }
+    CHECK(checked > 0);
+}
+
+// One ply further the second gate must stay shut: 8 plies measured 10 M nodes and
+// 15-25 s, which is not an answer a front end can wait for.  The search must come
+// back as a search (visits > 0), never as a zero-visit "exact" result.
+void testExactGateStopsAtSeven() {
+    Position late;
+    late.setRuleset(Ruleset::NoPass);
+    std::uint64_t seed = 777;
+    while (kTotalMoves - late.stones() > 8) {
+        const std::vector<Move> moves = late.legalMoves();
+        if (moves.empty()) break;
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        late.play(moves[seed % moves.size()]);
+    }
+    if (kTotalMoves - late.stones() != 8) return;
+    EngineOptions options = optionsFor(61);
+    auto engine = makeEngine(EngineKind::Mcts, options);
+    SearchRequest request;
+    request.visits = 128;
+    const Analysis analysis = engine->search(late, request);
+    CHECK(analysis.valid);
+    CHECK(analysis.visits > 0);   // it searched
+    CHECK(!(analysis.proven && analysis.visits == 0));
+}
+
 void testTerminalProof() {
     const std::string headless = std::string(SHUYI_SOURCE_DIR) + "/models/shuyi_resnet_v1.bin";
 
@@ -736,6 +815,8 @@ int runEngineTests() {
     testDirichletRoot();
     testNnModel();
     testEndgameExactScore();
+    testExactEndgameAfterSearch();
+    testExactGateStopsAtSeven();
     testNoPassUsesTheModel();
     testNoHardValueWithoutProof();
     testTerminalProof();
