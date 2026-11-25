@@ -1520,10 +1520,11 @@ int runMatch(Evaluator& evaluator, const Options& o) {
     const double seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     std::printf("MATCH_RESULT {\"a\": \"%s\", \"b\": \"%s\", \"games\": %d, \"a_wins\": %d, "
-                "\"b_wins\": %d, \"draws\": %d, \"score_a\": %.4f, \"komi\": %.2f, "
-                "\"visits\": %d}\n",
+                "\"b_wins\": %d, \"draws\": %d, \"score_a\": %.4f, \"komi\": %.17g, "
+                "\"visits\": %d, \"visits_b\": %d, \"ruleset\": \"%s\", \"seed\": %llu}\n",
                 o.nameA.c_str(), o.nameB.c_str(), o.games, aWins, bWins, draws, score, o.komi,
-                o.visits);
+                o.visits, o.visitsB > 0 ? o.visitsB : o.visits, rulesetName(o.ruleset),
+                static_cast<unsigned long long>(o.seed));
     std::printf("seconds=%.1f games/s=%.3f sims/s=%.0f\n", seconds, games / seconds,
                 games * kMaxPlies * o.visits / seconds);
     if (!o.jsonOut.empty()) {
@@ -1534,10 +1535,12 @@ int runMatch(Evaluator& evaluator, const Options& o) {
         if (f) {
             std::fprintf(f,
                          "{\"a\": \"%s\", \"b\": \"%s\", \"games\": %d, \"a_wins\": %d, "
-                         "\"b_wins\": %d, \"draws\": %d, \"score_a\": %.6f, \"komi\": %.2f, "
-                         "\"visits\": %d, \"seconds\": %.1f}\n",
+                         "\"b_wins\": %d, \"draws\": %d, \"score_a\": %.6f, \"komi\": %.17g, "
+                         "\"visits\": %d, \"visits_b\": %d, \"ruleset\": \"%s\", "
+                         "\"seed\": %llu, \"seconds\": %.1f}\n",
                          o.nameA.c_str(), o.nameB.c_str(), o.games, aWins, bWins, draws, score,
-                         o.komi, o.visits, seconds);
+                         o.komi, o.visits, o.visitsB > 0 ? o.visitsB : o.visits, rulesetName(o.ruleset),
+                         static_cast<unsigned long long>(o.seed), seconds);
             std::fclose(f);
         }
     }
@@ -1733,11 +1736,14 @@ int runBench(Evaluator& evaluator, const Options& o) {
 
 // ------------------------------------------------------------------ check ---
 
+// Crosses the internal CUDA chunk limit (at most 512), regardless of model size.
+constexpr int kCheckBatch = 513;
+
 int runCheck(Evaluator& evaluator, const Options& o) {
     std::mt19937_64 rng(7);
     std::vector<Node> nodes;
     std::vector<Position> positions;
-    for (int attempt = 0; attempt < 64; ++attempt) {
+    for (int attempt = 0; attempt < kCheckBatch; ++attempt) {
         Node node = makeStart();
         Position position;
         position.setRuleset(o.ruleset);
@@ -1784,7 +1790,9 @@ int runCheck(Evaluator& evaluator, const Options& o) {
     double maxLogit = 0.0;
     double maxValue = 0.0;
     double maxScore = 0.0;
+    // Sample both ends of the batch for the CPU reference.
     for (std::size_t i = 0; i < nodes.size(); ++i) {
+        if (i >= 32 && i < nodes.size() - 32) continue;
         const NnOutput reference = evaluator.cpu(0).evaluate(positions[i], evaluator.a());
         for (int k = 0; k < kNnPolicy; ++k) {
             maxLogit = std::max(maxLogit, std::fabs(static_cast<double>(
@@ -1854,7 +1862,7 @@ int runCheck(Evaluator& evaluator, const Options& o) {
     }
     // 5e-3 leaves room for TF32 tensor-core GEMMs on Ampere and newer, where the
     // library is allowed to round mantissas; a real indexing bug is off by ~1.
-    return (maxLogit < 5e-3 && maxValue < 5e-3) ? 0 : 1;
+    return (maxLogit < 5e-3 && maxValue < 5e-3 && (!scoreHead || maxScore < 1e-2)) ? 0 : 1;
 }
 
 } // namespace
@@ -1891,7 +1899,7 @@ int main(int argc, char** argv) {
 
     Evaluator evaluator;
     std::string error;
-    if (!evaluator.init(models, options.chunk, &error)) {
+    if (!evaluator.init(models, options.check ? kCheckBatch : options.chunk, &error)) {
         std::cerr << "cannot load model: " << error << "\n";
         return 1;
     }

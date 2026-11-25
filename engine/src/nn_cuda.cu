@@ -513,7 +513,7 @@ void CudaPolicyValueNet::evaluate(const float* x, const float* globals, int batc
         }
         dim3 policyGrid(m, 9);
         policyKernel<<<policyGrid, kThreads, 0, d.stream>>>(
-            d.dA, d.dPolicyW, d.dPolicyB, d.dHandBias,
+            d.dA, d.dPolicyW, d.dPolicyB, d.dHandBias + static_cast<std::size_t>(base) * 9,
             d.dLogits + static_cast<std::size_t>(base) * kNnPolicy, channels, n);
         valueSpatialKernel<<<m, kThreads, 0, d.stream>>>(d.dA, d.dValueW,
                                                         d.dVsum + base, channels, n);

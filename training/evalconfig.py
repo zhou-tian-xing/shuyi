@@ -36,7 +36,9 @@ MX350 plus a desktop CPU; a 3080 is several times faster per visit):
     mcts_nn      512 sims        ~= 2 s/move    ~= 107 s/game  (CPU forward)
 """
 
-# The single number.  Everything that rates a model uses this.
+import math
+
+# The standard default.  Everything that rates a model uses this.
 EVAL_VISITS = 512
 
 # How many games a pair needs before the result means anything.  50% +/-:
@@ -46,3 +48,28 @@ EVAL_VISITS = 512
 #     200           7 pp
 #     400           5 pp
 EVAL_GAMES_PER_PAIR = 60
+
+
+KOMI_BY_RULESET = {"classic": -0.5, "blocking": 1.26, "nopass": 0.5}
+
+
+def match_config(report, *, allow_untagged=False):
+    """Validate the conditions shared by every game in a rateable report."""
+    ruleset = report.get("ruleset")
+    if not isinstance(ruleset, str) or ruleset not in KOMI_BY_RULESET:
+        if ruleset is not None or not allow_untagged:
+            raise ValueError("missing or unknown ruleset")
+    komi = report.get("komi")
+    if type(komi) not in (int, float) or not math.isfinite(komi):
+        raise ValueError("missing or invalid komi")
+    visits = report.get("visits")
+    if type(visits) is not int or visits <= 0:
+        raise ValueError("missing or invalid visits")
+    visits_b = report.get("visits_b", None if "a_wins" in report and "pairs" not in report else visits)
+    if type(visits_b) is not int or visits_b != visits:
+        raise ValueError("the two players used different visit budgets")
+    return ruleset, float(komi) or 0.0, visits
+
+
+def board_directory(root, ruleset, komi):
+    return root / ruleset / f"komi_{float(komi) or 0.0}"

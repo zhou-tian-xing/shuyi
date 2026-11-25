@@ -10,7 +10,8 @@
 
 ```
 shuyi.exe                  Win32 界面（规则与显示；不含任何搜索）
-shuyi_engine.exe           无头引擎：NN-MCTS，CUDA 12.4 构建
+shuyi_engine.exe           无头 CPU 引擎：NN-MCTS
+shuyi_engine_cuda.exe      可选 CUDA 引擎：需安装匹配的 NVIDIA 驱动和 CUDA 运行库
 models/b4c32-s42012-d595499.bin   当前最强的网络（v4，A 是输入，3000 visits/步；阻挡规则训练，无过手直接可用）
 shuyi-ui.ini               随包设置：无过手规则、A=1、512 visits、引擎同目录
 ENGINE_PROTOCOL.md         引擎协议 v2（命令 + JSON 流式分析）

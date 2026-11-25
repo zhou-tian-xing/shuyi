@@ -25,10 +25,12 @@ evaluation); training is `training/train_resnet.py` on CUDA.  There is no Python
 MCTS in this loop and no CPU inference anywhere.
 
 Each generation is gated on the *health of its targets* before any training
-happens, and promotion is decided by a GPU arena with alternating colours.
+happens. A GPU arena with alternating colours measures strength while the
+training chain advances in generation order.
 """
 import argparse
 import glob
+import hashlib
 import json
 import re
 import os
@@ -40,6 +42,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from elo import elo_from_score
+from evalconfig import KOMI_BY_RULESET
 from budget import deadline_exceeded  # noqa: E402  (same directory, no package)
 
 REPO = Path(__file__).resolve().parents[1]  # repo root (training/..)
@@ -375,10 +379,11 @@ def train(args, gen_dir, gen, shards, init_model):
     return candidate, json.loads(summary.read_text(encoding="utf-8"))
 
 
-def arena(args, gen_dir, gen, candidate, previous, name_b=None):
+def arena(args, gen_dir, gen, candidate, previous, name_b=None, reference=None):
     out_dir = gen_dir / "arena"
     out_dir.mkdir(parents=True, exist_ok=True)
     match_json = out_dir / "match.json"
+    seed = reference["seed"] if reference else args.seed + gen * 31337
     cmd = [
         str(args.selfplay_gpu),
         "--mode", "match",
@@ -396,13 +401,13 @@ def arena(args, gen_dir, gen, candidate, previous, name_b=None):
         "--opening", str(args.opening),
         "--komi", str(args.komi),
         "--chunk", str(args.chunk),
-        "--seed", str(args.seed + gen * 31337),
+        "--seed", str(seed),
         "--json", str(match_json),
         "--csv", str(out_dir / "games.csv"),
     ]
     lines = run_command(cmd, gen_dir / "logs" / "arena.log", args.dry_run)
     if args.dry_run:
-        return {"score_a": 0.5, "promoted": False, "dry_run": True}
+        return {"dry_run": True}
     result = parse_json_line(lines, "MATCH_RESULT")
     if not result:
         raise RuntimeError(f"generation {gen}: arena produced no result")
@@ -411,9 +416,14 @@ def arena(args, gen_dir, gen, candidate, previous, name_b=None):
     # with an older net -- and "stronger in a match" does not imply "its data is
     # the right thing to train on".  Strength ranking is the ELO stage's job.
     result["above_threshold"] = float(result["score_a"]) >= args.promotion_threshold
+    if reference:
+        result["strength_reference"] = reference
+        games = result["games"]
+        score = (result["a_wins"] + 0.5 * result["draws"] + 0.5) / (games + 1)
+        result["strength_elo"] = elo_from_score(score)
     log(
         f"generation {gen}: arena {result['a_wins']}/{result['draws']}/{result['b_wins']} "
-        f"score={result['score_a']:.3f} (chain advances; Elo decides deployment)"
+        f"score={result['score_a']:.3f} (measurement only; chain advances)"
     )
     return result
 
@@ -469,40 +479,40 @@ def next_rung(ladder, blocks, channels):
     return None
 
 
-def plateau_report(manifest, args, gen):
-    """The 10-generation rule: no new Elo high for N generations means the model
-    has run out of capacity (or the data resolution has), so the next run should
-    use a bigger network.  See training/README.md 1.1."""
-    best = None
-    best_gen = None
-    for record in manifest["generations"]:
-        elo = record.get("elo") or {}
-        ratings = elo.get("elo") or {}
-        if not ratings:
-            continue
-        top = max(ratings.values())
-        if best is None or top > best:
-            best = top
-            best_gen = record["gen"]
-    if best is None or best_gen is None:
+def plateau_report(records, args):
+    """Count consecutive comparable arena results since a meaningful new high."""
+    reference = records[-1].get("arena", {}).get("strength_reference")
+    if not reference or not args.plateau_generations:
         return None
-    stagnation = gen - best_gen
-    status = {
-        "best_elo": best,
-        "best_gen": best_gen,
-        "generations_without_progress": stagnation,
-        "limit": args.plateau_generations,
-        "escalate": bool(args.plateau_generations and stagnation >= args.plateau_generations),
+    comparable = []
+    for record in reversed(records):
+        arena_result = record.get("arena", {})
+        if arena_result.get("strength_reference") != reference:
+            break
+        comparable.append((record["gen"], arena_result["strength_elo"]))
+
+    first_gen, first_elo = comparable[-1]
+    start_elo = reference.get("start_elo")
+    best_gen, best_elo = (first_gen, first_elo) if start_elo is None else (first_gen - 1, start_elo)
+    since_high = 0
+    measurements = comparable[:-1] if start_elo is None else comparable
+    for gen, rating in reversed(measurements):
+        if rating > best_elo and rating >= best_elo + args.plateau_margin:
+            best_gen, best_elo = gen, rating
+            since_high = 0
+        else:
+            since_high += 1
+    review = since_high >= args.plateau_generations
+    result = {
+        "gen": records[-1]["gen"], "reference": reference,
+        "best_elo": best_elo, "best_gen": best_gen,
+        "generations_without_progress": since_high, "review": review,
     }
-    if status["escalate"]:
+    if review:
         rung = next_rung(args.capacity_ladder, args.blocks, args.channels)
-        status["next_rung"] = f"b{rung[0]}c{rung[1]}" if rung else "none (ladder exhausted)"
-        log(
-            f"generation {gen}: {stagnation} generations without a new Elo high "
-            f"(best {best:.0f} at gen {best_gen}) -> capacity escalation suggested: "
-            f"{status['next_rung']}"
-        )
-    return status
+        if rung:
+            result["architecture_candidate"] = f"b{rung[0]}c{rung[1]}"
+    return result
 
 
 def lineage_start(init_model) -> tuple[int, int]:
@@ -555,6 +565,8 @@ def main(argv=None):
     parser.add_argument("--visits", type=int, default=1024, help="MCTS visits per move")
     parser.add_argument("--arena-visits", type=int, default=0, help="0 = same as --visits")
     parser.add_argument("--arena-games", type=int, default=120)
+    parser.add_argument("--arena-reference", default="",
+                        help="measure each generation against this fixed model, using the same openings")
     parser.add_argument("--root-k", type=int, default=32, help="root children kept, 0 = all")
     parser.add_argument("--top-k", type=int, default=16, help="interior children kept, 0 = all")
     parser.add_argument("--batch-games", type=int, default=128)
@@ -620,9 +632,9 @@ def main(argv=None):
     parser.add_argument("--elo-pool", type=int, default=5, help="models in the rating pool")
     parser.add_argument("--elo-bootstrap", type=int, default=120)
     parser.add_argument("--plateau-generations", type=int, default=10,
-                        help="0 disables; see training/README.md 1.1")
+                        help="fixed-reference evaluations without progress before a review (0 disables)")
     parser.add_argument("--plateau-margin", type=float, default=20.0,
-                        help="Elo a generation must beat the best so far to count as progress")
+                        help="Elo improvement against the fixed reference that resets the review count")
     parser.add_argument("--capacity-ladder", default="b4c32,b6c48,b6c64,b8c96")
     parser.add_argument("--promotion-games", type=int, default=0,
                         help="deprecated alias for --arena-games")
@@ -666,14 +678,27 @@ def main(argv=None):
         # with an A-blind model at 64 visits and +0.28 +- 0.36 with the A-aware
         # b6c96 at 1024 visits; 0.5 is the half-integer inside both intervals and
         # half-integers cannot draw, so it is the fair, draw-free choice.
-        args.komi = -0.5 if args.ruleset == "classic" else (
-            0.5 if args.ruleset == "nopass" else 1.26)
+        args.komi = KOMI_BY_RULESET[args.ruleset]
     if args.a_anchor is None:
         # The A the net is told about and the A the games are scored with have to
         # be the same number, otherwise the feature is a lie for every position.
         args.a_anchor = args.komi
     if args.promotion_games:
         args.arena_games = args.promotion_games
+
+    reference = None
+    if args.arena_reference:
+        path = Path(args.arena_reference)
+        if not path.is_file():
+            raise SystemExit(f"--arena-reference does not exist: {path}")
+        reference = {
+            "name": path.stem, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "ruleset": args.ruleset, "komi": args.komi, "visits": args.arena_visits or args.visits,
+            # Keep evaluation openings fixed and disjoint from the self-play seed stream.
+            "seed": args.seed + 31337, "opening": args.opening, "games": args.arena_games,
+        }
+        if args.init_model and Path(args.init_model).resolve() == path.resolve():
+            reference["start_elo"] = 0.0
 
     if args.generations < 1:
         raise SystemExit("--generations must be >= 1")
@@ -894,7 +919,10 @@ def main(argv=None):
         # distribution and waste generations -- which is exactly what happened in
         # the 3080 run, where gen3..gen6 all played with gen2's weights.
         record["chained_from"] = str(previous_model) if previous_model else ""
-        if gen == 0 and mode == "warm":
+        if reference:
+            record["arena"] = arena(args, gen_dir, gen, candidate, args.arena_reference,
+                                    name_b=reference["name"], reference=reference)
+        elif gen == 0 and mode == "warm":
             # A warm start is measurable: it must not be worse than what it
             # started from, or the fine-tune threw the old model away.
             record["arena"] = arena(args, gen_dir, gen, candidate, args.init_model,
@@ -910,7 +938,7 @@ def main(argv=None):
             record["arena"] = {"note": "bootstrap generation; nothing to compare against"}
         else:
             record["arena"] = arena(args, gen_dir, gen, candidate, previous_model)
-        record["promoted"] = True
+        record["continues_training_chain"] = True
         model_name = args.name_template.format(
             blocks=args.blocks, channels=args.channels,
             steps=cumulative_steps, data=cumulative_data,
@@ -955,17 +983,15 @@ def main(argv=None):
                 record["elo_best"] = best[0]
                 manifest["elo_best"] = best[0]
 
-        plateau = plateau_report(manifest, args, gen)
+        plateau = plateau_report([*manifest["generations"], record], args)
         if plateau:
             record["plateau"] = plateau
-            if plateau.get("escalate"):
-                manifest["capacity_escalation"] = {
-                    "gen": gen,
-                    "reason": f"{plateau['generations_without_progress']} generations without an Elo high",
-                    "best_elo": plateau["best_elo"],
-                    "best_gen": plateau["best_gen"],
-                    "next_rung": plateau.get("next_rung"),
-                }
+            if plateau["review"]:
+                manifest["plateau_review"] = plateau
+                log(f"generation {gen}: {plateau['generations_without_progress']} comparable "
+                    "evaluations without a new Elo high. Review training, data and architecture.")
+        if not plateau or not plateau["review"]:
+            manifest.pop("plateau_review", None)
 
         manifest["generations"] = [item for item in manifest["generations"] if item.get("gen") != gen]
         manifest["generations"].append(record)

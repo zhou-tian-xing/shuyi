@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from evalconfig import EVAL_VISITS  # noqa: E402
+from evalconfig import EVAL_VISITS, KOMI_BY_RULESET, match_config  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]  # repo root (training/..)
 DEFAULT_SELFPLAY = REPO / "build" / "shuyi_selfplay_gpu"
@@ -69,6 +69,10 @@ def play_pair(binary, a, b, games, visits, komi, opening, ruleset, seed, log_dir
             r = json.loads(line[len("MATCH_RESULT"):])
             return int(r["a_wins"]), int(r["draws"]), int(r["b_wins"])
     raise RuntimeError(f"no MATCH_RESULT from {a} vs {b}")
+
+
+def elo_from_score(score):
+    return 400.0 * math.log10(score / (1.0 - score))
 
 
 def fit_elo(names, pairs, prior_sigma=400.0, passes=60):
@@ -161,14 +165,20 @@ def merge_reports(paths):
     """
     names = []
     totals = {}
-    visits = None
-    seen_visits = {}
+    config = None
     for path in paths:
         saved = json.loads(Path(path).read_text(encoding="utf-8"))
-        report_visits = saved.get("visits")
-        seen_visits[str(path)] = report_visits
-        if visits is None:
-            visits = report_visits
+        try:
+            current = match_config(saved, allow_untagged=len(paths) == 1)
+        except ValueError as error:
+            raise SystemExit(f"{path}: {error}") from error
+        if config is None:
+            config = current
+        elif current != config:
+            raise SystemExit(
+                f"{path}: incompatible evaluation ruleset, komi or visits "
+                f"({current!r}, expected {config!r})"
+            )
         for name in saved["names"]:
             if name not in names:
                 names.append(name)
@@ -184,16 +194,8 @@ def merge_reports(paths):
                 totals[key] = (w + wb, d + dd, l + wa)
             else:
                 totals[key] = (w + wa, d + dd, l + wb)
-    # Merging tables with different budgets is how a rating quietly stops
-    # measuring the models: a 96-visit row and a 512-visit row are not the same
-    # unit of work, so refuse instead of averaging them.
-    if len(set(seen_visits.values())) > 1:
-        detail = ", ".join(f"{Path(k).name}: {v}" for k, v in seen_visits.items())
-        raise SystemExit(
-            "refusing to merge reports with different visit budgets (" + detail + "); "
-            "every player in one rating must use the same fixed budget")
     pairs = [(a, b, w, d, l, 1.0) for (a, b), (w, d, l) in totals.items()]
-    return names, pairs, visits
+    return names, pairs, config
 
 
 def main(argv=None):
@@ -203,7 +205,7 @@ def main(argv=None):
     ap.add_argument("--games", type=int, default=40, help="games per pair")
     ap.add_argument("--visits", type=int, default=EVAL_VISITS,
                     help="fixed budget per move, identical for every player")
-    ap.add_argument("--komi", type=float, default=-0.5)
+    ap.add_argument("--komi", type=float)
     ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass")
     ap.add_argument("--opening", type=int, default=2)
     ap.add_argument("--seed", type=int, default=20261123)
@@ -222,7 +224,9 @@ def main(argv=None):
     binary = resolve_binary(args.selfplay_gpu)
 
     if args.report:
-        names, pairs, visits = merge_reports(args.report)
+        names, pairs, (ruleset, komi, visits) = merge_reports(args.report)
+        if ruleset is None:
+            print("warning: historical report has no ruleset; fitting it in isolation")
     else:
         if len(args.models) < 2:
             raise SystemExit("need at least two --models")
@@ -234,6 +238,8 @@ def main(argv=None):
         if len(names) != len(args.models):
             raise SystemExit("--labels must match --models")
         visits = args.visits
+        ruleset = args.ruleset
+        komi = KOMI_BY_RULESET[ruleset] if args.komi is None else args.komi
         log_dir = REPO / "runs" / "elo"
         log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -246,13 +252,13 @@ def main(argv=None):
         pairs = []
         for k, (i, j) in enumerate(combos):
             wins_a, draws, wins_b = play_pair(
-                binary, args.models[i], args.models[j], args.games, visits, args.komi,
-                args.opening, args.ruleset, args.seed + 1000 * k, log_dir, args.dry_run,
+                binary, args.models[i], args.models[j], args.games, visits, komi,
+                args.opening, ruleset, args.seed + 1000 * k, log_dir, args.dry_run,
             )
             print(f"{names[i]:>28} vs {names[j]:<28} {wins_a:>3}/{draws:>2}/{wins_b:<3}", flush=True)
             pairs.append((names[i], names[j], wins_a, draws, wins_b, 1.0))
         matrix = {"names": names, "pairs": pairs, "visits": visits,
-                  "komi": args.komi, "games_per_pair": args.games}
+                  "komi": komi, "ruleset": ruleset, "games_per_pair": args.games}
         out = Path(args.json) if args.json else log_dir / "matrix.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(matrix, indent=2), encoding="utf-8")
@@ -297,7 +303,8 @@ def main(argv=None):
             "elo": {names[i]: rating[i] for i in range(len(names))},
             "ci": {names[i]: ci[i] for i in range(len(names))},
             "visits": visits,
-            "komi": args.komi,
+            "komi": komi,
+            "ruleset": ruleset,
             "games": sum(p[2] + p[3] + p[4] for p in pairs),
         }, indent=2), encoding="utf-8")
         print(f"wrote {out}")

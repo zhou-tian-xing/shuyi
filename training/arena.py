@@ -34,7 +34,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from evalconfig import EVAL_VISITS  # noqa: E402
+from evalconfig import EVAL_VISITS, KOMI_BY_RULESET  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]  # repo root (training/..)
 DEFAULT_ENGINE = REPO / "build" / "shuyi_engine"
@@ -49,7 +49,6 @@ def _load_rule_probe():
 
 
 RULE_PROBE = _load_rule_probe()
-KOMI = -0.5
 
 
 def resolve_binary(value):
@@ -246,7 +245,7 @@ def main(argv=None):
                          "budget does, or the table becomes a benchmark of the host.")
     ap.add_argument("--time", type=int, default=0,
                     help="deprecated, ignored; kept so old command lines still parse")
-    ap.add_argument("--komi", type=float, default=KOMI)
+    ap.add_argument("--komi", type=float)
     ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass")
     ap.add_argument("--root-k", type=int, default=32)
     ap.add_argument("--workers", type=int, default=3)
@@ -255,6 +254,8 @@ def main(argv=None):
     ap.add_argument("--gpu-binary", default=str(DEFAULT_GPU))
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+    if args.komi is None:
+        args.komi = KOMI_BY_RULESET[args.ruleset]
     binaries = {"engine": str(resolve_binary(args.engine_binary)),
                 "gpu": str(resolve_binary(args.gpu_binary))}
 

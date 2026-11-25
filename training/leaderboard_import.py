@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""把评测结果（`roundrobin.py` 的 pair JSON）填进 `matches_<visits>.csv`。
+"""按规则、A 值和 visits 汇总可追溯的评测报告。
 
 只做"填表"，不算 ELO —— 那是 `leaderboard.py` 的事。
 名字要落到真实存在的模型上：`gen_003` 用该 run 的 manifest 换成累计模型名，
 `gpu:`/`mcts_nn:` 前缀和旧的 `-blk`/`-cls` 后缀去掉；换不出来、仓库里也没有
 这个文件的对局直接丢掉（宁愿少一行，也不要一行指不到模型的分）。
 
-已经数过的文件记在 `runs/leaderboard/imported_sources.json`，所以重复运行不会
-把同一批对局加两遍。默认只扫 `runs/eval/`（新跑的数据放这里）；历史的
-runs/training/**/ 结果在 2026-11-24 已经一次性导入过。
+每个源文件只计一次，原路径重测时更新该源的成绩。默认扫描 runs/eval/。
+缺少评测条件的历史文件留在原来的历史榜。
 """
 from __future__ import annotations
 
 import csv
+import io
 import json
-import sys
+from tempfile import NamedTemporaryFile
 from pathlib import Path
+
+from evalconfig import board_directory, match_config
 
 REPO = Path(__file__).resolve().parents[1]
 PSEUDO = ("random", "pruning", "mcts")
@@ -56,51 +58,36 @@ def gen_map(run_dir: Path) -> dict[str, str]:
     return mapping
 
 
-def read_table(path: Path):
-    if not path.exists():
-        return [], {}
-    with path.open(newline="", encoding="utf-8") as handle:
-        rows = list(csv.reader(handle))
-    header = [cell.strip() for cell in rows[0][1:]]
-    order = [row[0].strip() for row in rows[1:] if row and row[0].strip()]
-    cells = {}
-    for row in rows[1:]:
-        if not row or not row[0].strip():
-            continue
-        for col, text in zip(header, row[1:]):
-            text = (text or "").strip().replace("—", "-").replace("–", "-")
-            if not text or text == "-":
-                continue
-            parts = text.split("-")
-            if len(parts) != 3:
-                continue
-            try:
-                cells[(row[0].strip(), col)] = tuple(int(part) for part in parts)
-            except ValueError:
-                continue
-    return order, cells
-
-
-def write_table(path: Path, order, cells) -> None:
+def atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["model"] + order)
-        for row in order:
-            line = [row]
-            for col in order:
-                if row == col:
-                    line.append("—")
-                    continue
-                value = cells.get((row, col))
-                line.append("-".join(str(part) for part in value) if value else "")
-            writer.writerow(line)
+    with NamedTemporaryFile(mode="w", encoding="utf-8", newline="", dir=path.parent,
+                            delete=False) as handle:
+        tmp = Path(handle.name)
+        handle.write(text)
+    try:
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
-CONFLICTS: list[str] = []
+def write_table(path: Path, cells) -> None:
+    order = sorted({name for pair in cells for name in pair})
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(["model", *order])
+    for row in order:
+        line = [row]
+        for col in order:
+            value = cells.get((row, col))
+            if row == col:
+                line.append("—")
+            else:
+                line.append("-".join(map(str, value)) if value else "")
+        writer.writerow(line)
+    atomic_write(path, output.getvalue())
 
 
-def add(cells, a, b, wins, draws, losses, source="", visits=0) -> None:
+def add(cells, a, b, wins, draws, losses, source, config, conflicts) -> None:
     """追加。格子是累计的：同一对多下几次就多记几次，绝不覆盖。
 
     但两次来源打架时要说出来：同一对里一方这次 80% 赢、上次 80% 输，说明有一份
@@ -114,8 +101,8 @@ def add(cells, a, b, wins, draws, losses, source="", visits=0) -> None:
         old_rate = (prev[0] + 0.5 * prev[1]) / sum(prev)
         new_rate = (wins + 0.5 * draws) / (wins + draws + losses)
         if (old_rate > 0.7 and new_rate < 0.3) or (old_rate < 0.3 and new_rate > 0.7):
-            CONFLICTS.append(
-                f"{visits} visits: {a} vs {b}: 已有 {prev[0]}-{prev[1]}-{prev[2]}, "
+            conflicts.append(
+                f"{config}: {a} vs {b}: 已有 {prev[0]}-{prev[1]}-{prev[2]}, "
                 f"这次 {wins}-{draws}-{losses}（来自 {source}）")
     prev = prev or (0, 0, 0)
     total = (prev[0] + wins, prev[1] + draws, prev[2] + losses)
@@ -123,93 +110,89 @@ def add(cells, a, b, wins, draws, losses, source="", visits=0) -> None:
     cells[(b, a)] = (total[2], total[1], total[0])
 
 
+def source_pairs(data, path):
+    if "a" in data and "b" in data and "a_wins" in data:
+        pairs = [(data["a"], data["b"], data["a_wins"], data.get("draws", 0), data["b_wins"])]
+    elif "names" in data and "pairs" in data and "source_reports" not in data:
+        pairs = data["pairs"]
+    else:
+        return []
+    run_dir = next((parent for parent in path.parents if (parent / "manifest.json").exists()), None)
+    mapping = gen_map(run_dir) if run_dir else {}
+    def model(name):
+        name = canonical(name)
+        return mapping.get(name, name)
+
+    return [(model(a), model(b), wins, draws, losses) for a, b, wins, draws, losses, *_ in pairs]
+
+
 def import_all(out_dir: Path, roots: list[Path] | None = None) -> dict[int, int]:
-    known = known_models()
+    known = known_models().union(PSEUDO)
+    ledger_path = out_dir / "scoped_sources.json"
+    sources = json.loads(ledger_path.read_text(encoding="utf-8")) if ledger_path.exists() else {}
+    scopes = {match_config(source) for source in sources.values()}
     imported: dict[int, int] = {}
-    skipped = 0
-    seen: set[Path] = set()
-    # Every file counted into the tables is remembered, so running the import
-    # twice does not add the same games twice.
-    ledger_path = out_dir / "imported_sources.json"
-    ledger: set[str] = set()
-    if ledger_path.exists():
-        ledger = set(json.loads(ledger_path.read_text(encoding="utf-8")))
+    skipped_untagged = 0
 
-    def record(visits, a, b, wins, draws, losses, source=""):
-        nonlocal skipped
-        a, b = canonical(a), canonical(b)
-        for name in (a, b):
-            if name not in PSEUDO and name not in known:
-                skipped += 1
-                return
-        path = out_dir / f"matches_{visits}.csv"
-        order, cells = read_table(path)
-        for name in (a, b):
-            if name not in order:
-                order.append(name)
-        add(cells, a, b, wins, draws, losses, source=source, visits=visits)
-        write_table(path, order, cells)
-        imported[visits] = imported.get(visits, 0) + wins + draws + losses
-
-    scanned: list[Path] = []
-    for root in roots or [REPO / "runs"]:
-        scanned.extend(sorted(root.rglob("*.json")))
-    for path in scanned:
-        if path in seen or "leaderboard" in path.parts:
-            continue
-        key = path.relative_to(REPO).as_posix() if path.is_relative_to(REPO) else str(path)
-        if key in ledger:
+    output_path = out_dir.resolve()
+    paths = {path.resolve() for root in roots or [REPO / "runs" / "eval"]
+             for path in root.rglob("*.json")}
+    for path in sorted(paths):
+        if output_path in path.parents or "leaderboard" in path.parts:
             continue
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 - not every json is a result file
+            report = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(report, dict):
+                continue
+            pairs = source_pairs(report, path)
+            if not pairs:
+                continue
+            ruleset, komi, visits = match_config(report)
+            rows = [[a, b, int(wins), int(draws), int(losses)]
+                    for a, b, wins, draws, losses in pairs]
+            rows = [row for row in rows if row[0] != row[1] and min(row[2:]) >= 0
+                    and sum(row[2:]) > 0]
+            if not rows:
+                continue
+        except (OSError, ValueError, KeyError, TypeError):
+            skipped_untagged += 1
             continue
-        if not isinstance(data, dict):
-            continue
-        visits = int(data.get("visits") or 0)
-        if visits <= 0:
-            continue
-        if "a" in data and "b" in data and "a_wins" in data:
-            seen.add(path)
-            record(visits, data["a"], data["b"], int(data["a_wins"]),
-                   int(data.get("draws", 0)), int(data["b_wins"]), source=key)
-            ledger.add(key)
-            continue
-        if "names" not in data or "pairs" not in data:
-            continue
-        seen.add(path)
-        # gen_NNN only means something inside its own run.
-        run_dir = None
-        for parent in path.parents:
-            if (parent / "manifest.json").exists():
-                run_dir = parent
-                break
-        mapping = gen_map(run_dir) if run_dir else {}
-        for entry in data["pairs"]:
-            a = canonical(entry[0])
-            b = canonical(entry[1])
-            a = mapping.get(a, a)
-            b = mapping.get(b, b)
-            record(visits, a, b, int(entry[2]), int(entry[3]), int(entry[4]), source=key)
-        ledger.add(key)
+        key = path.relative_to(REPO).as_posix() if path.is_relative_to(REPO) else str(path)
+        source = {"ruleset": ruleset, "komi": komi, "visits": visits, "pairs": rows}
+        if "seed" in report:
+            source["seed"] = report["seed"]
+        if source != sources.get(key):
+            sources[key] = source
+            imported[visits] = imported.get(visits, 0) + sum(
+                sum(row[2:]) for row in rows if row[0] in known and row[1] in known)
 
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    ledger_path.write_text(json.dumps(sorted(ledger), indent=0) + "\n", encoding="utf-8")
+    # CSVs are derived from the source ledger. After an interruption, rerunning
+    # the import recreates the same counts instead of incrementing them twice.
+    atomic_write(ledger_path, json.dumps(sources, ensure_ascii=False, indent=2) + "\n")
+    tables = {scope: {} for scope in scopes}
+    conflicts = []
+    skipped_unknown = 0
+    for key, source in sorted(sources.items()):
+        config = match_config(source)
+        cells = tables.setdefault(config, {})
+        for a, b, wins, draws, losses in source["pairs"]:
+            if a not in known or b not in known:
+                skipped_unknown += 1
+                continue
+            add(cells, a, b, wins, draws, losses, key, config, conflicts)
+    for (ruleset, komi, visits), cells in tables.items():
+        write_table(board_directory(out_dir, ruleset, komi) / f"matches_{visits}.csv", cells)
 
-    if CONFLICTS:
-        log = out_dir / "conflicts.txt"
-        log.write_text("\n".join(CONFLICTS) + "\n", encoding="utf-8")
-        print(f"{len(CONFLICTS)} conflicting cell(s) -> {log}", flush=True)
-        for line in CONFLICTS[:5]:
-            print("  " + line, flush=True)
-
-    if skipped:
-        print(f"skipped {skipped} pair(s) naming a model that is not in the repo",
-              flush=True)
+    atomic_write(out_dir / "scoped_conflicts.txt", "\n".join(conflicts) + "\n" if conflicts else "")
+    if conflicts:
+        print(f"{len(conflicts)} conflicting cells -> {out_dir / 'scoped_conflicts.txt'}")
+    if skipped_untagged:
+        print(f"skipped {skipped_untagged} reports with missing or incompatible settings")
+    if skipped_unknown:
+        print(f"skipped {skipped_unknown} pairs with an unknown model")
     if imported:
-        print("filled — " + ", ".join(f"{visits}: {games} games"
-                                     for visits, games in sorted(imported.items())),
-              flush=True)
+        print("observed " + ", ".join(f"{visits}: {games} games from changed sources"
+                                      for visits, games in sorted(imported.items())))
     return imported
 
 

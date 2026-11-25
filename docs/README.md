@@ -26,8 +26,8 @@
 | 文档 | 内容 |
 |---|---|
 | [plans/SERVER_PLAN.zh-CN.md](plans/SERVER_PLAN.zh-CN.md) | 服务器预案：预算模型、visits 取值、质量闸门 |
-| [plans/NEXT_STEPS.zh-CN.md](plans/NEXT_STEPS.zh-CN.md) | 下一步方向（按影响排序） |
-| [reports/RUN_20261125C.zh-CN.md](reports/RUN_20261125C.zh-CN.md) | 八小时 9 代：规模、逐代竞技场、64 visits 绝对 ELO（+251）、三个观察 |
+| [plans/NEXT_STEPS.zh-CN.md](plans/NEXT_STEPS.zh-CN.md) | 当前棋力提升计划、固定参照、停滞诊断 |
+| [reports/RUN_20261125C.zh-CN.md](reports/RUN_20261125C.zh-CN.md) | 八小时 9 代：规模、逐代竞技场、64 visits 同表增量 +140 Elo、三个观察 |
 | [TRAINING_SERVER.zh-CN.md](TRAINING_SERVER.zh-CN.md) | 服务器部署与运维 |
 | [reports/](reports/) | 历次运行报告（srv1、one-hour、b10c128、v3fix、诊断、ELO 报表）+ 当次模型 |
 

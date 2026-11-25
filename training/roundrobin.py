@@ -25,6 +25,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from evalconfig import KOMI_BY_RULESET
+
 
 def model_list(directory: Path, include: str, skip: str) -> list[Path]:
     skipped = [name for name in skip.split(",") if name.strip()]
@@ -53,7 +55,10 @@ def play_pair(binary: Path, a: Path | str, b: Path | str, args, out: Path) -> di
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         return {"a": a_name, "b": b_name, "error": proc.stderr.strip()[-500:]}
-    stat = json.loads(target.read_text())
+    stat = json.loads(target.read_text(encoding="utf-8"))
+    if "ruleset" not in stat:  # older GPU binary; the command above fixes these settings
+        stat.update(ruleset=args.ruleset, komi=args.komi, visits_b=args.visits, seed=args.seed)
+        target.write_text(json.dumps(stat) + "\n", encoding="utf-8")
     # `a_wins` counts wins for side A; the cell is from the row model's view.
     return {
         "a": a_name,
@@ -97,7 +102,7 @@ def main() -> int:
     ap.add_argument("--include", default="", help="only model names containing this")
     ap.add_argument("--skip", default="", help="comma separated model names to leave out")
     ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass")
-    ap.add_argument("--komi", default="1.26")
+    ap.add_argument("--komi", type=float)
     ap.add_argument("--visits", type=int, required=True)
     ap.add_argument("--games", type=int, default=20)
     ap.add_argument("--batch-games", type=int, default=32)
@@ -116,6 +121,8 @@ def main() -> int:
                     help="file with one model name per line, weakest first: play only the "
                          "adjacent pairs instead of the full round robin")
     args = ap.parse_args()
+    if args.komi is None:
+        args.komi = KOMI_BY_RULESET[args.ruleset]
 
     models = model_list(args.models, args.include, args.skip)
     args.out.mkdir(parents=True, exist_ok=True)

@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from evalconfig import EVAL_VISITS  # noqa: E402
+from evalconfig import EVAL_VISITS, KOMI_BY_RULESET  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]  # repo root (training/..)
 PY = sys.executable
@@ -55,7 +55,7 @@ def main(argv=None):
     ap.add_argument("--labels", nargs="*", default=[],
                     help="labels for --models; default is the file stem")
     ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass")
-    ap.add_argument("--komi", type=float, default=0.0)
+    ap.add_argument("--komi", type=float)
     ap.add_argument("--visits", type=int, default=EVAL_VISITS,
                     help="fixed budget per move, identical for every player")
     ap.add_argument("--lines-visits", type=int, default=EVAL_VISITS,
@@ -75,6 +75,8 @@ def main(argv=None):
     ap.add_argument("--gpu-binary", default=str(REPO / "build" / "shuyi_selfplay_gpu"))
     ap.add_argument("--out-dir", default=None)
     args = ap.parse_args(argv)
+    if args.komi is None:
+        args.komi = KOMI_BY_RULESET[args.ruleset]
 
     models = [Path(m) for m in args.models]
     for model in models:
@@ -144,13 +146,14 @@ def main(argv=None):
         spec = importlib.util.spec_from_file_location("elo", str(REPO / "training" / "elo.py"))
         elo = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(elo)
-        names, pairs, visits = elo.merge_reports([str(r) for r in reports])
+        names, pairs, (ruleset, komi, visits) = elo.merge_reports(reports)
         merged.write_text(json.dumps({
             "names": names,
             "pairs": [list(p) for p in pairs],
             "visits": visits,
-            "komi": args.komi,
-            "ruleset": args.ruleset,
+            "komi": komi,
+            "ruleset": ruleset,
+            "source_reports": [r.name for r in reports],
         }, indent=2), encoding="utf-8")
     else:
         text = run([PY, REPO / "training" / "elo.py", "--report", reports[0],

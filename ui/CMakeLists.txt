@@ -45,7 +45,7 @@ else()
     target_compile_options(shuyi PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 if(MINGW)
-    target_link_options(shuyi PRIVATE -municode -static-libgcc -static-libstdc++)
+    target_link_options(shuyi PRIVATE -municode -static)
 elseif(MSVC)
     target_link_options(shuyi PRIVATE /ENTRY:wWinMainCRTStartup)
 endif()
@@ -79,14 +79,16 @@ add_test(NAME shuyi_ui_view COMMAND shuyi_ui_tests)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
-    # Both tests only need the window binary: they check that the window starts,
-    # and that it hands the engine choice through to the child process.
+    # UI tests use the standalone binary, without linking the engine.
     add_test(NAME shuyi_ui_menu
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_menu_smoke.py
                 $<TARGET_FILE:shuyi>)
     add_test(NAME shuyi_engine_choice
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/engine_choice_smoke.py
                 $<TARGET_FILE:shuyi>)
-    set_tests_properties(shuyi_ui_menu shuyi_engine_choice PROPERTIES
+    add_test(NAME shuyi_ui_a_value
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/a_value_smoke.py
+                $<TARGET_FILE:shuyi>)
+    set_tests_properties(shuyi_ui_menu shuyi_engine_choice shuyi_ui_a_value PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()

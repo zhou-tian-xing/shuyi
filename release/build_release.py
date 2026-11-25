@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """One command: build both products, run the tests, stage the package.
 
-The package is the two binaries plus the documents, and **no network**: weights
-are data, they change far more often than the binaries, and a model file is the
-one thing a user is expected to download.  `--model` ships one anyway.
+The package contains the CPU UI and engine, documentation, and optionally
+an additional CUDA engine and a model file.
 
     python release/build_release.py                     # CPU build, no model
     python release/build_release.py --cuda-build build-cuda
@@ -17,7 +16,6 @@ What it refuses to do:
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -34,28 +32,30 @@ def run(cmd, cwd=None):
 
 def configure_and_build(build_dir: Path, cuda: bool, tools: bool) -> None:
     cache = build_dir / "CMakeCache.txt"
-    if not cache.exists():
-        cmd = ["cmake", "-S", str(REPO), "-B", str(build_dir),
+    if not cache.exists() or not cuda:
+        source = REPO
+        if cache.exists():
+            for line in cache.read_text(encoding="utf-8").splitlines():
+                if line.startswith("CMAKE_HOME_DIRECTORY:INTERNAL="):
+                    source = Path(line.partition("=")[2])
+                    break
+        cmd = ["cmake", "-S", str(source), "-B", str(build_dir),
                "-DCMAKE_BUILD_TYPE=Release"]
-        if cuda:
-            cmd.append("-DSHUYI_CUDA=ON")
+        cmd.append(f"-DSHUYI_CUDA={'ON' if cuda else 'OFF'}")
+        if sys.platform == "win32" and not cuda:
+            cmd.append("-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>")
         if tools:
             cmd.append("-DSHUYI_BUILD_TOOLS=ON")
         run(cmd)
     run(["cmake", "--build", str(build_dir), "--config", "Release"])
 
 
-def binary_optional(build_dir: Path, name: str) -> Path | None:
-    for candidate in (build_dir / f"{name}.exe", build_dir / name):
-        if candidate.exists():
-            return candidate
-    return None
-
-
 def binary(build_dir: Path, name: str) -> Path:
-    for candidate in (build_dir / f"{name}.exe", build_dir / name):
-        if candidate.exists():
-            return candidate
+    for directory in (build_dir / "Release", build_dir):
+        for filename in (f"{name}.exe", name):
+            candidate = directory / filename
+            if candidate.exists():
+                return candidate
     raise SystemExit(f"missing {name} in {build_dir} (build failed?)")
 
 
@@ -79,9 +79,10 @@ def main(argv=None):
     build = (REPO / args.build).resolve() if not Path(args.build).is_absolute() else Path(args.build)
     cuda_build = None
     if args.cuda_build:
-        cuda_build = (REPO / args.cuda_build).resolve() \
-            if not Path(args.cuda_build).is_absolute() else Path(args.cuda_build)
-        if not cuda_build.exists():
+        cuda_build = REPO / args.cuda_build
+        if cuda_build.resolve() == build.resolve():
+            parser.error("--build and --cuda-build require distinct build directories")
+        if not cuda_build.exists() and (not args.build_cuda or args.skip_build):
             raise SystemExit(f"--cuda-build does not exist: {cuda_build}")
 
     if not args.skip_build:
@@ -90,23 +91,15 @@ def main(argv=None):
             configure_and_build(cuda_build, cuda=True, tools=True)
 
     if not args.skip_tests:
-        run(["ctest", "--test-dir", str(build), "--output-on-failure"])
+        for test_build in filter(None, (build, cuda_build)):
+            run(["ctest", "--test-dir", str(test_build), "-C", "Release", "--output-on-failure"])
 
-    # The shipped engine is the CUDA one when it was built: same code, faster
-    # forward, and the package is what a player runs.
-    engine_source = cuda_build if cuda_build is not None else build
-    engine = binary(engine_source, "shuyi_engine")
-    # One toolchain per package: the CUDA tree builds the UI too on Windows, and a
-    # UI from the same compiler as the engine means one runtime, not two.
-    ui_source = build
-    if cuda_build is not None and binary_optional(cuda_build, "shuyi"):
-        ui_source = cuda_build
-    ui = binary(ui_source, "shuyi")
-    if not engine.exists() or not ui.exists():
-        raise SystemExit("both products are required")
-
+    engine = binary(build, "shuyi_engine")
+    ui = binary(build, "shuyi")
     stage_cmd = [sys.executable, str(REPO / "release" / "make_alpha.py"),
                  "--engine", str(engine), "--ui", str(ui), "--out", str(args.out)]
+    if cuda_build:
+        stage_cmd += ["--cuda-engine", str(binary(cuda_build, "shuyi_engine"))]
     if args.model:
         stage_cmd += ["--model", str(args.model)]
     run(stage_cmd)

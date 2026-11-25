@@ -21,26 +21,16 @@
 
 ## 1. 两条硬性原则（用户定，不要违背）
 
-### 1.1 连续 10 代最高 ELO 没有提升 → 换更大的模型
+### 1.1 顺序训练，持续停滞时检查训练方法、数据和模型
 
-单代噪声很大（160 局 arena 的 σ≈4%，200 局 head-to-head 的 σ≈3.5%），
-所以"这代没涨"不能作为换模型的理由；但**连续 10 代**最高 ELO 都没超过历史最高
-（超过阈值为 `--plateau-margin`，默认 +20 Elo），说明瓶颈在容量或数据分辨率，
-而不是运气。
-
-实现：`training/pipeline.py` 的 `--plateau-generations 10 --plateau-margin 20`，
-触发后按 `--capacity-ladder "b4c32,b6c48,b6c64,b8c96"` 升一档，
-manifest 里记 `capacity_history`。宽度变了不能热启动，所以升级是**开新 run、用已有数据冷启动**。
-
-实测参考（srv1，2 小时 09 分，7 代）：gen2 之后 gen3..gen6 的 ELO 全部重叠在 +320…+375，
-也就是**第 2 代之后就是平台**——按这条原则，那种情况该考虑换更大的模型，而不是继续刷代数。
+每代用上一代生成新数据并更新同一条训练链，竞技场只观测结果。`run_session.sh` 默认用起点模型和固定开局做 100 局/代，可通过 `ARENA_REFERENCE` 指定另一个参照。相同参照与配置下，连续 10 次评测没有超过上次记录的新高 20 Elo，manifest 会写 `plateau_review`。阈值可用 `--plateau-generations` 和 `--plateau-margin` 调整。增长不明显时的实验顺序见[棋力提升计划](../docs/plans/NEXT_STEPS.zh-CN.md)。
 
 ### 1.2 ELO 永远以"随机落子 = 0"为基准，高胜率用相对 ELO 表达
 
 评分不是"赢了上一代多少"，也不是 `val_loss`，而是同一池子里的 Elo 标定：
 
 - `random`（均匀随机）**固定为 0**，不参与拟合；其他模型的分 = 相对随机落子的 Elo。
-- 这样跨 run、跨模型大小、跨规则都能比较（只要锚点相同）。
+- 比较不同 run 和架构时，保持规则、A 值、visits 和评测参照一致。
 - 接近 100% 胜率时不要写"100%"，写**相对 ELO 与下界**（如 `≥ +900`）：
   全胜样本没有失败可重采样，bootstrap 区间会退化，此时只有下界是诚实的。
 - 实现：`training/elo.py --anchor random`；`training/arena.py` 自动加入 random 锚点。
@@ -99,14 +89,14 @@ RUN_NAME=b6c96-nopass-20261125a bash training/run_session.sh
 | 定规模 | `training/budget.py`：目标步数 = 10,000 × (M/1.03)，训练量按回放窗口 ×1.8 计，再算「几代 × 每代几局 × 几个 epoch」，写进 `plan.json` |
 | 跑 | `pipeline.py ... --max-hours H`：只**在代与代之间**停，剩的时间不够下一代的 1.15 倍就收尾，manifest 里记 `stopped_early` |
 
-`budget.py` 的算术有单测（`training/tests/test_budget.py`，进 ctest）：一代少于 800 局直接
+`budget.py` 的算术有单测（`training/tests/test_budget.py`，进 ctest）：一代达不到计划的最低局数（默认 2,000 局）直接
 报错，不会悄悄缩成"跑着像训练、其实是噪声"的小代。
 
 ---
 
 ## 3.5 排行榜：`training/leaderboard.py`
 
-数据就是一张二维 CSV，`runs/leaderboard/matches_<visits>.csv`：
+每种评测配置生成一张二维 CSV，`runs/leaderboard/<规则>/komi_<A>/matches_<visits>.csv`：
 
 ```
 model,random,b4c32-s5960-d80938,b6c96-s13520-d183077
@@ -114,12 +104,11 @@ random,—,0-0-120,0-0-120
 b4c32-s5960-d80938,120-0-0,—,87-0-33
 ```
 
-格子是行方对列方的 `胜-和-负`，空格 = 没打过，对角线 `—`。想改结果就直接改这个
-文件（改一个三角就够，另一半空着会自动镜像；两边矛盾会警告）。程序**只读表算分**，
-不自己收集对局：
+格子是行方对列方的 `胜-和-负`，空格表示没打过。修改对局来源后重新导入即可刷新。
 
 ```bash
-python training/leaderboard.py                 # 读所有 matches_*.csv，输出排行榜
+python training/leaderboard.py                 # 默认 nopass，A=+0.5
+python training/leaderboard.py --legacy        # 查看历史表
 python training/leaderboard.py --visits 128    # 只看一个预算
 python training/leaderboard.py --anchor b4c32-s5960-d80938   # 换锚（没有 random 时）
 python training/leaderboard.py --all           # 连只有引擎种类的表也显示
@@ -136,7 +125,7 @@ python training/leaderboard.py --all           # 连只有引擎种类的表也�
 python training/roundrobin.py --visits 128 --games 20 --out runs/eval/v128
 # 2) 拉回本地
 python training/pull.py --remote /root/eval/v128 --local runs/eval/v128
-# 3) 填表（已经数过的文件记在 imported_sources.json，重复跑不会重复加）
+# 3) 按规则、A 值和预算填表
 python training/leaderboard_import.py
 # 4) 算分
 python training/leaderboard.py --anchor b4c32-s5960-d80938
@@ -156,12 +145,7 @@ python training/leaderboard.py --anchor b4c32-s5960-d80938
 40 局全胜只能读出下界（40-0 的 95% 下界约 +508），`leaderboard.py` 会把整张表按这个
 下界平移，并在表头写明"这是保守下界"；某一档真的输过几局时，那就是点估计。
 
-**表是追加的**：每个来源文件在 `imported_sources.json` 里记一次，重跑不会加两遍，新
-对局往上加，旧对局不会被覆盖。来源之间打架时（同一对一次 80% 赢、另一次 80% 输）
-照样累计，同时写进 `runs/leaderboard/conflicts.txt` 并把前几条打印出来——不静默丢。
-
-`--compare` 那一节并排列出同一模型在各预算下的分数。**看变化只看这个**：算力变大时
-同一模型的绝对分只应该涨或不动。
+导入器把来源和对应结果记在 `runs/leaderboard/scoped_sources.json`。重复导入同一路径只计一次，原处更新结果会替换记录。两侧预算不一致的报告不能写入 Elo 榜。缺少完整评测配置的历史数据继续保留在原榜下。
 
 **同权重、不同预算**（判断"多给算力值不值"最干净的办法，不需要锚）：`--visits-b`
 让两侧用不同的访问数，权重完全相同：

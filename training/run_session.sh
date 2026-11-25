@@ -30,6 +30,7 @@ LR="${LR:-2e-4}"
 REPLAY_GENS="${REPLAY_GENS:-2}"
 SCORE_WEIGHT="${SCORE_WEIGHT:-0.5}"
 ARENA_GAMES="${ARENA_GAMES:-100}"
+ARENA_REFERENCE="${ARENA_REFERENCE:-$MODEL}"
 # The probe must use the batch the run uses: probing at 8 measured 0.25 games/s
 # where the run actually does 0.45, which sizes the whole session for a box half
 # as fast as the one that is running.
@@ -143,7 +144,8 @@ exec "$PYTHON" "$REPO/training/pipeline.py" \
     --score-weight "$SCORE_WEIGHT" \
     --replay-gens "$REPLAY_GENS" \
     --lr "$LR" --epochs "$EPOCHS" \
-    --arena-games "$ARENA_GAMES" \
+    --arena-games "$ARENA_GAMES" --arena-reference "$ARENA_REFERENCE" \
+    --seed "$SEED" \
     --oneply-gens 0 \
     --elo-every 0 \
     --max-hours "$RACE_HOURS" \

@@ -44,6 +44,7 @@ constexpr int ID_A_MINUS = 3002;
 constexpr int ID_A_ZERO = 3003;
 constexpr int ID_A_ONE = 3004;
 constexpr int ID_A_TWO = 3005;
+constexpr int ID_A_DEFAULT = 3006;
 
 constexpr int ID_RULES = 4001;
 constexpr int ID_ABOUT = 4002;
@@ -107,9 +108,15 @@ std::wstring g_enginePathUsed;  // what the running process actually is
 bool g_engineAuto = true;       // no explicit path: fall back to discovery
 HINSTANCE g_instance = nullptr;
 Position g_position;
-// nopass 的标定值是 +0.5（A* = 0.28~0.55，见 docs/RULES.zh-CN.md §4.4）：
-// 半整数、不会和棋。INI 里的 a_value 会覆盖它。
-double g_aValue = 0.5;
+constexpr double kDefaultAValue = 0.5;
+constexpr double kAValueStep = 0.5;
+double g_aValue = kDefaultAValue;
+
+double normalizeAValue(double value) {
+    const double bounded = std::clamp(value, -40.0, 40.0);
+    const double rounded = std::round(bounded / kAValueStep) * kAValueStep;
+    return rounded == 0.0 ? 0.0 : rounded;
+}
 int g_selected = 1;
 int g_hoverCell = -1;
 bool g_thinking = false;
@@ -971,7 +978,13 @@ void loadSettings() {
             } else if (line.rfind("play_visits=", 0) == 0) {
                 g_playVisits = std::clamp(std::atoi(line.substr(12).c_str()), 1, 50000000);
             } else if (line.rfind("a_value=", 0) == 0) {
-                g_aValue = std::clamp(std::atof(line.substr(8).c_str()), -40.0, 40.0);
+                const std::string configured = trimAscii(line.substr(8));
+                const char* start = configured.c_str();
+                char* end = nullptr;
+                const double value = std::strtod(start, &end);
+                if (end != start && *end == '\0' && std::isfinite(value)) {
+                    g_aValue = normalizeAValue(value);
+                }
             } else if (line.rfind("ruleset=", 0) == 0) {
                 Ruleset parsed = g_ruleset;
                 if (parseRuleset(trimAscii(line.substr(8)), parsed)) g_ruleset = parsed;
@@ -1160,27 +1173,24 @@ void closeSettings(bool apply) {
             if (end == buffer) return fallback;
             return static_cast<int>(std::clamp<long>(value, low, high));
         };
-        // A is a real number now: 1.5 is the shipped value because a half-integer
-        // cannot draw (raw + 1.5 is never 0), while the rounded 1 turns every
-        // P = -1 position into a draw.
         const auto readA = [&](HWND edit, double fallback) {
             if (!edit) return fallback;
             GetWindowTextW(edit, buffer, 32);
             wchar_t* end = nullptr;
             const double value = std::wcstod(buffer, &end);
-            if (end == buffer || !std::isfinite(value)) return fallback;
-            return std::clamp(value, -40.0, 40.0);
+            if (end == buffer || *end != L'\0' || !std::isfinite(value)) return fallback;
+            return normalizeAValue(value);
         };
         const int analysis = readInt(g_settingsAnalysisEdit, g_analysisVisits, 0, 50000000);
         const int play = readInt(g_settingsPlayEdit, g_playVisits, 1, 50000000);
         const double aValue = readA(g_settingsAValueEdit, g_aValue);
         g_analysisVisits = analysis;
         g_playVisits = play;
-        saveSettings();
         if (g_engineClient.running()) {
             sendEngine("set_visits " + std::to_string(g_analysisVisits));
         }
         if (aValue != g_aValue) setAValue(aValue);
+        else saveSettings();
         g_engineMessage = L"设置已保存（分析 " + std::to_wstring(g_analysisVisits) + L" / 落子 " +
                           std::to_wstring(g_playVisits) + L" 访问）";
     }
@@ -1261,7 +1271,7 @@ void openSettings() {
     label(L"落子访问上限", top);
     g_settingsPlayEdit = edit(top, g_playVisits);
     top += rowHeight;
-    label(L"A值（目数，可为负）", top);
+    label(L"A值（步长 0.5）", top);
     g_settingsAValueEdit = editText(top, formatAValueW(g_aValue));
     top += rowHeight + scale(6);
     label(L"空格：开始 / 停止 / 超限后继续搜索", top);
@@ -2241,7 +2251,10 @@ void setMode(Mode mode) {
 }
 
 void setAValue(double value) {
-    g_aValue = value;
+    const double adjusted = normalizeAValue(value);
+    if (adjusted == g_aValue) return;
+    g_aValue = adjusted;
+    saveSettings();
     if (g_engineChoice != EngineChoice::Off && g_engineReady) {
         sendEngine("set_a " + formatAValue(g_aValue));
         syncEnginePosition();
@@ -2334,11 +2347,11 @@ void handleClick(POINT point) {
         return;
     }
     if (contains(panel.aMinus, point)) {
-        setAValue(g_aValue - 1);
+        setAValue(g_aValue - kAValueStep);
         return;
     }
     if (contains(panel.aPlus, point)) {
-        setAValue(g_aValue + 1);
+        setAValue(g_aValue + kAValueStep);
         return;
     }
     if (contains(panel.mode, point)) {
@@ -2459,11 +2472,12 @@ void createMenuBar(HWND hwnd) {
     AppendMenuW(engine, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(engine, MF_STRING, ID_SETTINGS, L"设置（搜索量 / A值）…");
 
-    AppendMenuW(aValue, MF_STRING, ID_A_PLUS, L"A值 +1\t]");
-    AppendMenuW(aValue, MF_STRING, ID_A_MINUS, L"A值 −1\t[");
+    AppendMenuW(aValue, MF_STRING, ID_A_PLUS, L"A值 +0.5\t]");
+    AppendMenuW(aValue, MF_STRING, ID_A_MINUS, L"A值 −0.5\t[");
     AppendMenuW(aValue, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(aValue, MF_STRING, ID_A_ZERO, L"设为 0");
-    AppendMenuW(aValue, MF_STRING, ID_A_ONE, L"设为 +1（当前规则）");
+    AppendMenuW(aValue, MF_STRING, ID_A_DEFAULT, L"设为 +0.5（默认）");
+    AppendMenuW(aValue, MF_STRING, ID_A_ONE, L"设为 +1");
     AppendMenuW(aValue, MF_STRING, ID_A_TWO, L"设为 +2");
 
     AppendMenuW(help, MF_STRING, ID_RULES, L"规则说明");
@@ -2500,7 +2514,7 @@ void showRules() {
         L"· “附近”指曼哈顿距离 ≤1 的格子，包含该格自身；棋盘边界不回绕。\n"
         L"· 没有某种颜色的棋子时，该颜色部分按 0 计。\n"
         L"· 局面分 = 81 个格子分之和 + A值。\n"
-        L"· 局面分 >0 红胜，<0 黑胜，=0 平局。当前 A值 = +1。\n\n"
+        L"· 局面分 >0 红胜，<0 黑胜，=0 平局。默认 A值 = +0.5。\n\n"
         L"操作：数字键 1–9 选择数字；点击棋盘落子；F2 新局；Ctrl+Z 悔棋；\n"
         L"A值菜单或 [ / ] 可调节 A值。";
     MessageBoxW(g_hwnd, text, L"数弈规则", MB_OK | MB_ICONINFORMATION);
@@ -2511,7 +2525,7 @@ void showAbout() {
         L"数弈 1.0\n\n"
         L"一个 9×9 的数字落子棋，原生 Win32/GDI 界面，非 Web 实现。\n"
         L"C++17 引擎进程：剪枝、MCTS、MCTS+NN；GTP-like 异步协议。\n\n"
-        L"当前规则版本：A值 = +1。\n"
+        L"无过手规则默认 A值 = +0.5。\n"
         L"ELO 与 A值分析见 docs/。";
     MessageBoxW(g_hwnd, text, L"关于数弈", MB_OK | MB_ICONINFORMATION);
 }
@@ -2613,11 +2627,11 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
         if (wParam == VK_OEM_4) {
-            setAValue(g_aValue - 1);
+            setAValue(g_aValue - kAValueStep);
             return 0;
         }
         if (wParam == VK_OEM_6) {
-            setAValue(g_aValue + 1);
+            setAValue(g_aValue + kAValueStep);
             return 0;
         }
         return 0;
@@ -2670,9 +2684,10 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             refresh();
             return 0;
         }
-        case ID_A_PLUS: setAValue(g_aValue + 1); return 0;
-        case ID_A_MINUS: setAValue(g_aValue - 1); return 0;
+        case ID_A_PLUS: setAValue(g_aValue + kAValueStep); return 0;
+        case ID_A_MINUS: setAValue(g_aValue - kAValueStep); return 0;
         case ID_A_ZERO: setAValue(0); return 0;
+        case ID_A_DEFAULT: setAValue(kDefaultAValue); return 0;
         case ID_A_ONE: setAValue(1); return 0;
         case ID_A_TWO: setAValue(2); return 0;
         case ID_RULES: showRules(); return 0;

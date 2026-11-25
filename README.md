@@ -36,12 +36,12 @@
 
 | 项目 | 状态 |
 |---|---|
-| 规则 | 三套并行：`classic` 现行、`blocking` 阻挡、**`nopass` 无过手（默认）**。规则是运行时参数，数据、模型、界面全部隔离 |
+| 规则 | 三套并行：`classic` 现行、`blocking` 阻挡、**`nopass` 无过手（默认）**。规则是运行时参数。阻挡权重可兼容无过手规则 |
 | 引擎 | 四种搜索：`random` / `pruning`（α-β）/ `mcts` / `mcts_nn`；`shuyi_engine` 是持久化行协议进程，分析按毫秒间隔流式推送 |
 | 主力模型 | **b6c96**（96 通道 × 6 残差块，1.03 M 参数，输入 37 平面 + 24 全局量，带分数头），nopass |
-| 最强一版 | `b6c96-s87696-d937553`：128 visits 下 **+1804**（95% 区间 [+1745, +1879]），64 visits 下 +1718 |
-| 仓库内模型 | 只有 `b4c32-s34760`（v3）与 `b4c32-s42012`（v4），都是阻挡规则训的；b6c96 那条链在 `runs/training/` 里，需要从服务器拉回 |
-| 评测 | 预算按 **visits**，`training/evalconfig.py` 的 `EVAL_VISITS = 512` 是唯一定义；排行榜按 64/128/256/512 分开算，**从不混算** |
+| 最新权重 | `b6c96-s179866-d1959110`：64 visits 榜内 +1758，同表比八小时训练起点高约 +140 Elo |
+| 仓库内模型 | `b4c32-s34760`（v3）与 `b4c32-s42012`（v4）是随包权重。b6c96 权重位于训练产物 `runs/training/` |
+| 评测 | 默认预算 512 visits。新结果按规则、A 值和 visits 分表；已有榜单可用 `--legacy` 查看 |
 | A值 | 是运行时参数：nopass **+0.5**、阻挡 +1.26、现行 −0.5（标定方法见 [`docs/A_VALUE_ANALYSIS.zh-CN.md`](docs/A_VALUE_ANALYSIS.zh-CN.md)） |
 
 ## 快速开始
@@ -50,7 +50,7 @@
 # 开发者一把梭：core + 引擎 + 界面（Windows）+ 测试；工具默认不编
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j 8
-ctest --test-dir build --output-on-failure          # Windows 上 11 个；Linux 构建不含界面测试
+ctest --test-dir build --output-on-failure          # Linux 构建不含界面测试
 
 # 开界面（Windows）：同目录有 shuyi_engine.exe 就会自动加载，空格开始/停止分析
 build/shuyi.exe
@@ -62,7 +62,7 @@ printf 'ruleset nopass\nset_model models/b4c32-s42012-d595499.bin\nset_engine mc
 CUDA 引擎：`cmake -S . -B build-cuda -DSHUYI_CUDA=ON -DCUDAToolkit_ROOT=<cuda>`。
 Windows 上 nvcc 不接受中文路径，仓库里用 junction 绕开：`cmake -S C:/shuyi_src -B C:/shuyi_cuda_build ...`。
 
-打包（跑测试 → 两个二进制 + 文档 + 可选模型 → `dist/`）：
+打包（默认 CPU 引擎，CUDA 引擎和权重可选，解包自检后写入 `dist/`）：
 
 ```bash
 python release/build_release.py --cuda-build build-cuda \
@@ -87,31 +87,19 @@ python release/build_release.py --cuda-build build-cuda \
 
 ## 强度与评测
 
-`training/leaderboard.py` 从 `runs/leaderboard/matches_<visits>.csv` 拟合并给出区间，
-**random 锚定 0**，95% 区间是 200 次 bootstrap：
+11 月 25 日的八小时训练完成 9 代，每代 2,183 局。64 visits 历史榜以 `random = 0` 为参照，八小时末代 `b6c96-s179866-d1959110` 是 **+1758** [+1679, +1854]，起点 `b6c96-s87696-d937553` 为 +1618，同表拟合增量约 **+140 Elo**。128 visits 的旧榜尚未收录新末代。不同样本池的绝对分会漂移。
 
-| 参赛者 | 128 visits | 64 visits |
-|---|---:|---:|
-| `b6c96-s87696-d937553` | **+1804** [+1745, +1879] | **+1718** [+1671, +1776] |
-| `b6c96-s76464-d824361` | +1763 [+1712, +1825] | +1672 [+1626, +1728] |
-| `b4c32-s42012-d595499` | +1606 [+1561, +1647] | +1504 [+1467, +1538] |
-| `random` | 0 | 0 |
-
-读法：b6c96 这条链从 2026-11-24 起跑，25 日那十小时又加了 6 代（`s31536` → `s87696`），
-每代对上一代 54–60%；128 visits 下顶层与底层差 1,800 分。相对池子来说，b4c32 的 v4
-（`b4c32-s42012`，仓库里带的那一版）仍在 1,600 附近，b6c96 已经把它甩开两百。
-按预算分表的完整数据在 `runs/leaderboard/leaderboard.md`（本地产物，不入库）与
-[`docs/ELO_METHODOLOGY.zh-CN.md`](docs/ELO_METHODOLOGY.zh-CN.md)。
+原始结果与解释见[九代训练报告](docs/reports/RUN_20261125C.zh-CN.md)。新榜使用 `training/leaderboard.py`，默认查看 `nopass`、A=+0.5，可用 `--ruleset` 和 `--komi` 选择评测配置。评测口径见[Elo 方法](docs/ELO_METHODOLOGY.zh-CN.md)。
 
 ## 训练怎么跑
 
 ```bash
 # 一条命令：探测这台卡的速率 → 按窗口定代数/局数/步数 → 逐代自对弈、过闸门、训练、竞技场
-HOURS=8 MODEL=models/b6c96-s87696-d937553.bin RUN_NAME=b6c96-nopass-20261126a \
-    bash training/run_session.sh
+MODEL=runs/training/b6c96-nopass-20261125c/models/b6c96-s179866-d1959110.bin
+HOURS=8 MODEL="$MODEL" RUN_NAME=b6c96-nopass-20261126a bash training/run_session.sh
 ```
 
-规则写在代码里（[`training/budget.py`](training/budget.py)），不靠记忆：
+续训见[棋力提升计划](docs/plans/NEXT_STEPS.zh-CN.md)。训练预算规则写在代码里（[`training/budget.py`](training/budget.py)），不靠记忆：
 
 - **每代局数 2,000–4,000，窗口尽量多分代**——代数才是学习发生的单位；不足 2,000 局就报错，不缩水；
 - 每代目标梯度步数随参数放大：`10,000 × (M / 1.03)`；训练集按回放窗口 2 代 ×1.8 计时间；
@@ -138,9 +126,7 @@ HOURS=8 MODEL=models/b6c96-s87696-d937553.bin RUN_NAME=b6c96-nopass-20261126a \
 
 ## 已知限制（按影响排序）
 
-1. **数据量仍是初期**：b6c96 这条链累计约 94 万局面（`d937553`），八小时一轮再追加约 100 万。
-   对 100 万参数的网来说这还只是一个开头，模型容量已经不是瓶颈（b6c96 与 KataGo 最小档同量级），
-   数据是。
+1. **数据量仍是初期**：b6c96 这条链已累计约 196 万局面。延长顺序训练可检验棋力是否继续增长，停滞时按计划分别诊断训练方法、数据量和容量。
 2. **强模型不在仓库里**：`models/` 只有 b4c32 那两个（外加两个格式夹具）。b6c96 的权重产在
    `runs/training/`，要用就先从服务器拉回（[`training/pull.py`](training/pull.py)）。
 3. **A 的训练分布很窄**：自对弈只在锚点 A 下进行，训练时 35% 样本固定在锚点、65% 抽 ±4；

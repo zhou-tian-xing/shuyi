@@ -37,6 +37,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from elo import bootstrap_ci, fit_elo  # noqa: E402  (同一个拟合，别的表才能比)
 
+from evalconfig import KOMI_BY_RULESET, board_directory
+
 REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "runs" / "leaderboard"
 PSEUDO = ("random", "pruning", "mcts")
@@ -317,6 +319,9 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--visits", default="",
                     help="只看一个预算（默认读 runs/leaderboard/matches_*.csv 全部）")
+    ap.add_argument("--ruleset", choices=KOMI_BY_RULESET)
+    ap.add_argument("--komi", type=float)
+    ap.add_argument("--legacy", action="store_true", help="show historical unscoped tables")
     ap.add_argument("--anchor", default="random",
                     help="把它的分数定为 0（默认 random；没有 random 时可用某个模型）")
     ap.add_argument("--all", action="store_true",
@@ -331,8 +336,18 @@ def main(argv=None):
         from leaderboard_import import import_all
         import_all(OUT)
 
+    if args.legacy and (args.ruleset is not None or args.komi is not None):
+        ap.error("--legacy cannot be combined with --ruleset or --komi")
+    ruleset = args.ruleset or "nopass"
+    komi = KOMI_BY_RULESET[ruleset] if args.komi is None else args.komi
+    scope = board_directory(OUT, ruleset, komi)
+    if args.legacy or (args.ruleset is None and args.komi is None and not scope.exists()):
+        scope = OUT
+    description = "历史榜（原表，评测条件未经复核）" if scope == OUT else f"{ruleset} · A={komi:g}"
+    print(description)
+
     paths = []
-    for path in sorted(OUT.glob("matches_*.csv")):
+    for path in sorted(scope.glob("matches_*.csv")):
         if args.visits and path.stem != f"matches_{args.visits}":
             continue
         order, _results = read_table(path)
@@ -341,11 +356,11 @@ def main(argv=None):
         if args.all or any(name not in PSEUDO for name in order):
             paths.append(path)
     if not paths:
-        print(f"{OUT} 下没有 matches_*.csv：先用 --import-existing 填，或手工建一张表")
+        print(f"{scope} 下没有 matches_*.csv：先用 --import-existing 填，或手工建一张表")
         return 1
 
     lines = ["# 模型排行榜", "",
-             "由 `training/leaderboard.py` 从 `runs/leaderboard/matches_<visits>.csv` 算出。",
+             f"评测条件：{description}。",
              "格子是 `胜-和-负`（从行方看），`·` = 没打过。",
              f"ELO 以 **{args.anchor} = 0** 为锚，95% 区间是 200 次 bootstrap；",
              "不同 visits 从不混算。", ""]
@@ -357,7 +372,7 @@ def main(argv=None):
             print(f"{path.stem.split('_')[1]:>5} visits: " +
                   ", ".join(f"{name} {value:+.0f}" for name, value in top))
     lines += compare(paths, args.anchor)
-    path = OUT / "leaderboard.md"
+    path = scope / "leaderboard.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     print(f"wrote {path}")
 
