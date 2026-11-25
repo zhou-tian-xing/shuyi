@@ -61,6 +61,25 @@ struct EngineOptions {
     // second gate stops at 7.  0 disables the second-chance solve.
     int exactEndgameAfterPlies = 7;
     long long exactEndgameAfterNodes = 2000000;
+    // Adaptive proving of the moves the search likes.  After the visits, the most
+    // visited root moves are solved outright, each with a budget that starts small
+    // and doubles on every pass while it keeps failing, up to proofMaxNodes.  A
+    // solved move is marked proven in the tree, so later visits return there
+    // instead of calling the network again; the ordinary proof machinery lifts it
+    // to the root.  Measured (tools/research/endgame_cost.cpp): one ply of solving
+    // at 7 left costs 0.5-1.8 M nodes, at 8 it is 10 M -- hence the ply cap and the
+    // doubling schedule rather than one big blind spend.
+    int proofTopMoves = 3;
+    // Run a proof pass every this many simulations (0 = only once, when the visit
+    // budget is spent).  Interleaving is what makes the doubling schedule reach a
+    // useful budget inside one analysis: 512 visits buys four passes.
+    int proofEveryVisits = 512;
+    long long proofStartNodes = 100000;
+    long long proofMaxNodes = 2000000;
+    // Hard ceiling on what proving may spend on one tree, across all passes: a
+    // hopeless position must not keep doubling forever.
+    long long proofMaxTotalNodes = 1500000;
+    int proofMaxPlies = 8;
     int aspirationWindow = 24;
     bool usePvs = true;
     // There is deliberately no tree-size cap: a cap silently changed how leaves

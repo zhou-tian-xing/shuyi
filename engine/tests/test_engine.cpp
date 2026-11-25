@@ -316,6 +316,48 @@ void testExactGateStopsAtSeven() {
     CHECK(!(analysis.proven && analysis.visits == 0));
 }
 
+// Adaptive proving: the search spends proof budget on the moves it likes, and a
+// solved move is marked in the tree.  At 8 plies the tree alone never proves
+// anything (the subtree is 50^8), so this is the only way the position gets an
+// exact answer before it becomes 6-7 plies deep.
+void testAdaptiveProof() {
+    Position late;
+    late.setRuleset(Ruleset::NoPass);
+    std::uint64_t seed = 1000;   // same walk as tools/research/proof_payoff.cpp
+    while (kTotalMoves - late.stones() > 8) {
+        const std::vector<Move> moves = late.legalMoves();
+        if (moves.empty()) break;
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        late.play(moves[seed % moves.size()]);
+    }
+    if (kTotalMoves - late.stones() != 8) return;
+
+    EngineOptions options = optionsFor(71);
+    options.proofStartNodes = 100000;
+    options.proofTopMoves = 3;
+    auto engine = makeEngine(EngineKind::Mcts, options);
+    SearchRequest request;
+    request.visits = 1024;
+    const Analysis analysis = engine->search(late, request);
+    CHECK(analysis.valid);
+    CHECK(analysis.proven);
+    CHECK(analysis.hasScore);
+    // Some cell must carry the proof, and its margin must match the solver.
+    int provenCells = 0;
+    for (const CellAnalysis& info : analysis.cells) {
+        if (!info.proven) continue;
+        ++provenCells;
+        Position child = late;
+        child.play(info.move);
+        const EndgameSolution solved = solveEndgame(child, options.aValue, 2000000);
+        CHECK(solved.solved);
+        // The cell's score is from the root's side to move; the solver's is from
+        // the child's, so they differ by a sign.
+        CHECK(std::fabs(info.averageScore + solved.score) < 1e-9);
+    }
+    CHECK(provenCells > 0);
+}
+
 void testTerminalProof() {
     const std::string headless = std::string(SHUYI_SOURCE_DIR) + "/models/shuyi_resnet_v1.bin";
 
@@ -817,6 +859,7 @@ int runEngineTests() {
     testEndgameExactScore();
     testExactEndgameAfterSearch();
     testExactGateStopsAtSeven();
+    testAdaptiveProof();
     testNoPassUsesTheModel();
     testNoHardValueWithoutProof();
     testTerminalProof();

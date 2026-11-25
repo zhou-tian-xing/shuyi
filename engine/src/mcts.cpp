@@ -182,6 +182,9 @@ public:
             if (request.stop && request.stop->load(std::memory_order_relaxed)) break;
             simulate(position);
             ++simulated;
+            if (options_.proofEveryVisits > 0 && simulated % options_.proofEveryVisits == 0) {
+                proveBestMoves(position);
+            }
             // The position is solved with its exact margin: further visits cannot
             // change the result, so the rest of the budget stays unspent on
             // purpose.  A solved value with an unfinished margin keeps searching,
@@ -200,6 +203,7 @@ public:
             }
         } while (true);
 
+        proveBestMoves(position);
         // The search ran and could not finish the proof (or could not make the
         // margin exact).  With one more ply left, the tree is a sampling tool and
         // the solver is the right tool: solve it outright.  The answer is cached
@@ -231,6 +235,10 @@ private:
     // an extending analysis does not pay the solve again.
     Analysis lateExactCached_{};
     bool lateExactHasScore_ = false;
+    // How many adaptive proof passes have run for this tree; the per-move budget
+    // doubles with it.
+    int proofRound_ = 0;
+    long long proofSpentNodes_ = 0;
 
     bool nodesEmpty() const { return nodeMove_.empty(); }
 
@@ -253,6 +261,8 @@ private:
     void resetTree() {
         lateExactCached_ = Analysis{};
         lateExactHasScore_ = false;
+        proofRound_ = 0;
+        proofSpentNodes_ = 0;
         nodeMove_.clear();
         parent_.clear();
         firstEdge_.clear();
@@ -651,6 +661,10 @@ private:
         int node = root_;
 
         while (true) {
+            // A solved node is not a leaf any more: the answer is final, so the
+            // visit stops here instead of asking the network again.  Proving pays
+            // for itself only because of this line.
+            if (provenValue_[node] >= 0.0) break;
             expand(node, position, nullptr);
             const int untried = chooseUntried(node);
             if (untried >= 0) {
@@ -679,15 +693,19 @@ private:
         double leafValue = 0.0;
         double leafScore = 0.0;
         bool leafHasScore = false;
-        const bool evaluated =
-            !terminal_[node] && expand(node, position, &leafValue, &leafScore, &leafHasScore);
+        bool evaluated = false;
         if (terminal_[node]) {
             result = outcomeFor(position, position.sideToMove());
             // A finished game is proven by the rules: no search can change it.
             provenValue_[node] = result.win;
             provenScore_[node] = result.score;
             scoreExact_[node] = 1;
-        } else if (evaluated) {
+        } else if (provenValue_[node] >= 0.0) {
+            // Solved by the prover: no network call, no expansion.
+            result.win = provenValue_[node];
+            result.score = provenScore_[node];
+            result.hasScore = scoreExact_[node] != 0;
+        } else if ((evaluated = expand(node, position, &leafValue, &leafScore, &leafHasScore))) {
             result = blendNetValue(leafValue, leafScore, leafHasScore, position);
         } else {
             result = rollout(position);
@@ -712,6 +730,58 @@ private:
         // first node that stays unsolved -- its parent cannot be solved either.
         for (auto it = path.rbegin(); it != path.rend(); ++it) {
             if (!updateProof(it->node)) break;
+            if (provenValue_[root_] >= 0.0) break;
+        }
+    }
+
+    // Spend proof budget where the search says the game is: the most visited root
+    // moves.  A solved child is marked proven with its exact margin, the ordinary
+    // proof machinery lifts it to the root, and every later visit returns at that
+    // node instead of touching the network.  A failed attempt costs its whole
+    // budget and leaves nothing (the solver keeps no state), so the budget starts
+    // small and doubles on each pass -- that is the "grow it until it pays" part.
+    void proveBestMoves(const Position& rootPosition) {
+        if (options_.proofTopMoves <= 0 || options_.proofStartNodes <= 0) return;
+        if (pliesRemaining(rootPosition) > options_.proofMaxPlies) return;
+        if (provenValue_[root_] >= 0.0) return;
+        const int count = static_cast<int>(edgeCount_[root_]);
+        if (count <= 0) return;
+
+        if (proofSpentNodes_ >= options_.proofMaxTotalNodes) return;
+        long long budget = options_.proofStartNodes;
+        for (int round = 0; round < proofRound_ && round < 8; ++round) {
+            budget = std::min(budget * 2, options_.proofMaxNodes);
+        }
+        ++proofRound_;
+
+        std::vector<int> candidates;
+        candidates.reserve(count);
+        for (int i = 0; i < count; ++i) {
+            const int e = firstEdge_[root_] + i;
+            if (edges_[e].child < 0) continue;                        // never searched
+            if (provenValue_[edges_[e].child] >= 0.0) continue;       // already solved
+            candidates.push_back(e);
+        }
+        std::stable_sort(candidates.begin(), candidates.end(), [&](int a, int b) {
+            return edges_[a].visits > edges_[b].visits;
+        });
+        if (static_cast<int>(candidates.size()) > options_.proofTopMoves) {
+            candidates.resize(static_cast<std::size_t>(options_.proofTopMoves));
+        }
+        for (int e : candidates) {
+            if (proofSpentNodes_ >= options_.proofMaxTotalNodes) return;
+            proofSpentNodes_ += budget;
+            Position child = rootPosition;
+            child.play(edges_[e].move);
+            const EndgameSolution solved = solveEndgame(child, options_.aValue, budget);
+            if (!solved.solved) continue;
+            const int node = edges_[e].child;
+            // Value from the child's side to move: the solver's score is too.
+            provenValue_[node] = solved.score > 0.0 ? 1.0 : (solved.score < 0.0 ? 0.0 : 0.5);
+            provenScore_[node] = solved.score;
+            scoreExact_[node] = 1;
+            complete_[node] = 1;
+            updateProof(root_);
             if (provenValue_[root_] >= 0.0) break;
         }
     }
