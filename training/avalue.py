@@ -51,6 +51,9 @@ def play_one(binary: Path, model: Path, model_b: Path | None, args, komi: float,
         "--ruleset", args.ruleset, "--komi", f"{komi}", "--visits", str(args.visits),
         "--games", str(args.games), "--batch-games", str(args.batch_games),
         "--chunk", str(args.chunk), "--seed", str(args.seed),
+        # Independent game groups, each with its own CUDA stream: the same
+        # trick that took self-play from 0.47 to 0.85 games/s.
+        "--groups", str(args.groups),
         "--csv", str(csv_path), "--json", str(json_path),
     ]
     print("$ " + " ".join(cmd), flush=True)
@@ -160,6 +163,8 @@ def main() -> int:
                     help="fixed budget per move (see training/evalconfig.py)")
     ap.add_argument("--batch-games", type=int, default=128)
     ap.add_argument("--chunk", type=int, default=1024)
+    ap.add_argument("--groups", type=int, default=1,
+                    help="concurrent game groups in the match binary")
     ap.add_argument("--workers", type=int, default=1,
                     help="run this many komi points at once (each is a separate process)")
     ap.add_argument("--seed", type=int, default=20261201)

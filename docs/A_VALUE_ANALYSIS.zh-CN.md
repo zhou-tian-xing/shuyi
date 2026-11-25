@@ -234,3 +234,31 @@ ctest --test-dir build --output-on-failure
 ```
 
 该命令会尝试为 `-73` 到 `73` 的每个分数寻找终局；生成后仍应运行测试重新验证。
+
+## nopass 的 A*：2026-11-25 复测
+
+之前 nopass 的 A 只有两个宽区间：A-blind 模型在 64 visits 下 +0.55 ± 0.17，
+b6c96 在 1024 visits 下 +0.28 ± 0.36。八小时那一轮跑完（`b6c96-nopass-20261125c`）之后，
+用最新的 `b6c96-s179866-d1959110` 在同一 visits 下重测了一次：
+
+```bash
+python training/avalue.py --model runs/training/b6c96-nopass-20261125c/models/b6c96-s179866-d1959110.bin \
+    --ruleset nopass --komis 0,0.5,1 --games 200 --visits 1024 --groups 3 \
+    --binary build/shuyi_selfplay_gpu --json runs/eval/avalue_20261125c.json
+```
+
+同一模型自对弈、颜色交替，每档 200 局：
+
+| A | 红方得分 | 95% |
+| ---: | ---: | --- |
+| 0.0 | 0.400 | ±0.068 |
+| 0.5 | 0.490 | ±0.069 |
+| 1.0 | 0.620 | ±0.067 |
+
+逻辑拟合（`training/avalue.py`，另有独立实现 `tools/research/avalue_fit.py`，两者一致）：
+
+**A\* = +0.48，95% [+0.30, +0.67]**（斜率 0.88 log-odds/点，SE 0.19）。
+
+结论：区间包含 0.5、排除 0 和 1，所以**训练和评测用的 A=0.5 是对的**，而且 0.5 是区间内
+唯一不可能产生平局的半整数（A 为整数时 `T = P + A` 可以为 0，图则和棋）。
+`A=0` 时红方只有 0.400——无过手规则下先手是明显劣势，这和阻挡规则同向、与现行规则（−0.5）反向。
