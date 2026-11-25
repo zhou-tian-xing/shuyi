@@ -619,6 +619,9 @@ def main(argv=None):
     parser.add_argument("--no-augment", dest="augment", action="store_false")
     parser.add_argument("--amp", action="store_true", default=True)
     parser.add_argument("--no-amp", dest="amp", action="store_false")
+    parser.add_argument("--profile-steps", type=int, default=0,
+                        help="for the first N steps, print how long the host-side "
+                             "data path (gather + upload) takes versus the GPU step")
     parser.add_argument("--seed", type=int, default=20261122)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--grad-clip", type=float, default=5.0)
@@ -801,6 +804,9 @@ def main(argv=None):
         started = time.time()
         for start in range(0, len(order), args.batch):
             idx = order[start : start + args.batch]
+            profiling = args.profile_steps > 0 and global_step < args.profile_steps
+            if profiling:
+                t_data0 = time.perf_counter()
             bx = x[idx].to(device, non_blocking=True)
             bg = g[idx].to(device, non_blocking=True)
             bp = policy[idx].to(device, non_blocking=True)
@@ -817,6 +823,9 @@ def main(argv=None):
             lr = lr_at(global_step, total_steps, args.lr, args.min_lr, warmup_steps)
             for group in optimizer.param_groups:
                 group["lr"] = lr
+            if profiling:
+                torch.cuda.synchronize()
+                t_data1 = time.perf_counter()
 
             with torch.amp.autocast("cuda", enabled=use_amp):
                 outputs = model(bx, bg)
@@ -842,6 +851,11 @@ def main(argv=None):
             total_loss += float(loss.item()) * len(idx)
             seen += len(idx)
             global_step += 1
+            if profiling:
+                torch.cuda.synchronize()
+                t_data2 = time.perf_counter()
+                print(f"PROFILE step={global_step} data={1000 * (t_data1 - t_data0):.2f}ms "
+                      f"compute={1000 * (t_data2 - t_data1):.2f}ms", flush=True)
             if args.log_every and (start // args.batch) % args.log_every == 0:
                 print(
                     f"epoch {epoch + 1}/{args.epochs} step {start // args.batch}/"

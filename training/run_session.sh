@@ -40,7 +40,7 @@ BATCH_GAMES="${BATCH_GAMES:-32}"
 # candidate on this box and keeps the fastest.
 # (Not `GROUPS`: that is a bash builtin array, so the assignment would be
 # ignored and the flag would receive the caller's group ids.)
-PLAY_GROUPS="${PLAY_GROUPS:-1 2}"
+PLAY_GROUPS="${PLAY_GROUPS:-1 2 3}"
 SEED="${SEED:-20261201}"
 RUN_NAME="${RUN_NAME:-b${BLOCKS}c${CHANNELS}-${RULESET}-$(date +%Y%m%d)}"
 PYTHON="${SHUYI_PYTHON:-$REPO/.venv/bin/python}"
