@@ -103,13 +103,14 @@ else
     echo "fastest: $RATE games/s with $PLAY_GROUPS group(s)"
 fi
 
+SIZING="--min-games ${MIN_GAMES:-2000} --max-games ${MAX_GAMES:-4000} --max-gens ${MAX_GENS:-16}"
 "$PYTHON" "$REPO/training/budget.py" --rate "$RATE" --hours "$HOURS" --params "$PARAMS" \
     --visits "$VISITS" --arena-games "$ARENA_GAMES" --train-rate "$TRAIN_RATE" \
-    --replay-gens "$REPLAY_GENS" \
+    --replay-gens "$REPLAY_GENS" $SIZING \
     --json > "$RUN_DIR/plan.json"
 "$PYTHON" "$REPO/training/budget.py" --rate "$RATE" --hours "$HOURS" --params "$PARAMS" \
     --visits "$VISITS" --arena-games "$ARENA_GAMES" --train-rate "$TRAIN_RATE" \
-    --replay-gens "$REPLAY_GENS"
+    --replay-gens "$REPLAY_GENS" $SIZING
 
 # Read the plan from inside the run directory: a run path may contain non-ASCII
 # characters, and passing it through `python -c` breaks on Windows code pages.
