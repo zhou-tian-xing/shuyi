@@ -87,7 +87,9 @@ else
             --root-k 32 --top-k 16 --noise 0.25 --dirichlet 0.3 \
             --temp-moves 12 --temperature 1.0 --opening 2 --seed "$SEED" \
             --chunk 1024 --out "$RUN_DIR/logs/probe.bin" > "$PROBE" 2>&1
-        r=$(grep -o 'games/s=[0-9.]*' "$PROBE" | head -1 | cut -d= -f2)
+        # tail, not head: the progress lines also print a running games/s, and the
+        # final summary is the one that counts.
+        r=$(grep -o 'games/s=[0-9.]*' "$PROBE" | tail -1 | cut -d= -f2)
         [ -n "$r" ] || { echo "no games/s in $PROBE" >&2; exit 1; }
         echo "  groups=$g: $r games/s  $(grep -o 'gpu=[0-9]*%' "$PROBE" | head -1)"
         if awk "BEGIN{exit !($r > $BEST_RATE)}"; then
