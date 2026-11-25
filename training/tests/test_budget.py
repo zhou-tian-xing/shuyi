@@ -25,12 +25,22 @@ def check(condition, what):
 def test_sizing():
     p = budget.plan(0.58, 10.0, 1.03, 1024)
     check(p["generations"] >= 4, "ten hours must fit at least four generations")
-    check(p["games_per_generation"] >= 800,
+    check(p["games_per_generation"] >= 2000,
           f"375-game generations are the failure this exists to stop, got {p['games_per_generation']}")
+    check(p["games_per_generation"] <= 4000,
+          f"above 4,000 games a generation should be split, got {p['games_per_generation']}")
     check(p["optimizer_steps_per_generation"] >= 3000,
           "a generation needs enough gradient steps to move the weights")
     check(p["total_hours"] <= 10.0, "the plan must fit the window")
     check(p["total_positions"] > 500_000, "ten hours must buy real data")
+
+    # The window is spent on generations, not on thicker generations: a faster
+    # box must get more of them, not just bigger ones.
+    fast = budget.plan(1.20, 10.0, 1.03, 1024)
+    check(fast["generations"] > p["generations"], "a faster box buys more generations")
+    check(fast["games_per_generation"] >= 2000, "and still at least 2,000 games each")
+    check(fast["total_positions"] >= p["total_positions"] * 0.8,
+          "more generations must not cost most of the data")
 
     # The plan is a function of the measured rate: half the speed, roughly half
     # the data, and still inside the window.

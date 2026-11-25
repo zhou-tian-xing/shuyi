@@ -46,7 +46,7 @@ def deadline_exceeded(remaining_seconds, gen_seconds, slack=1.15):
 
 def plan(rate_games_per_s, hours, params_millions=1.03, visits=1024,
          arena_games=100, setup_minutes=15, tail_minutes=12,
-         min_gens=4, max_gens=8, min_games=800, max_games=6000,
+         min_gens=4, max_gens=16, min_games=2000, max_games=4000,
          train_rate=20000.0, batch=512, target_steps_base=10000,
          replay_gens=2):
     """Return a plan dict; raises ValueError when the window fits nothing."""
@@ -99,20 +99,35 @@ def plan(rate_games_per_s, hours, params_millions=1.03, visits=1024,
                             + gens * gen_seconds) / 3600.0,
         }
 
-    gens = int(round(usable / (90.0 * 60.0)))
-    gens = max(min_gens, min(max_gens, gens))
-    best = size_for(gens)
-    # Too few games per generation to teach anything: trade generations for data.
-    while best["games_per_generation"] < min_games and best["generations"] > min_gens:
-        best = size_for(best["generations"] - 1)
+    # Generations are the unit of learning: each one replaces the data with a
+    # search run by a better network and adds a step of the ladder.  So spend the
+    # window on as many generations as it fits, subject to each one still holding
+    # at least `min_games` games -- few hundred games teach nothing, and 2,000 is
+    # the floor that has been holding up (the 2026-11-25 runs: 2,177 and 4,194
+    # games both improved every generation, 4,194 just bought fewer of them).
+    # The old rule was "one generation per 90 minutes", which is a description of
+    # the last run rather than a reason, and it silently halved the number of
+    # model updates when self-play got faster.
+    best = size_for(max_gens)
+    found = False
+    for gens in range(max_gens, min_gens - 1, -1):
+        candidate = size_for(gens)
+        if candidate["total_hours"] > hours:
+            continue
+        if candidate["games_per_generation"] < min_games:
+            continue
+        best = candidate
+        found = True
+        break
+    if not found:
+        best = size_for(min_gens)
+        raise ValueError(
+            f"even {min_gens} generations give only "
+            f"{best['games_per_generation']} games each; the window is too short "
+            f"for {params_millions:.2f}M parameters at this rate")
     # More than the box can use in one generation: split it into more generations.
     while best["games_per_generation"] > max_games and best["generations"] < max_gens:
         best = size_for(best["generations"] + 1)
-    if best["games_per_generation"] < min_games:
-        raise ValueError(
-            f"even {best['generations']} generations give only "
-            f"{best['games_per_generation']} games each; the window is too short "
-            f"for {params_millions:.2f}M parameters at this rate")
     if best["total_hours"] > hours:
         raise ValueError(f"plan needs {best['total_hours']:.2f} h, window is {hours:.2f} h")
 
@@ -160,14 +175,22 @@ def render(p):
 def self_test():
     p = plan(0.58, 10.0, 1.03, 1024)
     assert p["generations"] >= 4
-    assert p["games_per_generation"] >= 800
+    assert p["games_per_generation"] >= 2000
     assert p["total_hours"] <= 10.0
     assert p["optimizer_steps_per_generation"] >= 3000
     # A slower box must buy fewer, smaller generations -- never a plan that
-    # overruns the window.
-    slow = plan(0.25, 10.0, 1.03, 1024)
+    # overruns the window, and never one that drops under the 2,000-game floor:
+    # below that it has to refuse instead of quietly producing toy generations.
+    slow = plan(0.35, 10.0, 1.03, 1024)
     assert slow["total_hours"] <= 10.0, slow
     assert slow["total_positions"] < p["total_positions"]
+    assert slow["games_per_generation"] >= 2000
+    try:
+        plan(0.25, 10.0, 1.03, 1024)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a box this slow cannot hold the 2,000-game floor in ten hours")
     # A bigger network must ask for more gradient steps per position.
     small = plan(0.58, 10.0, 1.03, 1024)
     big = plan(0.58, 30.0, 3.00, 1024)
@@ -194,9 +217,11 @@ def main(argv=None):
     parser.add_argument("--setup-minutes", type=float, default=15)
     parser.add_argument("--tail-minutes", type=float, default=12)
     parser.add_argument("--min-gens", type=int, default=4)
-    parser.add_argument("--max-gens", type=int, default=8)
-    parser.add_argument("--min-games", type=int, default=800)
-    parser.add_argument("--max-games", type=int, default=6000)
+    parser.add_argument("--max-gens", type=int, default=16)
+    parser.add_argument("--min-games", type=int, default=2000,
+                        help="floor on games per generation; a few hundred teach nothing")
+    parser.add_argument("--max-games", type=int, default=4000,
+                        help="ceiling on games per generation; above it, add a generation")
     parser.add_argument("--train-rate", type=float, default=20000.0)
     parser.add_argument("--replay-gens", type=int, default=2)
     parser.add_argument("--json", action="store_true")
