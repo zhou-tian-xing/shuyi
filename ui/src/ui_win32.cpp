@@ -2174,7 +2174,7 @@ void drawStatus(HDC dc, const Layout& layout) {
         const Outcome outcome = g_position.outcome(g_aValue);
         left = std::wstring(L"终局：") + outcomeText(outcome) + L" · 比分 " +
                signedText(g_position.rawScore()) + L" + A(" + signedValue(g_aValue) + L") = " +
-               signedText(g_position.rawScore() + g_aValue);
+               signedValue(g_position.finalScore(g_aValue));
     }
     drawTextAt(dc, left, scale(24), y, layout.client.right - scale(180), scale(33), g_fontSmall,
                g_position.gameOver() ? kGold : kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -2195,7 +2195,7 @@ void drawOverlay(HDC dc, const Layout& layout) {
                box.right - box.left - scale(40), scale(58), g_fontTitle, color);
     const std::wstring detail = L"局面分 " + signedText(g_position.rawScore()) + L"   +   A值 " +
                                 signedValue(g_aValue) + L"   =   " +
-                                signedText(g_position.rawScore() + g_aValue);
+                                signedValue(g_position.finalScore(g_aValue));
     drawTextAt(dc, detail, box.left + scale(16), box.top + scale(76), box.right - box.left - scale(32),
                scale(28), g_fontUi, kText);
     RECT button = overlayButton(layout);

@@ -52,17 +52,22 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j 8
 ctest --test-dir build --output-on-failure          # Linux 构建不含界面测试
 
-# 开界面（Windows）：同目录有 shuyi_engine.exe 就会自动加载，空格开始/停止分析
+# 开 CPU 构建的界面（Windows）：空格开始/停止分析
 build/shuyi.exe
 
 # 直接驱动引擎（行协议；命令可带 id，分析流式返回 JSON）
 printf 'ruleset nopass\nset_model models/b4c32-s42012-d595499.bin\nset_engine mcts_nn\nset_visits 512\n1 analyze red 512 interval 100\n' | build/shuyi_engine
 ```
 
-CUDA 引擎：`cmake -S . -B build-cuda -DSHUYI_CUDA=ON -DCUDAToolkit_ROOT=<cuda>`。
-Windows 上 nvcc 不接受中文路径，仓库里用 junction 绕开：`cmake -S C:/shuyi_src -B C:/shuyi_cuda_build ...`。
+Windows 主界面位于 `build-cuda/shuyi.exe`，同目录还包含 CUDA 引擎。`build/` 是纯 CPU 构建。
+Windows 上 nvcc 通过 ASCII 路径构建。已有 junction 时，在 Visual Studio 开发者命令行编译：
 
-打包（默认 CPU 引擎，CUDA 引擎和权重可选，解包自检后写入 `dist/`）：
+```bat
+cmake -S C:/shuyi_src -B C:/shuyi_cuda_build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSHUYI_CUDA=ON -DSHUYI_BUILD_UI=ON
+cmake --build C:/shuyi_cuda_build --config Release
+```
+
+传入 `--cuda-build build-cuda` 时，发布包使用其中的主界面和 CUDA 引擎。包内默认启动 CPU 引擎，可在引擎菜单选择 CUDA 引擎。
 
 ```bash
 python release/build_release.py --cuda-build build-cuda \

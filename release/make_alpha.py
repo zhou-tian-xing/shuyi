@@ -2,7 +2,7 @@
 """Stage and smoke-test a Windows package with CPU and optional CUDA engines.
 
     python release/make_alpha.py --engine build/shuyi_engine.exe --cuda-engine build-cuda/shuyi_engine.exe \
-        --ui build/shuyi.exe --model models/b4c32-s42012-d595499.bin
+        --ui build-cuda/shuyi.exe --model models/b4c32-s42012-d595499.bin
 
 The result is `dist/shuyi-alpha/` and `dist/shuyi-alpha.zip`, containing only
 what a player needs:

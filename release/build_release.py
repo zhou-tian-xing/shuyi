@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """One command: build both products, run the tests, stage the package.
 
-The package contains the CPU UI and engine, documentation, and optionally
-an additional CUDA engine and a model file.
+The package uses the UI from the CUDA build when selected. It ships the CPU
+engine as the default and can also include a CUDA engine and a model file.
 
     python release/build_release.py                     # CPU build, no model
     python release/build_release.py --cuda-build build-cuda
@@ -32,21 +32,26 @@ def run(cmd, cwd=None):
 
 def configure_and_build(build_dir: Path, cuda: bool, tools: bool) -> None:
     cache = build_dir / "CMakeCache.txt"
-    if not cache.exists() or not cuda:
-        source = REPO
-        if cache.exists():
-            for line in cache.read_text(encoding="utf-8").splitlines():
-                if line.startswith("CMAKE_HOME_DIRECTORY:INTERNAL="):
-                    source = Path(line.partition("=")[2])
-                    break
-        cmd = ["cmake", "-S", str(source), "-B", str(build_dir),
-               "-DCMAKE_BUILD_TYPE=Release"]
-        cmd.append(f"-DSHUYI_CUDA={'ON' if cuda else 'OFF'}")
-        if sys.platform == "win32" and not cuda:
+    source_dir = REPO
+    if cache.exists():
+        for line in cache.read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            if key == "CMAKE_HOME_DIRECTORY:INTERNAL":
+                source_dir = Path(value)
+            elif key == "CMAKE_CACHEFILE_DIR:INTERNAL":
+                configured_dir = Path(value)
+                if configured_dir.resolve() == build_dir.resolve():
+                    # Keep the ASCII junction path CUDA was configured with.
+                    build_dir = configured_dir
+    cmd = ["cmake", "-S", str(source_dir), "-B", str(build_dir),
+           "-DCMAKE_BUILD_TYPE=Release", f"-DSHUYI_CUDA={'ON' if cuda else 'OFF'}"]
+    if sys.platform == "win32":
+        cmd.append("-DSHUYI_BUILD_UI=ON")
+        if not cuda:
             cmd.append("-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        if tools:
-            cmd.append("-DSHUYI_BUILD_TOOLS=ON")
-        run(cmd)
+    if tools:
+        cmd.append("-DSHUYI_BUILD_TOOLS=ON")
+    run(cmd)
     run(["cmake", "--build", str(build_dir), "--config", "Release"])
 
 
@@ -64,7 +69,7 @@ def main(argv=None):
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--build", default="build", help="CPU/tooling build directory")
     parser.add_argument("--cuda-build", default="",
-                        help="CUDA build directory whose binaries are shipped (optional)")
+                        help="use the UI and CUDA engine from this build directory")
     parser.add_argument("--build-cuda", action="store_true",
                         help="also build that directory.  Off by default because a CUDA "
                              "build on Windows needs vcvars64 first (see "
@@ -95,7 +100,7 @@ def main(argv=None):
             run(["ctest", "--test-dir", str(test_build), "-C", "Release", "--output-on-failure"])
 
     engine = binary(build, "shuyi_engine")
-    ui = binary(build, "shuyi")
+    ui = binary(cuda_build or build, "shuyi")
     stage_cmd = [sys.executable, str(REPO / "release" / "make_alpha.py"),
                  "--engine", str(engine), "--ui", str(ui), "--out", str(args.out)]
     if cuda_build:
