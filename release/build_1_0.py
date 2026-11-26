@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,13 @@ import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+
+# A release is tested the way a stranger's machine looks: the system directory and
+# nothing else.  Inheriting this developer's PATH hid two missing runtimes once.
+CLEAN_ENV = {
+    "SystemRoot": os.environ.get("SystemRoot", r"C:\Windows"),
+    "PATH": os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32"),
+}
 
 INI = """# shuyi-ui.ini — 界面设置（相对本目录）
 engine=shuyi_engine.exe
@@ -135,9 +143,11 @@ def variant_spec() -> dict:
 
 
 def stage(stage_dir: Path, engine: Path, ui: Path | None, model: Path | None,
-          cuda: bool) -> None:
+          cuda: bool, runtime: list[Path]) -> None:
     stage_dir.mkdir(parents=True)
     shutil.copy2(engine, stage_dir / "shuyi_engine.exe")
+    for dll in runtime:
+        shutil.copy2(dll, stage_dir / dll.name)
     if ui is not None:
         shutil.copy2(ui, stage_dir / "shuyi.exe")
         (stage_dir / "shuyi-ui.ini").write_text(INI, encoding="utf-8")
@@ -150,8 +160,10 @@ def stage(stage_dir: Path, engine: Path, ui: Path | None, model: Path | None,
         shutil.copy2(model, stage_dir / "models" / model.name)
     shutil.copy2(REPO / "LICENSE", stage_dir / "LICENSE")
 
-    engine_note = ("CUDA 引擎（需要 NVIDIA 驱动，构建时匹配的 GPU 架构要能跑）"
-                   if cuda else "CPU 引擎（任何 x64 Windows 都能跑）")
+    engine_note = ("CUDA 引擎。**前置条件：CUDA 12 运行时**（cudart64_12.dll、"
+                   "cublas64_12.dll、cublasLt64_12.dll 必须在 PATH 或本目录），另有 NVIDIA 驱动；"
+                   "VC++ 运行库已随包附带" if cuda
+                   else "CPU 引擎（任何 x64 Windows 都能跑，无需额外组件）")
     model_note = f"{model.name}，ELO +2708" if model is not None and ui is not None else "无"
     if ui is not None:
         (stage_dir / "README.txt").write_text(
@@ -172,15 +184,25 @@ def stage(stage_dir: Path, engine: Path, ui: Path | None, model: Path | None,
     (stage_dir / "BUILD.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def smoke(stage_dir: Path, ui: bool, cuda: bool, model: Path | None) -> None:
+def env_for(cuda_bin: Path | None) -> dict:
+    """A stranger's machine: system directory, plus the documented CUDA prerequisite."""
+    env = dict(CLEAN_ENV)
+    if cuda_bin is not None:
+        env["PATH"] = env["PATH"] + os.pathsep + str(cuda_bin)
+    return env
+
+
+def smoke(stage_dir: Path, ui: bool, cuda: bool, model: Path | None,
+          cuda_bin: Path | None = None) -> None:
     """Run the packaged binaries exactly as a user would."""
+    env = env_for(cuda_bin)
     commands = ["protocol_version", "capabilities"]
     if model is not None and ui:
         commands += [f"set_model models/{model.name}", "set_engine mcts_nn"]
     commands.append("quit")
     stream = "".join(f"{i} {c}\n" for i, c in enumerate(commands, 1))
     proc = subprocess.run([str(stage_dir / "shuyi_engine.exe")], cwd=stage_dir, input=stream,
-                          capture_output=True, text=True, timeout=90,
+                          capture_output=True, text=True, timeout=120, env=env,
                           encoding="utf-8", errors="replace")
     if proc.returncode:
         raise SystemExit(f"{stage_dir.name}: engine exit {proc.returncode}: {proc.stderr[:400]}")
@@ -196,7 +218,8 @@ def smoke(stage_dir: Path, ui: bool, cuda: bool, model: Path | None) -> None:
     if ui:
         menu = stage_dir / "_menu.txt"
         run = subprocess.run([str(stage_dir / "shuyi.exe"), "--dump-models", str(menu)],
-                             cwd=stage_dir, capture_output=True, text=True, timeout=90)
+                             cwd=stage_dir, capture_output=True, text=True, timeout=120,
+                             env=env)
         if run.returncode:
             raise SystemExit(f"{stage_dir.name}: UI exit {run.returncode}")
         text = menu.read_text(encoding="utf-8", errors="replace") if menu.is_file() else ""
@@ -218,6 +241,8 @@ def main() -> int:
                         help="weight to ship inside the UI packages")
     parser.add_argument("--out", type=Path, default=REPO / "dist" / "1.0")
     parser.add_argument("--tag", default="v1.0")
+    parser.add_argument("--cuda-bin", type=Path, default=Path("E:/CUDA/v12.4/bin"),
+                        help="directory holding cudart64_12.dll and cublas64_12.dll")
     args = parser.parse_args()
 
     model = (REPO / args.model).resolve() if not args.model.is_absolute() else args.model
@@ -235,13 +260,25 @@ def main() -> int:
     if sources:
         print("note: the tree has uncommitted changes; BUILD.txt records HEAD, not the files")
 
+    system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+    # CUDA itself is NOT bundled: cublasLt64_12.dll alone is 473 MB, an absurd
+    # download for a 4 MB program.  It is a documented prerequisite instead, and
+    # the smoke test runs the CUDA package with that prerequisite on PATH -- which
+    # is what a machine that followed the README looks like.
+    runtime = []
+    for name in ("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"):
+        candidate = system32 / name
+        if not candidate.is_file():
+            raise SystemExit(f"MSVC runtime not found: {candidate}")
+        runtime.append(candidate)
+
     for name, spec in specs.items():
         cuda = spec["engine"] == specs["engine-cuda"]["engine"]
         stage_dir = out / f"shuyi-1.0-{name}"
         if stage_dir.exists():
             shutil.rmtree(stage_dir)
-        stage(stage_dir, spec["engine"], spec["ui"], model, cuda)
-        smoke(stage_dir, spec["ui"] is not None, cuda, model)
+        stage(stage_dir, spec["engine"], spec["ui"], model, cuda, runtime if cuda else [])
+        smoke(stage_dir, spec["ui"] is not None, cuda, model, args.cuda_bin if cuda else None)
         archive = out / f"shuyi-1.0-{name}.zip"
         archive.unlink(missing_ok=True)
         zip_dir(stage_dir, archive)

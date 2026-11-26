@@ -16,11 +16,15 @@
 | 你的机器 | 下载这个 | 说明 |
 | --- | --- | --- |
 | 任何 x64 Windows | **`shuyi-1.0-ui-cpu.zip`** | 最稳的一包：界面 + CPU 引擎 + 最强模型 |
-| 有 NVIDIA 显卡 | `shuyi-1.0-ui-cuda.zip` | 同一套界面，引擎换成 CUDA，同样的访问量快很多 |
+| 有 NVIDIA 显卡，且装了 CUDA 12 运行时 | `shuyi-1.0-ui-cuda.zip` | 同一套界面，引擎换成 CUDA，同样的访问量快很多 |
 
 然后：**解压 → 双击 `shuyi.exe` → 按空格让引擎分析，或直接落子**。
 状态栏显示「引擎已启动」就说明零件齐了——包里已经带了最强的那份权重，
 不需要再下载模型。
+
+> CPU 包**不需要任何额外组件**。CUDA 包额外需要 CUDA 12 运行时
+> （`cudart64_12.dll`、`cublas64_12.dll`、`cublasLt64_12.dll`，装 CUDA Toolkit 12.x 即可）；
+> 只有驱动是不够的，缺了会表现为"双击没反应"。拿不准就用 CPU 包。
 
 只要引擎（自己写前端、批量跑对局）：`shuyi-1.0-engine-cpu.zip` 或
 `shuyi-1.0-engine-cuda.zip`，里面只有 `shuyi_engine.exe` 和协议文档。

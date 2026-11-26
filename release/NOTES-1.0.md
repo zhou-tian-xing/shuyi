@@ -8,10 +8,15 @@
 | 你的机器 | 下载 | 里面有什么 |
 | --- | --- | --- |
 | 任何 x64 Windows | **`shuyi-1.0-ui-cpu.zip`** | 界面 + CPU 引擎 + 最强模型（4.7 MB） |
-| 有 NVIDIA 显卡 | `shuyi-1.0-ui-cuda.zip` | 同上，引擎换成 CUDA 版本 |
+| 有 NVIDIA 显卡 | `shuyi-1.0-ui-cuda.zip` | 同上，引擎换成 CUDA 版本（需要 CUDA 12 运行时，见下） |
 | 只要引擎 | `shuyi-1.0-engine-cpu.zip` / `-engine-cuda.zip` | 只有 `shuyi_engine.exe` + 协议文档 |
 
 **解压 → 双击 `shuyi.exe` → 按空格分析，或直接落子。** 包里自带权重，不用另外下载。
+
+> **CUDA 包需要先装 CUDA 12 运行时。** NVIDIA 驱动本身**不包含**它，缺了会表现为
+> "双击没反应"（Windows 报缺少 DLL）。需要这三个文件：
+> `cudart64_12.dll`、`cublas64_12.dll`、`cublasLt64_12.dll`——装 CUDA Toolkit 12.x 即可，
+> 或把它们放进 `shuyi.exe` 所在目录。CPU 包不需要任何额外组件；不确定就用 CPU 包。
 
 ## 怎么玩
 
@@ -51,7 +56,9 @@ ELO 的口径（64 visits、锚在 random、不同榜之间不可比）见
 ## 已知限制
 
 - **只有 Windows x64**：界面是 Win32/GDI，没有别的移植。
-- **CUDA 包需要 NVIDIA 驱动**，且构建时的 GPU 架构必须在目标机上能跑；否则请用 CPU 包。
+- **CUDA 包需要 NVIDIA 驱动 + CUDA 12 运行时**（`cudart64_12.dll`、`cublas64_12.dll`、
+  `cublasLt64_12.dll`），且构建时的 GPU 架构必须在目标机上能跑。缺任何一项请用 CPU 包——
+  它不需要任何额外组件，这也是它是默认推荐的原因。
 - **ELO 只在同一张表内可比**：换参赛池、换 visits 都会让绝对分平移。
 - **权重是数据**：模型比程序更新得快，所以它单独发布、单独下载，不进安装包逻辑。
 - 训练侧的变慢还没有归因完（见
