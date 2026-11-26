@@ -110,6 +110,58 @@ def add(cells, a, b, wins, draws, losses, source, config, conflicts) -> None:
     cells[(b, a)] = (total[2], total[1], total[0])
 
 
+def unadd(cells, a, b, wins, draws, losses) -> None:
+    """`add` 的反向：一处对局如果重测了，先把上一次记进去的那份拿走再加新的。
+
+    拿不回来就只能停：负数说明这张表被别人手工改过，猜下去就是把数据改坏。
+    """
+    for (x, y), cell in (((a, b), (wins, draws, losses)), ((b, a), (losses, draws, wins))):
+        prev = cells.get((x, y))
+        if prev is None:
+            raise SystemExit(f"表里没有 {x} vs {y}，但记录说加过 —— 表被手工改过？")
+        rest = (prev[0] - cell[0], prev[1] - cell[1], prev[2] - cell[2])
+        if min(rest) < 0:
+            raise SystemExit(f"{x} vs {y}: 表里是 {prev[0]}-{prev[1]}-{prev[2]}，"
+                             f"要拿走的却是 {cell[0]}-{cell[1]}-{cell[2]}")
+        if rest == (0, 0, 0):
+            del cells[(x, y)]
+        else:
+            cells[(x, y)] = rest
+
+
+def read_cells(path: Path):
+    """把一张 `胜-和-负` 表读成 {(甲, 乙): (胜, 和, 负)}，两个方向都填上。"""
+    from leaderboard import parse_cell  # 一个解析器，两种表：不另写一份
+
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.reader(handle))
+    if not rows:
+        raise SystemExit(f"{path} 是空文件")
+    header = [cell.strip() for cell in rows[0][1:]]
+    cells: dict[tuple[str, str], tuple[int, int, int]] = {}
+    for row in rows[1:]:
+        if not row or not row[0].strip():
+            continue
+        name = row[0].strip()
+        for col, text in zip(header, row[1:]):
+            try:
+                parsed = parse_cell(text)
+            except ValueError as error:
+                raise SystemExit(f"{path.name}: {name} vs {col}: {error}") from None
+            if not parsed or name == col:
+                continue
+            mirror = cells.get((col, name))
+            if mirror is not None:
+                # 两边都写了同一个格子：一致就跳过，不一致就停（先手工查清哪边对）。
+                if mirror != (parsed[2], parsed[1], parsed[0]):
+                    raise SystemExit(f"{path.name}: {name} vs {col} 是 {parsed}，"
+                                     f"镜像格却是 {mirror} —— 表里两半自相矛盾")
+                continue
+            cells[(name, col)] = parsed
+            cells[(col, name)] = (parsed[2], parsed[1], parsed[0])
+    return cells
+
+
 def source_pairs(data, path):
     if "a" in data and "b" in data and "a_wins" in data:
         pairs = [(data["a"], data["b"], data["a_wins"], data.get("draws", 0), data["b_wins"])]
@@ -196,15 +248,113 @@ def import_all(out_dir: Path, roots: list[Path] | None = None) -> dict[int, int]
     return imported
 
 
+def append_into(table: Path, roots: list[Path]) -> int:
+    """把 `roots` 下的对局加进一张已经在用的表，而不是从零重建一张。
+
+    老表是历史：它里面的对局分散在当年的 eval 目录里，很多没有评测条件标记，
+    重建只会得到一张空表。所以这里反过来做——表是底稿，新对局往上加：
+
+        * 一个来源文件的对局只记一次；重测同一个文件时先抽掉上一次那份再记新的，
+          所以重跑是幂等的，不会悄悄翻倍。
+        * 抽掉的格子和表里对不上就直接停：说明这张表被手工改过。
+        * 表名决定预算（`matches_64.csv` 只能收 64 visits 的对局），
+          一次只收一种规则 + A 值，混着收就等于把不同条件下的胜负加在一起。
+    """
+    cells = read_cells(table)
+    ledger_path = table.with_name(table.name + ".sources.json")
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8")) if ledger_path.exists() else {}
+    if not isinstance(ledger, dict):
+        raise SystemExit(f"{ledger_path} 不是这份工具写的账本（不是对象），先手工看一遍")
+    sources: dict = ledger.get("sources", {})
+    known = known_models().union(PSEUDO)
+    try:
+        expected_visits = int(table.stem.split("_")[1])
+    except (IndexError, ValueError):
+        raise SystemExit(f"{table.name} 的名字里读不出预算：表要叫 matches_<visits>.csv") from None
+
+    before_names = {name for pair in cells for name in pair}
+    conflicts: list[str] = []
+    scope = None
+    added_games = 0
+    changed: list[str] = []
+    seen: set[str] = set()
+    for path in sorted({p.resolve() for root in roots for p in root.rglob("*.json")}):
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(report, dict):
+                continue
+            pairs = source_pairs(report, path)
+            if not pairs:
+                continue
+            ruleset, komi, visits = match_config(report)
+            rows = [[a, b, int(wins), int(draws), int(losses)]
+                    for a, b, wins, draws, losses in pairs]
+            rows = [row for row in rows if row[0] != row[1] and min(row[2:]) >= 0
+                    and sum(row[2:]) > 0]
+            if not rows:
+                continue
+        except (OSError, ValueError, KeyError, TypeError):
+            print(f"skip {path}: 没有评测条件标记，不知道该放进哪张表")
+            continue
+        if visits != expected_visits:
+            raise SystemExit(f"{path.name} 是 {visits} visits，但 {table.name} 是 "
+                             f"{expected_visits} visits 的表")
+        if scope is None:
+            scope = (ruleset, komi)
+        elif scope != (ruleset, komi):
+            raise SystemExit(f"{path.name} 是 {ruleset}/A={komi:g}，前面的是 "
+                             f"{scope[0]}/A={scope[1]:g}：一次只能往一张表加一种条件")
+        unknown = sorted({name for row in rows for name in row[:2] if name not in known})
+        if unknown:
+            raise SystemExit("这些名字找不到对应的模型文件，加进去就是一行查不到的东西: "
+                             + ", ".join(unknown))
+        key = path.relative_to(REPO).as_posix() if path.is_relative_to(REPO) else str(path)
+        seen.add(key)
+        previous = sources.get(key)
+        if previous is not None:
+            if previous["pairs"] == rows:
+                continue  # 同一个文件，同样的对局：已经记过了
+            for a, b, wins, draws, losses in previous["pairs"]:
+                unadd(cells, a, b, wins, draws, losses)
+        for a, b, wins, draws, losses in rows:
+            add(cells, a, b, wins, draws, losses, key, f"{ruleset}/A={komi:g}", conflicts)
+            added_games += wins + draws + losses
+        sources[key] = {"ruleset": ruleset, "komi": komi, "visits": visits, "pairs": rows}
+        changed.append(key)
+
+    for key in list(sources):
+        if key not in seen:
+            print(f"note: {key} 不在这次扫描的目录里，它记的对局留在表里")
+
+    write_table(table, cells)
+    atomic_write(ledger_path, json.dumps({"sources": sources}, ensure_ascii=False,
+                                         indent=2) + "\n")
+    new_names = sorted({name for pair in cells for name in pair} - before_names)
+    print(f"{len(changed)} source(s), {added_games} games -> {table}")
+    if new_names:
+        print(f"new participants: {', '.join(new_names)}")
+    if conflicts:
+        report = table.with_name(table.name + ".conflicts.txt")
+        atomic_write(report, "\n".join(conflicts) + "\n")
+        print(f"{len(conflicts)} conflicting cell(s) -> {report}")
+    return added_games
+
+
 def main() -> int:
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", action="append", default=None,
                     help="directory to scan (repeatable, default runs/eval)")
     ap.add_argument("--out", type=Path, default=REPO / "runs" / "leaderboard")
+    ap.add_argument("--into", type=Path, default=None,
+                    help="append the scanned games into this existing table (胜-和-负 CSV) "
+                         "instead of rebuilding the scoped tables")
     args = ap.parse_args()
     roots = [Path(item) for item in args.root] if args.root else [REPO / "runs" / "eval"]
-    import_all(args.out, roots)
+    if args.into:
+        append_into(args.into, roots)
+    else:
+        import_all(args.out, roots)
     return 0
 
 

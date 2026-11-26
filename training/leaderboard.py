@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from elo import bootstrap_ci, fit_elo  # noqa: E402  (同一个拟合，别的表才能比)
+from elo import bootstrap_ci, fit_elo_checked  # noqa: E402  (同一个拟合，别的表才能比)
 
 from evalconfig import KOMI_BY_RULESET, board_directory
 
@@ -123,8 +123,11 @@ def leaderboard(path: Path, anchor: str = "random"):
     if not pairs:
         return order, {}, {}, games, {}
     names = sorted({name for (a, b, *_) in pairs for name in (a, b)})
-    ratings = dict(zip(names, fit_elo(names, pairs)))
-    intervals = dict(zip(names, bootstrap_ci(names, pairs)))
+    rating, moved = fit_elo_checked(names, pairs)
+    if moved > 1.0:  # an unconverged fit is compressed toward the prior, i.e. it lies small
+        print(f"warning: {path.name}: 拟合没收敛，最后一步还差 {moved:.1f} Elo", file=sys.stderr)
+    ratings = dict(zip(names, rating))
+    intervals = dict(zip(names, bootstrap_ci(names, pairs, start=rating)))
 
     info: dict = {}
     zero = None

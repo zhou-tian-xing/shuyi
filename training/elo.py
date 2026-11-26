@@ -75,56 +75,89 @@ def elo_from_score(score):
     return 400.0 * math.log10(score / (1.0 - score))
 
 
-def fit_elo(names, pairs, prior_sigma=400.0, passes=60):
+def fit_elo(names, pairs, prior_sigma=2000.0, passes=4000, tolerance=0.02, start=None):
     """Maximum-likelihood Elo with a Gaussian prior around the pool mean.
 
     Coordinate-wise Newton steps (the likelihood is logistic in rating
     differences, so each player's update is one-dimensional).  The prior keeps an
     undefeated model finite: without it a 40-0 result has no maximum likelihood
-    estimate at all, and the bootstrap CI degenerates."""
+    estimate at all, and the bootstrap CI degenerates.
+
+    It has to be weak.  A 400-point prior over a pool that spans 2,000 points
+    compresses measured differences, and the compression depends on how many
+    models share the table -- the same twelve games between two models read +365
+    in one table and +140 in another.  Around 2,000 it only regularises.
+
+    It stops when one full sweep moves nobody by more than `tolerance` Elo, not
+    after a fixed number of sweeps.  A fixed 60 sweeps looks converged on a short
+    ladder and is not on a long one: information travels one edge per sweep, so a
+    forty-model chain stayed 40% compressed and could rank the second rung above
+    the top of the chain.  Use `fit_elo_checked` when the number gets published.
+    """
+    rating, _moved = _fit_elo(names, pairs, prior_sigma, passes, tolerance, start)
+    return rating
+
+
+def fit_elo_checked(names, pairs, prior_sigma=2000.0, passes=4000, tolerance=0.02):
+    """(ratings, moved): `moved` is how far the last sweep still wanted to go.
+
+    A caller that publishes a number has to know whether the iteration finished:
+    compression toward the prior looks exactly like a smaller improvement.
+    """
+    return _fit_elo(names, pairs, prior_sigma, passes, tolerance, None)
+
+
+def _fit_elo(names, pairs, prior_sigma, passes, tolerance, start):
     index = {name: i for i, name in enumerate(names)}
     n = len(names)
     scale = math.log(10.0) / 400.0
-    rating = [0.0] * n
+    rating = list(start) if start is not None else [0.0] * n
     precision = 1.0 / (prior_sigma * prior_sigma)
 
     def expected(ra, rb):
         return 1.0 / (1.0 + 10.0 ** ((rb - ra) / 400.0))
 
+    # Adjacency once, instead of scanning every pair for every player.
+    edges: list[list[tuple[int, int, float, float]]] = [[] for _ in range(n)]
+    for a, b, wins_a, draws, wins_b, weight in pairs:
+        games = wins_a + draws + wins_b
+        if games == 0:
+            continue
+        ia, ib = index[a], index[b]
+        edges[ia].append((ib, games, (wins_a + 0.5 * draws) / games, weight))
+        edges[ib].append((ia, games, (wins_b + 0.5 * draws) / games, weight))
+
+    moved = float("inf")
     for _ in range(passes):
+        moved = 0.0
         for i in range(n):
             grad = -rating[i] * precision
             hess = precision
-            for a, b, wins_a, draws, wins_b, weight in pairs:
-                games = wins_a + draws + wins_b
-                if games == 0:
-                    continue
-                if a == names[i]:
-                    other = index[b]
-                elif b == names[i]:
-                    other = index[a]
-                else:
-                    continue
-                observed = ((wins_a + 0.5 * draws) / games) if a == names[i] else                            ((wins_b + 0.5 * draws) / games)
+            for other, games, observed, weight in edges[i]:
                 p = expected(rating[i], rating[other])
                 grad += weight * games * (observed - p) * scale
                 hess += weight * games * p * (1.0 - p) * scale * scale
             if hess > 0:
-                rating[i] += grad / hess
+                delta = grad / hess
+                rating[i] += delta
+                moved = max(moved, abs(delta))
         mean = sum(rating) / n
         rating = [r - mean for r in rating]
-    return rating
+        if moved < tolerance:
+            break
+    return rating, moved
 
 
-def bootstrap_ci(names, pairs, rounds=200, seed=7, passes=60):
+def bootstrap_ci(names, pairs, rounds=200, seed=7, passes=4000, start=None):
     """95% interval from resampling the games.
 
-    `passes` has to match the point estimate: a short Newton run stops before the
-    prior has been overcome and returns ratings compressed toward the mean, which
-    is how a CI ended up not containing the estimate.
+    Each round is warmed up from the previous solution: the point estimate is
+    already near every resampled optimum, and starting from zero would pay the
+    full propagation cost two hundred times.
     """
     rng = random.Random(seed)
     samples = [[] for _ in names]
+    warm = list(start) if start is not None else None
     for _ in range(rounds):
         resampled = []
         for a, b, wins_a, draws, wins_b, weight in pairs:
@@ -142,8 +175,8 @@ def bootstrap_ci(names, pairs, rounds=200, seed=7, passes=60):
                 else:
                     sb += 1
             resampled.append((a, b, sa, sd, sb, weight))
-        rating = fit_elo(names, resampled, passes=passes)
-        for i, r in enumerate(rating):
+        warm = fit_elo(names, resampled, passes=passes, start=warm)
+        for i, r in enumerate(warm):
             samples[i].append(r)
     ci = []
     for values in samples:

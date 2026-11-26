@@ -39,7 +39,7 @@
 | 规则 | 三套并行：`classic` 现行、`blocking` 阻挡、**`nopass` 无过手（默认）**。规则是运行时参数。阻挡权重可兼容无过手规则 |
 | 引擎 | 四种搜索：`random` / `pruning`（α-β）/ `mcts` / `mcts_nn`；`shuyi_engine` 是持久化行协议进程，分析按毫秒间隔流式推送 |
 | 主力模型 | **b6c96**（96 通道 × 6 残差块，1.03 M 参数，输入 37 平面 + 24 全局量，带分数头），nopass |
-| 最新权重 | `b6c96-s179866-d1959110`：64 visits 榜内 +1758，同表比八小时训练起点高约 +140 Elo |
+| 最新权重 | `b6c96-s305983-d3226791`：64 visits 榜内 **+2708**（44 个模型、19,000 局，`random = 0`） |
 | 仓库内模型 | `b4c32-s34760`（v3）与 `b4c32-s42012`（v4）是随包权重。b6c96 权重位于训练产物 `runs/training/` |
 | 评测 | 默认预算 512 visits。新结果按规则、A 值和 visits 分表；已有榜单可用 `--legacy` 查看 |
 | A值 | 是运行时参数：nopass **+0.5**、阻挡 +1.26、现行 −0.5（标定方法见 [`docs/A_VALUE_ANALYSIS.zh-CN.md`](docs/A_VALUE_ANALYSIS.zh-CN.md)） |
@@ -92,16 +92,32 @@ python release/build_release.py --cuda-build build-cuda \
 
 ## 强度与评测
 
-11 月 25 日的八小时训练完成 9 代，每代 2,183 局。64 visits 历史榜以 `random = 0` 为参照，八小时末代 `b6c96-s179866-d1959110` 是 **+1758** [+1679, +1854]，起点 `b6c96-s87696-d937553` 为 +1618，同表拟合增量约 **+140 Elo**。128 visits 的旧榜尚未收录新末代。不同样本池的绝对分会漂移。
+两轮顺序训练接在一起：11 月 25 日八小时 9 代（2,183 局/代），11 月 26 日十一小时 12 代（2,032 局/代）。
+64 visits 榜以 `random = 0` 为参照，现有 44 个模型、19,000 局能读出分差，末代 `b6c96-s305983-d3226791`
+是 **+2708** [+2677, +2752]。
 
-原始结果与解释见[九代训练报告](docs/reports/RUN_20261125C.zh-CN.md)。新榜使用 `training/leaderboard.py`，默认查看 `nopass`、A=+0.5，可用 `--ruleset` 和 `--komi` 选择评测配置。评测口径见[Elo 方法](docs/ELO_METHODOLOGY.zh-CN.md)。
+不经过任何拟合的直接对局（各 300 局、颜色交替）：
+
+| 对局 | 胜-和-负 | 得分 | ELO 差 |
+| --- | --- | ---: | ---: |
+| 上一轮 8 小时：`s87696` → `s179866` | 27-0-273 | 91.0% | +281 |
+| 本轮 11 小时：`s179866` → `s305983` | 91-0-209 | 69.7% | +146 |
+| 两轮合计：`s87696` → `s305983` | 22-0-278 | 92.7% | +364 |
+
+同一张表里做联合拟合给出同样的分段：+372 / +151 / +523。**读"这一轮涨了多少"要用端到端那一格**：
+十二段相邻链各自 51–57%，加起来是 +380，而端到端只有 +146——相邻链把 12 个 ±40 的估计拼起来，
+误差会累积，端到端那一格不累积。绝对分也只在本表内可比：换一批参赛模型，整张表会平移。
+
+原始结果与解释见[十二代训练报告](docs/reports/RUN_20261126A.zh-CN.md)和[九代训练报告](docs/reports/RUN_20261125C.zh-CN.md)。
+新榜使用 `training/leaderboard.py`，默认查看 `nopass`、A=+0.5，可用 `--ruleset` 和 `--komi` 选择评测配置。
+评测口径见[Elo 方法](docs/ELO_METHODOLOGY.zh-CN.md)。
 
 ## 训练怎么跑
 
 ```bash
 # 一条命令：探测这台卡的速率 → 按窗口定代数/局数/步数 → 逐代自对弈、过闸门、训练、竞技场
-MODEL=runs/training/b6c96-nopass-20261125c/models/b6c96-s179866-d1959110.bin
-HOURS=8 MODEL="$MODEL" RUN_NAME=b6c96-nopass-20261126a bash training/run_session.sh
+MODEL=runs/training/b6c96-nopass-20261126a/models/b6c96-s305983-d3226791.bin
+HOURS=8 MODEL="$MODEL" RUN_NAME=b6c96-nopass-20261127a bash training/run_session.sh
 ```
 
 续训见[棋力提升计划](docs/plans/NEXT_STEPS.zh-CN.md)。训练预算规则写在代码里（[`training/budget.py`](training/budget.py)），不靠记忆：

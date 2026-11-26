@@ -59,6 +59,9 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME shuyi_training_evaluation
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/training/tests/test_evaluation.py)
+    add_test(NAME shuyi_training_roundrobin
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/training/tests/test_roundrobin.py)
 endif()
 
 # -------------------------------------------------------------------- install --

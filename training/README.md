@@ -116,7 +116,8 @@ python training/leaderboard.py --all           # 连只有引擎种类的表也�
 
 算法就是 `elo.py` 的同一套：逻辑回归最大似然 + 高斯先验，**锚钉在 0**（默认
 `random`），附 200 次 bootstrap 的 95% 区间。每个 `visits` 一张表、各算各的，
-**从不混预算**。
+**从不混预算**。先验 σ=2000（弱），迭代以"单轮最大位移 < 0.02 Elo"判收敛——
+按固定步数停会悄悄给出偏小的分差，见 [ELO 方法](../docs/ELO_METHODOLOGY.zh-CN.md) §3。
 
 **新数据怎么进表**（跑一次预算 = 一批对局 → 填进那张预算的表）：
 
@@ -130,6 +131,30 @@ python training/leaderboard_import.py
 # 4) 算分
 python training/leaderboard.py --anchor b4c32-s5960-d80938
 ```
+
+**只补新模型，不重测整张表**：新一轮训练产出的十几个模型只需要连到已有的梯子上。
+`--pair 甲:乙` 指定要下的对局（可以给多个），`--models` 可以给多个目录（模型就放在
+产出它的 run 目录旁边）：
+
+```bash
+# 1) GPU 机器上：只下"新模型串成的链 + 几场跨段对局"
+python training/roundrobin.py --binary build/shuyi_selfplay_gpu \
+    --models runs/training/<旧run>/models runs/training/<新run>/models \
+    --pair b6c96-s179866-d1959110:b6c96-s190747-d2064759 \
+    --pair b6c96-s190747-d2064759:b6c96-s201223-d2170403 \
+    --visits 64 --games 300 --out runs/eval/new64
+# 2) 拉回、加进那张已经在用的表（历史对局的来源文件多半没有评测条件标记，
+#    重建只会得到空表，所以这里是"往表里加"，不是"按来源重建"）
+python training/leaderboard_import.py --into runs/leaderboard/matches_64.csv \
+    --root runs/eval/new64
+# 3) 算分
+python training/leaderboard.py
+```
+
+`--into` 的规矩：表名决定预算（`matches_64.csv` 只收 64 visits 的对局），一次只收
+一种规则 + A 值，找不到模型文件的名字直接停。它把每个来源文件记进
+`matches_64.csv.sources.json`：重跑同一批数据不会翻倍，重测同一个文件会**替换**它自己
+那份（两半对不上就停，说明表被手工改过）。旧表没有这个账本，第一次 `--into` 会新建。
 
 `roundrobin.py` 一个进程就能吃满整台机器的 CPU（实测 8 核全占），所以
 `--workers` 默认 1；要并行必须给每个进程 `OMP_NUM_THREADS=1`，否则互相抢核，

@@ -9,6 +9,12 @@ a table; this tool fills a table.
   python training/roundrobin.py --binary build/shuyi_selfplay_gpu \\
       --models models --visits 64 --games 20 --workers 6 --out runs/eval/v64
 
+  # Only glue new models onto the existing table instead of re-measuring it:
+  python training/roundrobin.py --binary build/shuyi_selfplay_gpu \\
+      --models models runs/training/b6c96-nopass-20261125c/models \\
+      --pair b6c96-s179866-d1959110:b6c96-s190747-d2064759 \\
+      --visits 64 --games 300 --out runs/eval/new64
+
 Pairs are unordered: (A,B) is played once with colour-alternating games, so the
 cell already contains both colours.  Nothing is silently skipped: a pair that
 fails to run is reported at the end and the exit status is non-zero.
@@ -28,13 +34,43 @@ from pathlib import Path
 from evalconfig import KOMI_BY_RULESET
 
 
-def model_list(directory: Path, include: str, skip: str) -> list[Path]:
+def model_list(directories: list[Path], include: str, skip: str) -> dict[str, Path]:
+    """name -> path over every directory, because models live in per-run directories.
+
+    A table row is a *name*, so two different files sharing one name would merge
+    into a single row without anyone noticing.  Same name + same size is the same
+    model copied twice (the repo keeps a few in `models/`); anything else stops.
+    """
     skipped = [name for name in skip.split(",") if name.strip()]
-    files = [p for p in sorted(directory.glob("*.bin"))
-             if include in p.name and p.stem not in skipped]
-    if not files:
-        raise SystemExit(f"no *.bin under {directory}" + (f" matching {include!r}" if include else ""))
-    return files
+    index: dict[str, Path] = {}
+    for directory in directories:
+        if not directory.is_dir():
+            raise SystemExit(f"not a directory: {directory}")
+        found = [p for p in sorted(directory.glob("*.bin"))
+                 if include in p.name and p.stem not in skipped]
+        if not found:
+            raise SystemExit(f"no *.bin under {directory}"
+                             + (f" matching {include!r}" if include else ""))
+        for path in found:
+            previous = index.get(path.stem)
+            if previous is not None:
+                if previous.stat().st_size != path.stat().st_size:
+                    raise SystemExit(f"two different models are both named {path.stem}: "
+                                     f"{previous} and {path}")
+                print(f"note: {path.stem} is in two directories; using {previous}", flush=True)
+                continue
+            index[path.stem] = path
+    return index
+
+
+def resolve(index: dict[str, Path], name: str):
+    """A name from --pair/--ladder to a path (or "random", played by the binary)."""
+    if name == "random":
+        return "random"
+    if name not in index:
+        raise SystemExit(f"unknown model {name!r} (known: "
+                         + ", ".join(sorted(index)) + ")")
+    return index[name]
 
 
 def play_pair(binary: Path, a: Path | str, b: Path | str, args, out: Path) -> dict:
@@ -72,18 +108,28 @@ def play_pair(binary: Path, a: Path | str, b: Path | str, args, out: Path) -> di
     }
 
 
-def tasks_for(models: list[Path], args) -> list[tuple[Path | str, Path | str]]:
+def tasks_for(index: dict[str, Path], args) -> list[tuple[Path | str, Path | str]]:
+    if args.pair:
+        if args.ladder or args.random_only or args.random_anchor:
+            raise SystemExit("--pair 不能和 --ladder/--random-only/--random-anchor 一起用")
+        tasks = []
+        for spec in args.pair:
+            a, sep, b = spec.partition(":")
+            if not sep or not a or not b:
+                raise SystemExit(f"--pair 要写成 甲:乙，读到 {spec!r}")
+            tasks.append((resolve(index, a), resolve(index, b)))
+        return tasks
+    models = list(index.values())
     if args.random_only:
         return [(path, "random") for path in models]
     if args.ladder:
         # 只要相邻两档：实力差太远的对局只会给出 20-0 和一个没有意义的下界。
         order = [line.strip() for line in Path(args.ladder).read_text(encoding="utf-8").splitlines()
                  if line.strip() and not line.startswith("#")]
-        by_name = {path.stem: path for path in models}
-        missing = [name for name in order if name not in by_name]
+        missing = [name for name in order if name not in index]
         if missing:
             raise SystemExit("ladder names not found: " + ", ".join(missing))
-        rungs = [by_name[name] for name in order]
+        rungs = [resolve(index, name) for name in order]
         tasks = list(zip(rungs, rungs[1:]))
         if args.random_anchor:
             # 只有最弱那一档跟随机下：它给出绝对 0 分，其余各档的分差由梯子递推，
@@ -96,9 +142,16 @@ def tasks_for(models: list[Path], args) -> list[tuple[Path | str, Path | str]]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 description=__doc__)
     ap.add_argument("--binary", type=Path, default=Path("build/shuyi_selfplay_gpu"))
-    ap.add_argument("--models", type=Path, default=Path("models"))
+    ap.add_argument("--models", type=Path, nargs="+", default=[Path("models")],
+                    help="directories of *.bin (repeatable); models live next to the run "
+                         "that produced them, so one directory is rarely enough")
+    ap.add_argument("--pair", action="append", default=[],
+                    help="play only this pair, written A:B (repeatable).  Use it to glue new "
+                         "models into an existing table without re-measuring what is already "
+                         "there.  Names must be in --models; 'random' is also accepted.")
     ap.add_argument("--include", default="", help="only model names containing this")
     ap.add_argument("--skip", default="", help="comma separated model names to leave out")
     ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass")
@@ -137,16 +190,19 @@ def main() -> int:
         futures = [pool.submit(play_pair, args.binary, a, b, args, args.out) for a, b in pairs]
         for i, future in enumerate(futures, 1):
             result = future.result()
+            elapsed = time.time() - started
             if "error" in result:
                 failed.append(result)
                 print(f"  !! {result['a']} vs {result['b']}: {result['error']}", flush=True)
-            else:
-                rows.append(result)
-            if i % 10 == 0 or i == len(futures):
-                elapsed = time.time() - started
-                games = sum(r["games"] for r in rows)
-                print(f"  {i}/{len(futures)} pairs, {games} games, "
-                      f"{games / max(elapsed, 1e-9):.2f} games/s, {elapsed:.0f}s", flush=True)
+                continue
+            rows.append(result)
+            games = sum(r["games"] for r in rows)
+            # One line per pair, because a pair is minutes of GPU: waiting for a
+            # round number of pairs means watching nothing for a quarter of an hour.
+            print(f"  {i}/{len(futures)} {result['a']} vs {result['b']}: "
+                  f"{result['wins']}-{result['draws']}-{result['losses']}  "
+                  f"{games} games {games / max(elapsed, 1e-9):.2f} games/s {elapsed:.0f}s",
+                  flush=True)
 
     table = args.out / "results.csv"
     with table.open("w", newline="") as handle:

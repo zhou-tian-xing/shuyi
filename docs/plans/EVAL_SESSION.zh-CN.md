@@ -46,6 +46,19 @@ python training/leaderboard_import.py
 python training/leaderboard.py --write-ladder runs/eval/ladder_order.txt
 ```
 
+`leaderboard_import.py` 按每个来源文件里记的规则、A 值和预算重建分表。**新一轮训练只产出
+十几个新模型时不要重测整张表**：用 `roundrobin.py --pair 甲:乙` 只下新链接（新模型串成链，
+再加几场跨段对局，每场 300 局），然后
+
+```bash
+python training/leaderboard_import.py --into runs/leaderboard/matches_64.csv \
+    --root runs/eval/new64
+```
+
+把它们加到已经在用的表里。历史对局的来源文件多半没写评测条件，重建只会得到一张空表，
+所以这条路是"往表里加"而不是"按来源重建"；`--into` 认表名里的预算、记来源账本，
+重跑不会翻倍。
+
 模型上传要逐个点名：`python training/ssh.py put` 只接受成对的「本地 远端」，例如
 
 ```bash
