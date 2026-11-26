@@ -30,6 +30,16 @@ std::string stringOf(const JsonValue& object, const char* key) {
     return value && value->isString() ? value->asString() : std::string();
 }
 
+// Same point of the board, under a symmetry that leaves the position unchanged.
+bool symmetricCells(int a, int b, std::uint8_t mask) {
+    for (int symmetry = 0; symmetry < Position::kSymmetryCount; ++symmetry) {
+        if (((mask >> symmetry) & 1u) != 0u && Position::transformCell(a, symmetry) == b) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 double displayWinRate(const CellAnalysisView& cell) {
@@ -62,6 +72,32 @@ std::vector<int> rankAnalysisCells(const EngineAnalysisView& view, const Positio
         return lhs.move == view.best && rhs.move != view.best;
     });
     return order;
+}
+
+std::vector<int> distinctSymmetricCells(const std::vector<int>& ranked,
+                                        const EngineAnalysisView& view,
+                                        const Position& position) {
+    // A panel row is a *move*, and the eight isometries of an empty board make
+    // eight placements the same move: they search to the same value and teach
+    // the same thing. Printing each of them filled all four rows with one move
+    // and pushed the real second choice off the panel.
+    const std::uint8_t mask = position.symmetryMask();
+    if (mask <= 1u) return ranked;  // identity only: nothing is equivalent
+    std::vector<int> unique;
+    unique.reserve(ranked.size());
+    for (int index : ranked) {
+        const Move move = view.cells[index].move;
+        bool duplicate = false;
+        for (int kept : unique) {
+            const Move other = view.cells[kept].move;
+            if (other.number == move.number && symmetricCells(other.cell, move.cell, mask)) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) unique.push_back(index);
+    }
+    return unique;
 }
 
 Move parseMoveToken(const std::string& text) {

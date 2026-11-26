@@ -147,6 +147,36 @@ void testRankTiedAnalysisCells() {
           "an exact tie keeps the engine's representative");
 }
 
+void testDistinctSymmetricCells() {
+    // An empty board is symmetric under all eight isometries, so the four
+    // corners holding the same number are one move.  A number used on a
+    // different orbit is a different move even when the cells are symmetric.
+    const char* payload =
+        R"({"engine":"mcts_nn","turn":"red","visits":400,"winrate":0.5,"best":"a1:4",)"
+        R"("cells":[{"cell":"a1","number":4,"winrate":0.52,"visits":100},)"
+        R"({"cell":"i1","number":4,"winrate":0.52,"visits":100},)"
+        R"({"cell":"a9","number":4,"winrate":0.52,"visits":100},)"
+        R"({"cell":"i9","number":4,"winrate":0.52,"visits":100},)"
+        R"({"cell":"b1","number":5,"winrate":0.48,"visits":90}]})";
+    EngineAnalysisView view;
+    check(parseAnalysis(payload, view, nullptr), "symmetric fixture parses");
+    const Position empty;
+    const auto ranked = rankAnalysisCells(view, empty);
+    check(ranked.size() == 5, "the ranking keeps every sampled cell for the board");
+    const auto rows = distinctSymmetricCells(ranked, view, empty);
+    check(rows.size() == 2, "one row per move, not per symmetric cell");
+    check(view.cells[rows[0]].move.number == 4 && view.cells[rows[1]].move.number == 5,
+          "the surviving rows are the two distinct moves");
+
+    // One stone breaks the symmetry: only the identity is left, and the cells
+    // are genuinely different moves again.  The stone has to sit off every axis
+    // -- a centre or a corner stone still fixes part of the board.
+    Position played;
+    check(played.play(Move(sq("d3"), 9)), "occupy an off-axis cell");
+    check(distinctSymmetricCells(ranked, view, played).size() == 5,
+          "an asymmetric position keeps every cell");
+}
+
 void testBrokenInput() {
     EngineAnalysisView view;
     std::string error;
@@ -172,6 +202,7 @@ int main() {
     testExactAnalysisCells();
     testRankAnalysisCells();
     testRankTiedAnalysisCells();
+    testDistinctSymmetricCells();
     testBrokenInput();
     testMoveTokens();
     if (failures == 0) std::printf("engine view tests passed\n");

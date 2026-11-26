@@ -1930,9 +1930,12 @@ void drawEngineAnalysis(HDC dc, const PanelRects& rects, const std::vector<int>&
     }
 
     if (isMcts && !rankedCells.empty()) {
-        const int rows = std::min<int>(4, static_cast<int>(rankedCells.size()));
-        for (int i = 0; i < rows; ++i) {
-            const auto& candidate = analysis.cells[rankedCells[i]];
+        // One row per move: rotations of the same placement would otherwise take
+        // every slot on a symmetric board.
+        const std::vector<int> rows = distinctSymmetricCells(rankedCells, analysis, g_position);
+        const int count = std::min<int>(4, static_cast<int>(rows.size()));
+        for (int i = 0; i < count; ++i) {
+            const auto& candidate = analysis.cells[rows[i]];
             const double rate = std::clamp(displayWinRate(candidate), 0.0, 1.0);
             const int barTop = y + i * scale(20);
             RECT bar{left + scale(58), barTop + scale(6), box.right - scale(16), barTop + scale(17)};

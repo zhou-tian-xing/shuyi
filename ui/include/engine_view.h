@@ -63,6 +63,11 @@ struct EngineAnalysisView {
 
 double displayWinRate(const CellAnalysisView& cell);
 std::vector<int> rankAnalysisCells(const EngineAnalysisView& view, const Position& position);
+// The same ranking with symmetric equivalents collapsed to their best
+// representative: for a list of moves, not for the board.
+std::vector<int> distinctSymmetricCells(const std::vector<int>& ranked,
+                                        const EngineAnalysisView& view,
+                                        const Position& position);
 
 // "c8:3" (the engine's compact form), "c8 3" (the protocol's move reply) or
 // "pass".  Returns an invalid Move when the text is not a move.
