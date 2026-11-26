@@ -39,6 +39,41 @@ REPO = Path(__file__).resolve().parents[1]
 ANCHOR = 0.5
 
 
+def diversity(data):
+    """How much of a shard is the same position again, up to the board's symmetry.
+
+    The rules are invariant under the eight symmetries of the 9x9 board (the score
+    neighbourhood and the blocking rule are both four-neighbour), so two positions
+    that differ only by a rotation are the same training example.  Repeats inside
+    one game are cheap; repeats *across* games mean the same state was labelled
+    twice, which is the part of a shard that buys nothing.
+    """
+    boards = data["board"].reshape(-1, 9, 9).astype(np.int8)
+    hands = data["hand"].reshape(-1, 18).astype(np.uint8)
+    sides = data["side"].astype(np.uint8)
+    games = data["game"]
+    seen, order = {}, {}
+    for i in range(len(data)):
+        board = boards[i]
+        keys = []
+        for turns in range(4):
+            rotated = np.rot90(board, turns)
+            for flip in (False, True):
+                bent = np.fliplr(rotated) if flip else rotated
+                keys.append((bent.tobytes(), hands[i].tobytes(), sides[i]))
+        key = min(keys)
+        seen[key] = seen.get(key, 0) + 1
+        order.setdefault(key, games[i])
+    repeats = sum(count - 1 for count in seen.values())
+    cross = sum(count - 1 for key, count in seen.items() if count > 1)
+    shared = sum(1 for key, count in seen.items()
+                 if count > 1 and any(order[key] != g for g in games))
+    print(f"positions {len(data)}, distinct up to symmetry {len(seen)}")
+    print(f"repeats {repeats} ({repeats / max(1, len(data)):.1%}) "
+          f"in {sum(1 for c in seen.values() if c > 1)} groups, largest {max(seen.values())}")
+    print(f"groups whose copies come from different games: {shared}")
+
+
 def load(path, channels, blocks, planes, ruleset, globals_width):
     model = T.ResNet(channels, blocks, planes, ruleset, globals_width)
     model.use_score_head = True
@@ -54,11 +89,16 @@ def main():
     p.add_argument("--root", type=Path, default=REPO / "runs/training")
     p.add_argument("--batch", type=int, default=256)
     p.add_argument("--device", default="cpu")
+    p.add_argument("--diversity", action="store_true",
+                   help="only report duplicate positions, skip the model sweep")
     args = p.parse_args()
 
     data, version, ruleset = T._read_shard(args.shard)
     print(f"{args.shard.name}: {len(data)} positions, version {version}, ruleset {ruleset}, "
           f"{len(np.unique(data['game']))} games")
+    if args.diversity:
+        diversity(data)
+        return
 
     paths = []
     if args.models:
