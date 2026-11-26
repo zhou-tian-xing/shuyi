@@ -73,8 +73,10 @@ def resolve(index: dict[str, Path], name: str):
     return index[name]
 
 
-def play_pair(binary: Path, a: Path | str, b: Path | str, args, out: Path) -> dict:
+def play_pair(binary: Path, a: Path | str, b: Path | str, args, out: Path,
+              games: int | None = None) -> dict:
     """One match.  `b` may be the string "random", which the binary plays itself."""
+    games = args.games if games is None else games
     a_path, a_name = (a, Path(str(a)).stem)
     b_path, b_name = (b, "random") if str(b) == "random" else (b, Path(str(b)).stem)
     target = out / f"{a_name}__{b_name}.json"
@@ -83,8 +85,8 @@ def play_pair(binary: Path, a: Path | str, b: Path | str, args, out: Path) -> di
         "--model", str(a_path), "--name-a", a_name,
         "--model-b", str(b_path), "--name-b", b_name,
         "--ruleset", args.ruleset, "--komi", f"{args.komi}",
-        "--visits", str(args.visits), "--games", str(args.games),
-        "--batch-games", str(min(args.games, args.batch_games)),
+        "--visits", str(args.visits), "--games", str(games),
+        "--batch-games", str(min(games, args.batch_games)),
         "--chunk", str(args.chunk), "--seed", str(args.seed),
         "--csv", str(target.with_suffix(".csv")), "--json", str(target),
     ]
@@ -108,7 +110,18 @@ def play_pair(binary: Path, a: Path | str, b: Path | str, args, out: Path) -> di
     }
 
 
-def tasks_for(index: dict[str, Path], args) -> list[tuple[Path | str, Path | str]]:
+def tasks_for(index: dict[str, Path], args) -> list[tuple[Path | str, Path | str, int]]:
+    if getattr(args, "plan", None):
+        # A plan is "A:B" -> games, produced by pair_budget.py from the current
+        # ratings: tight pairs get hundreds of games, lopsided ones a hundred.
+        plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        tasks = []
+        for key, games in plan.items():
+            a, _, b = key.partition("|")
+            if not b:
+                raise SystemExit(f"plan keys look like A|B, read {key!r}")
+            tasks.append((resolve(index, a), resolve(index, b), int(games)))
+        return tasks
     if args.pair:
         if args.ladder or args.random_only or args.random_anchor:
             raise SystemExit("--pair 不能和 --ladder/--random-only/--random-anchor 一起用")
@@ -117,11 +130,11 @@ def tasks_for(index: dict[str, Path], args) -> list[tuple[Path | str, Path | str
             a, sep, b = spec.partition(":")
             if not sep or not a or not b:
                 raise SystemExit(f"--pair 要写成 甲:乙，读到 {spec!r}")
-            tasks.append((resolve(index, a), resolve(index, b)))
+            tasks.append((resolve(index, a), resolve(index, b), args.games))
         return tasks
     models = list(index.values())
     if args.random_only:
-        return [(path, "random") for path in models]
+        return [(path, "random", args.games) for path in models]
     if args.ladder:
         # 只要相邻两档：实力差太远的对局只会给出 20-0 和一个没有意义的下界。
         order = [line.strip() for line in Path(args.ladder).read_text(encoding="utf-8").splitlines()
@@ -130,15 +143,15 @@ def tasks_for(index: dict[str, Path], args) -> list[tuple[Path | str, Path | str
         if missing:
             raise SystemExit("ladder names not found: " + ", ".join(missing))
         rungs = [resolve(index, name) for name in order]
-        tasks = list(zip(rungs, rungs[1:]))
+        tasks = [(a, b, args.games) for a, b in zip(rungs, rungs[1:])]
         if args.random_anchor:
             # 只有最弱那一档跟随机下：它给出绝对 0 分，其余各档的分差由梯子递推，
             # 不需要每个人都去打随机（那样每场都是 40-0，什么也读不出来）。
-            tasks.append((rungs[0], "random"))
+            tasks.append((rungs[0], "random", args.games))
         return tasks
     if args.random_anchor:
         raise SystemExit("--random-anchor 要配合 --ladder：随机锚只挂在最弱那一档上")
-    return list(itertools.combinations(models, 2))
+    return [(a, b, args.games) for a, b in itertools.combinations(models, 2)]
 
 
 def main() -> int:
@@ -152,6 +165,8 @@ def main() -> int:
                     help="play only this pair, written A:B (repeatable).  Use it to glue new "
                          "models into an existing table without re-measuring what is already "
                          "there.  Names must be in --models; 'random' is also accepted.")
+    ap.add_argument("--plan", type=Path,
+                    help="JSON of \"A|B\" -> games; overrides --pair and sets the counts")
     ap.add_argument("--include", default="", help="only model names containing this")
     ap.add_argument("--skip", default="", help="comma separated model names to leave out")
     ap.add_argument("--ruleset", choices=["classic", "blocking", "nopass"], default="nopass")
@@ -187,7 +202,8 @@ def main() -> int:
     rows: list[dict] = []
     failed: list[dict] = []
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = [pool.submit(play_pair, args.binary, a, b, args, args.out) for a, b in pairs]
+        futures = [pool.submit(play_pair, args.binary, a, b, args, args.out, n)
+                   for a, b, n in pairs]
         for i, future in enumerate(futures, 1):
             result = future.result()
             elapsed = time.time() - started

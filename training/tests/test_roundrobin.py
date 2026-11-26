@@ -32,7 +32,8 @@ def make_files(directory: str, names, size=4):
 
 
 def args(**overrides):
-    base = dict(pair=[], ladder=None, random_only=False, random_anchor=False)
+    base = dict(pair=[], ladder=None, random_only=False, random_anchor=False,
+                plan=None, games=20)
     base.update(overrides)
     return argparse.Namespace(**base)
 
@@ -60,7 +61,7 @@ def test_pair_specs_are_resolved_and_ordered():
         index = roundrobin.model_list([roundrobin.Path(one)], "", "")
         tasks = roundrobin.tasks_for(
             index, args(pair=["weak:strong", "strong:random"]))
-        check([os.path.basename(str(a)) if a != "random" else a for a, _ in tasks]
+        check([os.path.basename(str(a)) if a != "random" else a for a, _, _n in tasks]
               == ["weak.bin", "strong.bin"], f"pairs keep the order given, got {tasks}")
         check(tasks[1][1] == "random", "random is passed through to the binary")
         check(roundrobin.tasks_for(index, args(random_only=True))[0][1] == "random",
@@ -97,7 +98,7 @@ def test_ladder_plays_adjacent_rungs_only():
         with open(ladder, "w", encoding="utf-8") as handle:
             handle.write("# weakest first\nw\nm\ns\n")
         tasks = roundrobin.tasks_for(index, args(ladder=ladder))
-        got = [(os.path.basename(str(a)), os.path.basename(str(b))) for a, b in tasks]
+        got = [(os.path.basename(str(a)), os.path.basename(str(b))) for a, b, _n in tasks]
         check(got == [("w.bin", "m.bin"), ("m.bin", "s.bin")],
               f"a ladder is a chain, not a round robin, got {got}")
         anchored = roundrobin.tasks_for(index, args(ladder=ladder, random_anchor=True))
