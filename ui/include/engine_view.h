@@ -61,6 +61,9 @@ struct EngineAnalysisView {
     std::array<bool, kCells> hasCell{};
 };
 
+double displayWinRate(const CellAnalysisView& cell);
+std::vector<int> rankAnalysisCells(const EngineAnalysisView& view, const Position& position);
+
 // "c8:3" (the engine's compact form), "c8 3" (the protocol's move reply) or
 // "pass".  Returns an invalid Move when the text is not a move.
 Move parseMoveToken(const std::string& text);

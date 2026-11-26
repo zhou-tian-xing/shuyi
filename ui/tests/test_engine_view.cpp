@@ -103,6 +103,50 @@ void testExactAnalysisCells() {
           "a drawn cell is 50% with an exact zero margin");
 }
 
+void testRankAnalysisCells() {
+    const char* payload =
+        R"({"engine":"mcts_nn","best":"b1:1","visits":27382,"cells":[)"
+        R"({"cell":"b1","number":1,"winrate":0.18,"visits":166},)"
+        R"({"cell":"c7","number":1,"winrate":0.25,"visits":5900},)"
+        R"({"cell":"f5","number":1,"winrate":0.30,"visits":4500},)"
+        R"({"cell":"a2","number":1,"winrate":1.0,"visits":1},)"
+        R"({"cell":"d1","number":1,"winrate":1.0,"visits":0},)"
+        R"({"cell":"e3","number":1,"winrate":1.0,"visits":5000}]})";
+    EngineAnalysisView view;
+    Position position;
+    check(parseAnalysis(payload, view, nullptr), "mixed search snapshot parses");
+    check(position.play(Move(sq("e3"), 2)), "occupy the stale suggestion's cell");
+    check(rankAnalysisCells(view, position) ==
+              std::vector<int>{sq("f5"), sq("c7"), sq("a2"), sq("b1")},
+          "Wilson lower bound beats the engine's best, more visits alone and a lucky sample");
+
+    view.cells[sq("d1")].proven = true;
+    const auto solvedOrder = rankAnalysisCells(view, position);
+    check(!solvedOrder.empty() && solvedOrder.front() == sq("d1"),
+          "a proven win with zero visits uses its exact win rate");
+
+    view.cells[sq("b1")].proven = true;
+    view.cells[sq("b1")].winrate = 0.0;
+    const auto losingOrder = rankAnalysisCells(view, position);
+    check(!losingOrder.empty() && losingOrder.back() == sq("b1"),
+          "a proven loss ranks below a promising estimate");
+}
+
+void testRankTiedAnalysisCells() {
+    EngineAnalysisView view;
+    check(parseAnalysis(kExactAnalysis, view, nullptr), "exact search snapshot parses");
+    auto& other = view.cells[sq("a1")];
+    other.winrate = 1.0;
+    other.averageScore = 4.0;
+    check(rankAnalysisCells(view, Position{}) ==
+              std::vector<int>{sq("a1"), sq("e5"), sq("c3")},
+          "proven wins are ranked by margin when their rates match");
+    other.averageScore = 3.0;
+    check(rankAnalysisCells(view, Position{}) ==
+              std::vector<int>{sq("e5"), sq("a1"), sq("c3")},
+          "an exact tie keeps the engine's representative");
+}
+
 void testBrokenInput() {
     EngineAnalysisView view;
     std::string error;
@@ -126,6 +170,8 @@ void testMoveTokens() {
 int main() {
     testAnalysis();
     testExactAnalysisCells();
+    testRankAnalysisCells();
+    testRankTiedAnalysisCells();
     testBrokenInput();
     testMoveTokens();
     if (failures == 0) std::printf("engine view tests passed\n");

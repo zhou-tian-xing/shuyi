@@ -1,7 +1,9 @@
 #include "engine_view.h"
 
 #include "json.h"
+#include "shuyi/format.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 
@@ -29,6 +31,38 @@ std::string stringOf(const JsonValue& object, const char* key) {
 }
 
 } // namespace
+
+double displayWinRate(const CellAnalysisView& cell) {
+    return cell.proven ? cell.winrate : winRateLowerBound(cell.winrate, cell.visits);
+}
+
+std::vector<int> rankAnalysisCells(const EngineAnalysisView& view, const Position& position) {
+    std::vector<int> order;
+    for (int index = 0; index < kCells; ++index) {
+        const CellAnalysisView& cell = view.cells[index];
+        if (view.hasCell[index] && cell.hasData && (cell.proven || cell.visits > 0) &&
+            position.isLegal(cell.move)) {
+            order.push_back(index);
+        }
+    }
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+        const CellAnalysisView& lhs = view.cells[a];
+        const CellAnalysisView& rhs = view.cells[b];
+        const double lhsRate = displayWinRate(lhs);
+        const double rhsRate = displayWinRate(rhs);
+        if (lhsRate != rhsRate) return lhsRate > rhsRate;
+        if (lhs.proven != rhs.proven) return lhs.proven;
+        if (lhs.proven) {
+            if (lhs.hasScore != rhs.hasScore) return lhs.hasScore;
+            if (lhs.hasScore && lhs.averageScore != rhs.averageScore) {
+                return lhs.averageScore > rhs.averageScore;
+            }
+        }
+        // Prefer the engine's representative when symmetric moves are tied.
+        return lhs.move == view.best && rhs.move != view.best;
+    });
+    return order;
+}
 
 Move parseMoveToken(const std::string& text) {
     if (text.empty() || text == "none" || text == "pass") return Move{};
@@ -113,8 +147,10 @@ bool parseAnalysis(const std::string& json, EngineAnalysisView& out, std::string
             if (!item.isObject()) continue;
             int index = 0;
             if (!parseSquare(stringOf(item, "cell"), index)) continue;
+            const int number = intOf(item, "number");
+            if (number < 1 || number > 9) continue;
             CellAnalysisView info;
-            info.move = Move(index, static_cast<std::uint8_t>(intOf(item, "number")));
+            info.move = Move(index, number);
             info.winrate = doubleOf(item, "winrate", 0.5);
             info.visits = intOf(item, "visits");
             info.averageScore = doubleOf(item, "score");

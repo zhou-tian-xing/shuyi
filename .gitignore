@@ -1,6 +1,7 @@
 # Build trees and packaged output
 build/
-build-cuda/
+/build-cuda/*
+!/build-cuda/build_cuda.bat
 build-tools/
 build_ui_only/
 build_engine_only/

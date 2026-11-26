@@ -1685,22 +1685,6 @@ constexpr double kMarkVisitFloor = 0.05;
 // board, which reads as "the engine proved a unique answer" -- it did not.
 constexpr int kMarkAlwaysShow = 8;
 
-// Remembers the marked cell so ties do not alternate on every refresh.
-int g_markedBestCell = -1;
-
-// The engine's recommended move, as the cell the board can mark.  The mark and
-// the summary must describe this one cell: the engine picks the move, and a front
-// end that ranks cells on its own can name a different one (two symmetric squares
-// are one move, and the panel used to say "best d6-1" while d4-1 was highlighted).
-const CellAnalysisView* analysisBestCell() {
-    const Move best = g_engineAnalysis.best;
-    if (!best.valid() || isPass(best)) return nullptr;
-    if (best.cell < 0 || best.cell >= kCells) return nullptr;
-    if (!g_engineAnalysis.hasCell[best.cell]) return nullptr;
-    const CellAnalysisView& info = g_engineAnalysis.cells[best.cell];
-    return info.hasData ? &info : nullptr;
-}
-
 COLORREF markColor(double relative, bool best) {
     if (best) return RGB(126, 196, 255); // light blue
     const double t = std::clamp(1.0 + relative / kMarkWinRateWindow, 0.0, 1.0);
@@ -1709,111 +1693,44 @@ COLORREF markColor(double relative, bool best) {
     return mixColor(red, green, t);
 }
 
-void drawAnalysisMarks(HDC dc, const Layout& layout) {
+void drawAnalysisMarks(HDC dc, const Layout& layout, const std::vector<int>& rankedCells) {
+    const auto& analysis = g_engineAnalysis;
+    if (rankedCells.empty()) return;
+    const double bestRate = displayWinRate(analysis.cells[rankedCells.front()]);
     const int cell = layout.cell;
     const RECT& board = layout.board;
 
-    // A solved cell is an exact result, so it is ranked by its win rate; an
-    // estimate is ranked by its Wilson lower bound.  A solved 100% in one visit
-    // is therefore never outranked by a half-explored 55%, and a solved line is
-    // never hidden by the visit floor below.
-    const auto cellScore = [](const CellAnalysisView& info) {
-        return info.proven ? info.winrate : winRateLowerBound(info.winrate, info.visits);
-    };
-    long long bestVisits = 0;
-    double markedScore = -1.0;
-    for (int cellIndex = 0; cellIndex < kCells; ++cellIndex) {
-        if (!g_engineAnalysis.hasCell[cellIndex]) continue;
-        const auto& info = g_engineAnalysis.cells[cellIndex];
-        if (!info.hasData) continue;
-        bestVisits = std::max<long long>(bestVisits, info.visits);
-        markedScore = std::max(markedScore, cellScore(info));
+    int mostVisits = 0;
+    for (int index : rankedCells) {
+        mostVisits = std::max(mostVisits, analysis.cells[index].visits);
     }
-    if (markedScore < 0.0) return;
-
-    // The panel names the engine's recommended move, so the mark goes there too.
-    // It used to be chosen independently by the confidence bound, which lands on
-    // whichever cell of an equivalence class happens to rank first: the board then
-    // highlighted d4-1 while the panel said "best d6-1" (the same move under the
-    // board's symmetry), and the two numbers could not agree because the panel
-    // measured the bound over the root's visits and the cell over its own.
-    int bestCell = -1;
-    if (const CellAnalysisView* chosen = analysisBestCell()) {
-        bestCell = chosen->move.cell;
-    }
-    double bestScore = -1.0;
-    if (bestCell >= 0) {
-        bestScore = cellScore(g_engineAnalysis.cells[bestCell]);
-    }
-    for (int cellIndex = 0; cellIndex < kCells && bestCell < 0; ++cellIndex) {
-        if (g_position.stoneAt(cellIndex) != 0) continue;  // only empty cells can be played
-        if (!g_engineAnalysis.hasCell[cellIndex]) continue;
-        const auto& info = g_engineAnalysis.cells[cellIndex];
-        // A solved cell is a result even with zero visits: the exact endgame
-        // solver answers without sampling, so requiring visits here dropped every
-        // cell of a solved position.
-        if (!info.hasData || (info.visits <= 0 && !info.proven)) continue;
-        if (cellScore(info) > bestScore) {
-            bestCell = cellIndex;
-            bestScore = cellScore(info);
-        }
-    }
-    g_markedBestCell = bestCell;
-    if (bestCell < 0) return;
 
     const int radius = static_cast<int>(cell * 0.40);
     const int corner = std::max(2, radius / 4);
     // Three text rows share the mark's height.
     const int rowHeight = std::max(8, (radius * 2) / 3);
     const int textTop = -radius;
-    // Rank first: the top few marks are drawn no matter what, because a search
-    // that pours almost every visit into one move would otherwise leave a board
-    // with a single mark and look like "the engine decided".
-    std::array<int, kCells> rank{};
-    rank.fill(-1);
-    {
-        std::vector<int> order;
-        for (int cellIndex = 0; cellIndex < kCells; ++cellIndex) {
-            if (!g_engineAnalysis.hasCell[cellIndex]) continue;
-            if (!g_engineAnalysis.cells[cellIndex].hasData) continue;
-            order.push_back(cellIndex);
-        }
-        std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
-            return cellScore(g_engineAnalysis.cells[a]) > cellScore(g_engineAnalysis.cells[b]);
-        });
-        for (std::size_t i = 0; i < order.size(); ++i) rank[order[i]] = static_cast<int>(i);
-    }
-    for (int cellIndex = 0; cellIndex < kCells; ++cellIndex) {
-        if (g_position.stoneAt(cellIndex) != 0) continue;
-        if (!g_engineAnalysis.hasCell[cellIndex]) continue;
-        const auto& info = g_engineAnalysis.cells[cellIndex];
-        if (!info.hasData) continue;
-        const bool topMark = rank[cellIndex] >= 0 && rank[cellIndex] < kMarkAlwaysShow;
-        const double score = cellScore(info);
-        const double relative = score - markedScore;
+    for (std::size_t rank = 0; rank < rankedCells.size(); ++rank) {
+        const int cellIndex = rankedCells[rank];
+        const auto& info = analysis.cells[cellIndex];
+        const bool topMark = rank < kMarkAlwaysShow;
+        const double rate = displayWinRate(info);
+        const double relative = rate - bestRate;
         // A solved cell is a fact, not a sample: draw it even when its win rate is
         // far below the best, because the number it carries is the margin.  The
         // window exists to keep estimates from crowding the board.
         if (!topMark && !info.proven && relative < -kMarkWinRateWindow) continue;
-        if (!topMark && !info.proven && bestVisits > 0 &&
-            info.visits < static_cast<long long>(bestVisits * kMarkVisitFloor)) {
+        if (!topMark && !info.proven &&
+            info.visits < static_cast<int>(mostVisits * kMarkVisitFloor)) {
             continue;
         }
-        const bool best = cellIndex == bestCell;
-        const COLORREF colour = markColor(relative, best);
+        const COLORREF colour = markColor(relative, rank == 0);
         const int cx = board.left + xOf(cellIndex) * cell + cell / 2;
         const int cy = board.top + (8 - yOf(cellIndex)) * cell + cell / 2;
         const RECT mark{cx - radius, cy - radius, cx + radius, cy + radius};
         roundRect(dc, mark, corner, mixColor(kBoard, colour, 0.62), colour, std::max(1, scale(1)));
         int y = cy + textTop;
-        // A solved cell shows its exact margin instead of a win rate: "loses by 2"
-        // and "loses by 18" are both 0% and would read identically.  An estimate
-        // shows the Wilson lower bound, so a single lucky sample is never printed
-        // as "100%" -- that reads like a proof, and only `proven` is a proof.
-        // Row 1 is always the win rate: a solved cell is exactly 0 / 50 / 100, an
-        // estimate is its Wilson lower bound (so one lucky sample is never printed
-        // as 100% -- only `proven` is a proof).
-        drawTextAt(dc, formatWinRate(cellScore(info)), cx - radius, y, radius * 2, rowHeight,
+        drawTextAt(dc, formatWinRate(rate), cx - radius, y, radius * 2, rowHeight,
                    g_fontSmall, RGB(28, 32, 38));
         y += rowHeight;
         // Row 2 is the visit count, and a solved cell has none: the answer did not
@@ -1836,7 +1753,7 @@ void drawAnalysisMarks(HDC dc, const Layout& layout) {
     }
 }
 
-void drawBoard(HDC dc, const Layout& layout) {
+void drawBoard(HDC dc, const Layout& layout, const std::vector<int>& rankedCells) {
     const int cell = layout.cell;
     const RECT& board = layout.board;
 
@@ -1851,8 +1768,6 @@ void drawBoard(HDC dc, const Layout& layout) {
 
     // The analysis overlay is drawn after the grid so the marks sit on top of the
     // lines, exactly like a piece would.
-    const bool showHeat = g_engineAnalysis.valid && g_engineChoice != EngineChoice::Off;
-
     for (int i = 0; i <= 9; ++i) {
         const int x = board.left + i * cell;
         const int y = board.top + i * cell;
@@ -1860,7 +1775,7 @@ void drawBoard(HDC dc, const Layout& layout) {
         line(dc, board.left, y, board.right, y, kBoardLine, i == 0 || i == 9 ? 2 : 1);
     }
 
-    if (showHeat) drawAnalysisMarks(dc, layout);
+    drawAnalysisMarks(dc, layout, rankedCells);
 
     const int stars[5][2] = {{2, 2}, {6, 2}, {4, 4}, {2, 6}, {6, 6}};
     for (const auto& star : stars) {
@@ -1924,7 +1839,7 @@ void drawBoard(HDC dc, const Layout& layout) {
     // overlapping highlights on a 9x9 board read as noise.
 }
 
-void drawEngineAnalysis(HDC dc, const PanelRects& rects) {
+void drawEngineAnalysis(HDC dc, const PanelRects& rects, const std::vector<int>& rankedCells) {
     const RECT& box = rects.analysis;
     if (box.bottom - box.top < scale(54)) return;
     roundRect(dc, box, scale(9), kPanelDeep, RGB(56, 64, 78));
@@ -1960,23 +1875,22 @@ void drawEngineAnalysis(HDC dc, const PanelRects& rects) {
     }
 
     const auto& analysis = g_engineAnalysis;
-    const std::wstring best = L"最佳 " + widen(squareName(analysis.best.cell)) + L"-" +
-                              std::to_wstring(static_cast<int>(analysis.best.number));
+    const bool isMcts = analysis.kind.rfind("mcts", 0) == 0;
+    const CellAnalysisView* bestCell = rankedCells.empty() ? nullptr
+                                                         : &analysis.cells[rankedCells.front()];
+    const Move bestMove = isMcts && bestCell ? bestCell->move : analysis.best;
+    const std::wstring best = L"最佳 " + widen(squareName(bestMove.cell)) + L"-" +
+                              std::to_wstring(static_cast<int>(bestMove.number));
     drawTextAt(dc, best, left, y, width, scale(22), g_fontUi, kCyan,
                DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     y += scale(23);
     std::wstring metric;
-    if (analysis.kind.rfind("mcts", 0) == 0) {
-        // Describe the same cell the board marks, with that cell's own sample
-        // count.  Measuring the bound over the root's visits (which is what this
-        // panel used to do) prints a number the board can never agree with: the
-        // recommended move has its own visit count, and a bound over 512 visits
-        // is not the bound over 96.
-        const CellAnalysisView* bestCell = analysisBestCell();
+    if (isMcts) {
         const bool proven = bestCell ? bestCell->proven : analysis.proven;
-        const double winrate = bestCell ? bestCell->winrate : analysis.winrate;
         const long long visits = bestCell ? bestCell->visits : analysis.visits;
-        const double shown = proven ? winrate : winRateLowerBound(winrate, visits);
+        const double shown = bestCell ? displayWinRate(*bestCell)
+                                      : (proven ? analysis.winrate
+                                                : winRateLowerBound(analysis.winrate, visits));
         const bool hasScore = bestCell ? bestCell->hasScore : analysis.hasScore;
         const double score = bestCell ? bestCell->averageScore : analysis.averageScore;
         // An exact solve reports no visits: printing "0/0" would read as a search
@@ -1985,8 +1899,7 @@ void drawEngineAnalysis(HDC dc, const PanelRects& rects) {
         metric = solvedExactly ? L"精确解算"
                                : L"访问 " + std::to_wstring(visits) + L"/" +
                                      std::to_wstring(analysis.visits);
-        metric += L" · 胜率 " +
-                  std::to_wstring(static_cast<int>(std::lround(shown * 100.0))) + L"%";
+        metric += L" · 胜率 " + formatWinRate(shown);
         metric += hasScore ? (proven ? L" · 目差 " : L" · 均分 ") : L" · 均分 --";
         if (hasScore) metric += signedDecimal(score);
         // A solved move stops searching on purpose: say so instead of looking
@@ -2016,11 +1929,11 @@ void drawEngineAnalysis(HDC dc, const PanelRects& rects) {
         y += scale(20);
     }
 
-    if (analysis.kind.rfind("mcts", 0) == 0 && !analysis.candidates.empty()) {
-        const int rows = std::min<int>(4, static_cast<int>(analysis.candidates.size()));
+    if (isMcts && !rankedCells.empty()) {
+        const int rows = std::min<int>(4, static_cast<int>(rankedCells.size()));
         for (int i = 0; i < rows; ++i) {
-            const auto& candidate = analysis.candidates[i];
-            const double rate = std::clamp(candidate.winrate, 0.0, 1.0);
+            const auto& candidate = analysis.cells[rankedCells[i]];
+            const double rate = std::clamp(displayWinRate(candidate), 0.0, 1.0);
             const int barTop = y + i * scale(20);
             RECT bar{left + scale(58), barTop + scale(6), box.right - scale(16), barTop + scale(17)};
             roundRect(dc, bar, scale(3), RGB(55, 62, 75));
@@ -2040,7 +1953,7 @@ void drawEngineAnalysis(HDC dc, const PanelRects& rects) {
     }
 }
 
-void drawPanel(HDC dc, const Layout& layout) {
+void drawPanel(HDC dc, const Layout& layout, const std::vector<int>& rankedCells) {
     PanelRects rects = computePanelRects(layout);
     const int x = layout.panel.left;
     const int y = layout.panel.top;
@@ -2131,7 +2044,7 @@ void drawPanel(HDC dc, const Layout& layout) {
                rects.mode.bottom - rects.mode.top, g_fontSmall, kMuted,
                DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    drawEngineAnalysis(dc, rects);
+    drawEngineAnalysis(dc, rects, rankedCells);
 
     roundRect(dc, rects.newButton, scale(8), RGB(98, 77, 42), kGold);
     drawTextAt(dc, L"新局  F2", rects.newButton.left, rects.newButton.top,
@@ -2150,12 +2063,9 @@ void drawStatus(HDC dc, const Layout& layout) {
     if (!g_position.gameOver() && g_hoverCell >= 0 && g_engineAnalysis.valid &&
         g_engineAnalysis.hasCell[g_hoverCell]) {
         const auto& info = g_engineAnalysis.cells[g_hoverCell];
-        // Same convention as the marks: exact value when solved, Wilson lower
-        // bound otherwise, so a 1-visit sample never reads as a certainty.
-        const double shown = info.proven ? info.winrate : winRateLowerBound(info.winrate, info.visits);
         left = L"格 " + widen(squareName(g_hoverCell)) + L" · 数字 " +
                std::to_wstring(static_cast<int>(info.move.number)) + L" · 胜率 " +
-               std::to_wstring(static_cast<int>(std::lround(shown * 100.0))) + L"%";
+               formatWinRate(displayWinRate(info));
         // A solved cell has no sample to count: the exact endgame solver answers
         // without running a simulation, so "访问 0" would read as an empty search.
         if (info.visits > 0) left += L" · 访问 " + std::to_wstring(info.visits);
@@ -2207,8 +2117,11 @@ void drawOverlay(HDC dc, const Layout& layout) {
 void paintAll(HDC dc, const RECT& client) {
     fillRectColor(dc, client, kBackground);
     Layout layout = computeLayout(g_hwnd);
-    drawBoard(dc, layout);
-    drawPanel(dc, layout);
+    const bool showAnalysis = g_engineAnalysis.valid && g_engineChoice != EngineChoice::Off;
+    const auto rankedCells = showAnalysis ? rankAnalysisCells(g_engineAnalysis, g_position)
+                                          : std::vector<int>{};
+    drawBoard(dc, layout, rankedCells);
+    drawPanel(dc, layout, rankedCells);
     drawStatus(dc, layout);
     drawOverlay(dc, layout);
 }
