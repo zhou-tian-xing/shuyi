@@ -8,6 +8,27 @@
 
 ![数弈原生界面与 MCTS 分析](docs/screenshot.png)
 
+## 下载就能玩（1.0）
+
+不需要编译、不需要安装、不需要 Python。去
+[**Releases · v1.0**](https://github.com/zhou-tian-xing/shuyi/releases/tag/v1.0) 下载一个 zip：
+
+| 你的机器 | 下载这个 | 说明 |
+| --- | --- | --- |
+| 任何 x64 Windows | **`shuyi-1.0-ui-cpu.zip`** | 最稳的一包：界面 + CPU 引擎 + 最强模型 |
+| 有 NVIDIA 显卡 | `shuyi-1.0-ui-cuda.zip` | 同一套界面，引擎换成 CUDA，同样的访问量快很多 |
+
+然后：**解压 → 双击 `shuyi.exe` → 按空格让引擎分析，或直接落子**。
+状态栏显示「引擎已启动」就说明零件齐了——包里已经带了最强的那份权重，
+不需要再下载模型。
+
+只要引擎（自己写前端、批量跑对局）：`shuyi-1.0-engine-cpu.zip` 或
+`shuyi-1.0-engine-cuda.zip`，里面只有 `shuyi_engine.exe` 和协议文档。
+
+模型单独一份在 [models/b6c96-s305983-d3226791.bin](models/b6c96-s305983-d3226791.bin)
+（64 visits 榜 **+2708**，4.1 MB），也可以从 release 页面直接下。
+模型目录说明见 [models/README.md](models/README.md)。
+
 ## 仓库里有什么
 
 | 目录 | 是什么 | 单独构建 |
@@ -18,8 +39,8 @@
 | [`protocol/`](protocol/) | 两个程序之间**唯一的契约**（协议 v2）＋一致性测试 | — |
 | [`tools/`](tools/) | 开发工具：自对弈、锦标赛、证明检查、bench、探针。**不随任何发布** | `cmake -S tools -B build-tools` |
 | [`training/`](training/) | Python 训练与评测流水线。**不随任何发布** | — |
-| [`release/`](release/) | 打包脚本（`build_release.py`、`make_alpha.py`） | — |
-| [`models/`](models/) | 发布用的权重：`b4c32-s34760`（v3）与 `b4c32-s42012`（v4），外加两个格式测试夹具。更强的 b6c96 权重产在 `runs/`，不入库 | — |
+| [`release/`](release/) | 打包脚本（`build_1_0.py` 出四包，`build_release.py`、`make_alpha.py` 出开发包） | — |
+| [`models/`](models/) | 发布用的权重：**`b6c96-s305983`（1.0 的主力，ELO +2708）**、`b4c32-s34760`（v3）、`b4c32-s42012`（v4），外加两个格式测试夹具。详见 [`models/README.md`](models/README.md) | — |
 | [`data/`](data/) | 共享夹具：147 个终局分数见证（`score_witnesses.txt`） | — |
 | [`runs/`](runs/) | 训练/评测输出，**不入库**——只有 [`runs/README.md`](runs/README.md)（命名与目录约定）跟着仓库走 | — |
 | [`docs/`](docs/) | 规则、架构、评测方法、历次运行报告 | — |
