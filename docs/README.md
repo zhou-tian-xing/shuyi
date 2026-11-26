@@ -27,7 +27,8 @@
 |---|---|
 | [plans/SERVER_PLAN.zh-CN.md](plans/SERVER_PLAN.zh-CN.md) | 服务器预案：预算模型、visits 取值、质量闸门 |
 | [plans/NEXT_STEPS.zh-CN.md](plans/NEXT_STEPS.zh-CN.md) | 当前棋力提升计划、固定参照、停滞诊断 |
-| [reports/RUN_20261126A.zh-CN.md](reports/RUN_20261126A.zh-CN.md) | 十一小时 12 代：续训规模、固定参照竞技场、64 visits 补测新末代、三个观察 |
+| [reports/SCALING_ANALYSIS.zh-CN.md](reports/SCALING_ANALYSIS.zh-CN.md) | 变慢归因：数据量–Elo 曲线、两轮对比、已修的三处训练缺陷、容量对照方案 |
+| [reports/RUN_20261126A.zh-CN.md](reports/RUN_20261126A.zh-CN.md) | 十一小时 12 代：续训规模、固定参照竞技场、64 visits 补测新末代、四个观察 |
 | [reports/RUN_20261125C.zh-CN.md](reports/RUN_20261125C.zh-CN.md) | 八小时 9 代：规模、逐代竞技场、三个观察（其中 Elo 一节已标为作废，见十二代报告） |
 | [TRAINING_SERVER.zh-CN.md](TRAINING_SERVER.zh-CN.md) | 服务器部署与运维 |
 | [reports/](reports/) | 历次运行报告（srv1、one-hour、b10c128、v3fix、诊断、ELO 报表）+ 当次模型 |

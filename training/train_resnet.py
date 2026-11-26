@@ -216,6 +216,19 @@ def load_shards(paths, max_samples=0, seed=1, ruleset=0):
             data = upgraded
         chunks.append(data)
         total += len(data)
+    # Every shard numbers its games from 0, so concatenating them makes two
+    # different games share an id.  The split is by game id, so unrelated games
+    # were grouped together and `--max-samples` could keep "half a game"; the
+    # logged `games=` count was also halved.  Namespace by shard.
+    offset = 0
+    for index, chunk in enumerate(chunks):
+        if not len(chunk):
+            continue
+        counted = chunk["game"].astype(np.int64) + offset
+        offset = int(counted.max()) + 1
+        chunk = chunk.copy()
+        chunk["game"] = counted.astype(np.uint32)
+        chunks[index] = chunk
     data = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
     if blocking_for_nopass:
         print(f"note: {blocking_for_nopass} blocking shard(s) used for a nopass run "
@@ -316,13 +329,31 @@ def value_from_score(data, a_values):
     return (total > 0).astype(np.float32), (total == 0).astype(np.float32)
 
 
-def make_legal_mask(data):
+def make_legal_mask(data, ruleset=0):
+    """Actions a player may legally take, as a [n, 729] bool mask.
+
+    The blocking rule is a *placement* rule, and nopass keeps it (nopass only
+    changes what happens once a side has no placement): number n may not go on a
+    cell orthogonally adjacent to an enemy stone of number >= n.  Classic is the
+    only rule set without it.  Leaving it out kept ~5% of the policy
+    normalisation on moves the engine will never play, and made the target
+    statistics' legal denominator wrong for nopass.
+    """
     n = len(data)
-    boards = data["board"].reshape(n, CELLS)
+    board3 = data["board"].reshape(n, 9, 9).astype(np.int16)
+    boards = board3.reshape(n, CELLS)
     hands = data["hand"].reshape(n, 2, 9)
     sides = data["side"].astype(np.int64)
     remaining = hands[np.arange(n), sides]  # [n,9]
     mask = (boards == 0)[:, :, None] & (remaining[:, None, :] > 0)  # [n,81,9]
+    if ruleset in (1, 2):
+        # A cell rejects number n when a neighbour holds an *opposing* stone of
+        # number >= n, so a red 9 denies all nine numbers of its cross.
+        mover = np.where(sides == 0, 1, -1).astype(np.int16)[:, None, None]
+        enemy = np.where(board3 * mover < 0, np.abs(board3), 0).astype(np.float32)
+        enemy_max = _max_neighbor5(enemy).astype(np.int16).reshape(n, CELLS)
+        numbers = np.arange(1, 10)[None, None, :]
+        mask = mask & (numbers > enemy_max[:, :, None])
     return torch.from_numpy(mask.reshape(n, POLICY))
 
 
@@ -429,7 +460,18 @@ def load_bin(model, path):
         state["value_fc1.bias"] = _read_float_tensor(f, (VALUE_HIDDEN,))
         state["value_fc2.weight"] = _read_float_tensor(f, (1, VALUE_HIDDEN))
         state["value_fc2.bias"] = _read_float_tensor(f, (1,))
-    # Non-strict: a file without a score head simply leaves that head at its
+        if has_score:
+            # save_bin writes these whenever the score head is enabled, so a
+            # continued run has to read them back.  Dropping them here silently
+            # reset the head to its random initialisation at every generation,
+            # while its loss still flowed into the shared trunk.
+            state["score_conv.weight"] = _read_float_tensor(f, (1, channels, 1, 1))
+            state["score_conv.bias"] = _read_float_tensor(f, (1,))
+            state["score_bias.weight"] = _read_float_tensor(f, (VALUE_HIDDEN, 1 + globals_))
+            state["score_bias.bias"] = _read_float_tensor(f, (VALUE_HIDDEN,))
+            state["score_out.weight"] = _read_float_tensor(f, (1, VALUE_HIDDEN))
+            state["score_out.bias"] = _read_float_tensor(f, (1,))
+    # Non-strict: a file without a score head leaves that head at its
     # initialisation; everything else must match exactly.
     missing, unexpected = model.load_state_dict(state, strict=False)
     bad_missing = [k for k in missing if not k.startswith("score_")]
@@ -696,7 +738,7 @@ def main(argv=None):
         if "score" not in data.dtype.names:
             raise SystemExit("--score-weight needs SYSELF4 data (with a score field)")
         score = torch.from_numpy(data["score"].astype(np.float32) / 30.0)
-    legal = make_legal_mask(data)
+    legal = make_legal_mask(data, RULESET_CODES[args.ruleset])
     train_idx = torch.from_numpy(np.flatnonzero(train_mask))
     val_idx = torch.from_numpy(np.flatnonzero(val_mask))
 
