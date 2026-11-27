@@ -2,7 +2,7 @@
 //
 // The window is one board and three pieces of chrome:
 //
-//   top-left     new game, save, load — the actions a game needs;
+//   menu         文件 / 模式 / 规则 / 引擎 / 帮助 — everything that is not a move;
 //   left         what the analysis produced: the verdict, the move list, the
 //                score, and the curves of the line on screen;
 //   right        the record tree: every move ever played from this game, with a
@@ -47,6 +47,7 @@ namespace {
 constexpr int ID_NEW_GAME = 1001;
 constexpr int ID_SAVE_RECORD = 1002;
 constexpr int ID_LOAD_RECORD = 1003;
+constexpr int ID_EXIT = 1004;
 
 constexpr int ID_MODE_PVP = 2001;
 constexpr int ID_MODE_HUMAN_RED = 2002;
@@ -157,6 +158,7 @@ HFONT g_fontPiece = nullptr;
 HFONT g_fontUi = nullptr;
 HFONT g_fontSmall = nullptr;
 HFONT g_fontCoord = nullptr;
+HFONT g_fontTiny = nullptr;  // the superscript piece count
 
 const COLORREF kBackground = RGB(22, 26, 33);
 const COLORREF kPanel = RGB(36, 41, 50);
@@ -1476,7 +1478,6 @@ void syncEngineChecks() {
 // ---------------------------------------------------------------------------
 struct Layout {
     RECT client{};
-    RECT actions{};  // new / save / load, top left
     RECT left{};     // the analysis panel
     RECT board{};
     RECT right{};  // the record tree
@@ -1494,8 +1495,7 @@ Layout computeLayout(HWND hwnd) {
     const int barHeight = scale(64);
     const int coord = scale(24);
 
-    result.actions = {margin, margin, margin + leftWidth, margin + scale(26)};
-    result.left = {margin, result.actions.bottom + scale(10), margin + leftWidth,
+    result.left = {margin, margin, margin + leftWidth,
                    result.client.bottom - barHeight - scale(8)};
     result.bottom = {0, result.client.bottom - barHeight, result.client.right, result.client.bottom};
     result.right = {result.client.right - margin - rightWidth, result.left.top,
@@ -1515,9 +1515,6 @@ Layout computeLayout(HWND hwnd) {
 }
 
 struct Chrome {
-    RECT newGame{};
-    RECT save{};
-    RECT load{};
     RECT aMinus{};
     RECT aPlus{};
     RECT chips[2][9];  // [red, black][1..9]
@@ -1525,17 +1522,6 @@ struct Chrome {
 
 Chrome computeChrome(const Layout& layout) {
     Chrome chrome;
-    const int buttonWidth = scale(58);
-    const int buttonGap = scale(6);
-    int x = layout.actions.left;
-    const int top = layout.actions.top;
-    const int height = layout.actions.bottom - layout.actions.top;
-    chrome.newGame = {x, top, x + buttonWidth, top + height};
-    x += buttonWidth + buttonGap;
-    chrome.save = {x, top, x + buttonWidth, top + height};
-    x += buttonWidth + buttonGap;
-    chrome.load = {x, top, x + buttonWidth, top + height};
-
     // Bottom bar: A value on the left, then the two rows of pieces.
     const int barTop = layout.bottom.top;
     const int aRow = barTop + scale(21);
@@ -2169,28 +2155,31 @@ void drawBottomBar(HDC dc, const Layout& layout, const Chrome& chrome) {
             const bool selected = active && n == g_selected;
             roundRect(dc, chip, scale(4), remain > 0 ? kPanelSoft : kPanelDeep,
                       selected ? kGold : RGB(58, 64, 76), selected ? 2 : 1);
-            drawTextAt(dc, std::to_wstring(n), chip.left, chip.top, chip.right - chip.left,
-                       chip.bottom - chip.top, g_fontSmall,
-                       remain > 0 ? (side == 0 ? RGB(240, 179, 163) : RGB(215, 220, 230))
-                                  : RGB(94, 99, 109));
+            // The number, then how many of it are left as a superscript: "9³" means
+            // three nines still in hand.  Without the count the only signal was a
+            // dimmed chip, which reads as "used" but not as "one left".
+            const COLORREF numberColour = remain > 0
+                                              ? (side == 0 ? RGB(240, 179, 163) : RGB(215, 220, 230))
+                                              : RGB(94, 99, 109);
+            const int chipWidth = chip.right - chip.left;
+            const int chipHeight = chip.bottom - chip.top;
+            // Draw the digit and its count as one group ("9³"), not as two columns:
+            // the digit right-aligned to 58% of the chip, the count left-aligned
+            // right after it and raised, which is what a superscript is.
+            const int digitRight = chip.left + (chipWidth * 62) / 100;
+            drawTextAt(dc, std::to_wstring(n), chip.left, chip.top, digitRight - chip.left,
+                       chipHeight, g_fontSmall, numberColour,
+                       DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            drawTextAt(dc, std::to_wstring(remain), digitRight, chip.top + scale(2),
+                       scale(12), scale(11), g_fontTiny,
+                       remain > 0 ? mixColor(numberColour, kPanelSoft, 0.15) : RGB(94, 99, 109),
+                       DT_LEFT | DT_TOP | DT_SINGLELINE);
         }
     }
 
     const std::wstring ply = L"第 " + std::to_wstring(g_position.ply()) + L" 手";
     drawTextAt(dc, ply, layout.bottom.right - scale(120), barTop + scale(11), scale(100), scale(20),
                g_fontSmall, kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-}
-
-void drawActions(HDC dc, const Chrome& chrome) {
-    const auto button = [&](const RECT& rect, const wchar_t* text, bool primary) {
-        roundRect(dc, rect, scale(6), primary ? RGB(98, 77, 42) : kPanelSoft,
-                  primary ? kGold : RGB(68, 75, 88));
-        drawTextAt(dc, text, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
-                   g_fontSmall, kText);
-    };
-    button(chrome.newGame, L"新局", true);
-    button(chrome.save, L"保存", false);
-    button(chrome.load, L"载入", false);
 }
 
 void drawOverlay(HDC dc, const Layout& layout) {
@@ -2226,7 +2215,6 @@ void paintAll(HDC dc, const RECT& client) {
     drawLeftPanel(dc, layout, rankedCells);
     drawRecordTree(dc, layout);
     drawBottomBar(dc, layout, chrome);
-    drawActions(dc, chrome);
     drawOverlay(dc, layout);
 }
 
@@ -2337,18 +2325,6 @@ void handleClick(POINT point) {
     Layout layout = computeLayout(g_hwnd);
     Chrome chrome = computeChrome(layout);
 
-    if (contains(chrome.newGame, point)) {
-        resetGame();
-        return;
-    }
-    if (contains(chrome.save, point)) {
-        SendMessageW(g_hwnd, WM_COMMAND, ID_SAVE_RECORD, 0);
-        return;
-    }
-    if (contains(chrome.load, point)) {
-        SendMessageW(g_hwnd, WM_COMMAND, ID_LOAD_RECORD, 0);
-        return;
-    }
     if (contains(chrome.aMinus, point)) {
         setAValue(g_aValue - kAValueStep);
         return;
@@ -2538,9 +2514,11 @@ void showGuide() {
     text += L"· 空格：开始 / 暂停分析；分析到上限后再按一次会继续，不再限量。\n";
     text += L"· ↑ / ↓：在棋谱里上一步 / 下一步（↓ 走主干）。\n";
     text += L"· Delete：删除当前着法及其后续，连同它们的分析。\n";
-    text += L"· 左侧面板是分析的产物，右侧是一棵棋谱树：每一着都在树上，换个走法会开新枝，"
-            L"回到旧枝时原来的分析还在。\n";
-    text += L"· 左下角 A值 可以按 ± 调整（也可在 引擎 → 设置 里改）。\n\n";
+    text += L"· 左侧面板是分析的产物，右侧是棋谱：每一着一行，换个走法会在那一手后面缩进出一段"
+            L"变着，回到旧行时原来的分析还在。\n";
+    text += L"· 下方每一步棋子右上角的小数字是这种数字还剩几颗（9³ = 还有三颗 9）。\n";
+    text += L"· 左下角 A值 可以按 ± 调整（也可在 引擎 → 设置 里改）。\n";
+    text += L"· 新局、保存棋谱、载入棋谱在 文件 菜单里。\n\n";
     text += L"项目主页（规则、引擎、模型的发布都在这里）：\n";
     text += kProjectUrl;
     MessageBoxW(g_hwnd, text.c_str(), L"使用指南", MB_OK | MB_ICONINFORMATION);
@@ -2579,11 +2557,12 @@ void createFonts() {
     g_fontUi = makeFont(12, false);
     g_fontSmall = makeFont(10, false);
     g_fontCoord = makeFont(10, false);
+    g_fontTiny = makeFont(8, false);
 }
 
 void destroyFonts() {
     for (HFONT* font : {&g_fontTitle, &g_fontSubtitle, &g_fontTurn, &g_fontBig, &g_fontPiece,
-                        &g_fontUi, &g_fontSmall, &g_fontCoord}) {
+                        &g_fontUi, &g_fontSmall, &g_fontCoord, &g_fontTiny}) {
         if (*font) DeleteObject(*font);
         *font = nullptr;
     }
@@ -2591,11 +2570,19 @@ void destroyFonts() {
 
 void createMenuBar(HWND hwnd) {
     HMENU menu = CreateMenu();
+    HMENU file = CreatePopupMenu();
     HMENU mode = CreatePopupMenu();
     HMENU engine = CreatePopupMenu();
     HMENU rulesetMenu = CreatePopupMenu();
     HMENU help = CreatePopupMenu();
     HMENU model = CreatePopupMenu();
+
+    AppendMenuW(file, MF_STRING, ID_NEW_GAME, L"新局");
+    AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(file, MF_STRING, ID_SAVE_RECORD, L"保存棋谱…");
+    AppendMenuW(file, MF_STRING, ID_LOAD_RECORD, L"载入棋谱…");
+    AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(file, MF_STRING, ID_EXIT, L"退出");
 
     AppendMenuW(rulesetMenu, MF_STRING, ID_RULESET_NOPASS,
                 L"无过手（阻挡规则；一方无子可落立刻终局）");
@@ -2625,6 +2612,7 @@ void createMenuBar(HWND hwnd) {
     AppendMenuW(help, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(help, MF_STRING, ID_ABOUT, L"关于数弈");
 
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"文件(&F)");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(mode), L"模式(&M)");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(rulesetMenu), L"规则(&R)");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(engine), L"引擎(&E)");
@@ -2790,6 +2778,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         switch (LOWORD(wParam)) {
         case ID_NEW_GAME: resetGame(); return 0;
+        case ID_EXIT: DestroyWindow(hwnd); return 0;
         case ID_SAVE_RECORD: saveRecordToFile(); return 0;
         case ID_LOAD_RECORD: loadRecordFromFile(); return 0;
         case ID_MODE_PVP: setMode(Mode::Pvp); return 0;
