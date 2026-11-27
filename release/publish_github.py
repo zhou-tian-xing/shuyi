@@ -57,6 +57,8 @@ def main() -> int:
     parser.add_argument("--asset", type=Path, nargs="+", required=True)
     parser.add_argument("--repo", default="zhou-tian-xing/shuyi")
     parser.add_argument("--draft", action="store_true")
+    parser.add_argument("--replace", action="store_true",
+                        help="delete an asset with the same name before uploading it again")
     args = parser.parse_args()
 
     auth = token()
@@ -89,6 +91,16 @@ def main() -> int:
         if have.get(path.name) == size:
             print(f"  {path.name:34s} already uploaded")
             continue
+        if args.replace and path.name in have:
+            for asset in existing:
+                if asset["name"] != path.name:
+                    continue
+                status, _ = call("DELETE",
+                                 f"{API}/repos/{args.repo}/releases/{release['id']}/assets/{asset['id']}",
+                                 auth)
+                if status not in (200, 204):
+                    raise SystemExit(f"could not replace {path.name} ({status})")
+                print(f"  {path.name:34s} old copy removed")
         query = urllib.parse.urlencode({"name": path.name})
         status, result = call("POST",
                               f"https://uploads.github.com/repos/{args.repo}/releases/{release['id']}/assets?{query}",

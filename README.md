@@ -24,7 +24,7 @@
 去
 [**Releases**](https://github.com/zhou-tian-xing/shuyi/releases/) 下载适合于自己设备的压缩包。
 
-包内有编译产物和当时最强的权重。
+包里有编译产物；权重单独下载（见下文）。
 
 解压 → 双击 `shuyi.exe` → 按空格让引擎分析，或直接落子。
 
