@@ -1563,12 +1563,20 @@ bool contains(const RECT& rect, POINT point) {
            point.y < rect.bottom;
 }
 
-// The record tree's geometry, shared by the drawing and the hit test.  One row
-// per node in pre-order: the trunk runs down the left column and every variation
-// starts a new row below the branch it belongs to.
+// The record tree's geometry, shared by the drawing and the hit test.
+//
+// It is laid out like a score sheet, not like a wide diagram: one row per move,
+// the trunk continuing straight down and an alternative starting an indented
+// block right after the move it replaces.  A 54-move game has 54 columns if you
+// put the plies on the x axis, and this panel is 246 px wide -- a column tree
+// showed five moves and hid the rest.  Vertically there is room to scroll, and
+// the row order (move, its alternatives, then the next move of the trunk) is the
+// order a player reads a record in.
 struct TreeCell {
     int node = 0;
     RECT box{};
+    int level = 0;       // how deep the variation nesting is, for the indent
+    bool variation = false;
 };
 struct TreeLayout {
     std::vector<TreeCell> cells;
@@ -1578,22 +1586,38 @@ struct TreeLayout {
 
 TreeLayout computeTreeLayout(const Layout& layout, int scroll) {
     TreeLayout tree;
-    tree.rowHeight = scale(19);
-    const int columnWidth = scale(46);
+    tree.rowHeight = scale(20);
     const int left = layout.right.left + scale(10);
+    const int width = (layout.right.right - layout.right.left) - scale(20);
     const int top = layout.right.top + scale(34);
+    const int indent = scale(12);
     int row = 0;
-    const std::function<void(int, int)> walk = [&](int id, int depth) {
+    const auto emit = [&](int id, int level, bool variation) {
         TreeCell cell;
         cell.node = id;
-        const int x = left + depth * columnWidth;
+        cell.level = level;
+        cell.variation = variation;
+        const int x = left + level * indent;
         const int y = top + row * tree.rowHeight - scroll;
-        cell.box = {x, y, x + columnWidth - scale(4), y + tree.rowHeight - scale(3)};
+        cell.box = {x, y, x + width - level * indent, y + tree.rowHeight - scale(2)};
         tree.cells.push_back(cell);
         ++row;
-        for (int child : g_record.childrenOf(id)) walk(child, depth + 1);
     };
-    walk(g_record.root(), 0);
+    // PGN order: the move, then its alternatives indented right after it, then
+    // the move's own continuation.  That is exactly where a reader looks for
+    // "what else could he have played here", and the trunk stays contiguous.
+    std::function<void(int, int)> walkRest = [&](int id, int level) {
+        const auto& children = g_record.childrenOf(id);
+        if (children.empty()) return;
+        emit(children.front(), level, false);
+        for (std::size_t i = 1; i < children.size(); ++i) {
+            emit(children[i], level + 1, true);
+            walkRest(children[i], level + 1);
+        }
+        walkRest(children.front(), level);
+    };
+    emit(g_record.root(), 0, false);
+    walkRest(g_record.root(), 0);
     tree.contentHeight = row * tree.rowHeight;
     return tree;
 }
@@ -2056,32 +2080,48 @@ void drawRecordTree(HDC dc, const Layout& layout) {
     const std::vector<int> path = g_record.line(g_record.current());
     const auto onPath = [&](int id) { return std::find(path.begin(), path.end(), id) != path.end(); };
     for (const TreeCell& cell : tree.cells) {
+        if (cell.box.bottom < box.top + scale(30)) continue;
+        if (cell.box.top > box.bottom) break;
         const RecordNode& node = g_record.node(cell.node);
         // Colour: how the played move did against what the previous position's
         // analysis predicted, on the same red/green scale as the board marks.
-        COLORREF fill = kPanelSoft;
+        COLORREF fill = cell.node == g_record.root() ? kPanelSoft : kPanelDeep;
         double delta = 0.0;
         if (node.parent >= 0 && moveDelta(g_record.node(node.parent), node, &delta)) {
-            fill = mixColor(kPanel, markColor(delta, false), std::clamp(std::fabs(delta) / 0.2, 0.25, 0.9));
+            fill = mixColor(kPanel, markColor(delta, false),
+                            std::clamp(std::fabs(delta) / 0.2, 0.25, 0.9));
         }
         const bool selected = cell.node == g_record.current();
         const bool trunk = onPath(cell.node);
-        roundRect(dc, cell.box, scale(4), fill,
-                  selected ? kGold : (trunk ? RGB(96, 106, 124) : CLR_INVALID),
-                  selected ? 2 : 1);
-        std::wstring label = cell.node == g_record.root() ? std::wstring(L"起") : moveLabel(node.move);
-        drawTextAt(dc, label, cell.box.left + scale(2), cell.box.top, cell.box.right - cell.box.left - scale(4),
-                   cell.box.bottom - cell.box.top, g_fontSmall,
+        const int height = cell.box.bottom - cell.box.top;
+        if (cell.variation) {
+            // A variation is a note in the margin: a tick and a dimmer row.
+            line(dc, cell.box.left - scale(7), cell.box.top, cell.box.left - scale(7),
+                 cell.box.top + height / 2, RGB(96, 106, 124));
+            line(dc, cell.box.left - scale(7), cell.box.top + height / 2, cell.box.left - scale(2),
+                 cell.box.top + height / 2, RGB(96, 106, 124));
+        }
+        if (selected) {
+            roundRect(dc, cell.box, scale(4), fill, kGold, 2);
+        } else if (trunk) {
+            roundRect(dc, cell.box, scale(4), fill, RGB(74, 84, 102));
+        }
+        const int textLeft = cell.box.left + scale(6);
+        if (cell.node != g_record.root()) {
+            // The ply number, so a row tells you where in the game it is.
+            const std::wstring ply = std::to_wstring(g_record.depth(cell.node));
+            drawTextAt(dc, ply, textLeft, cell.box.top, scale(24), height, g_fontSmall,
+                       cell.variation ? RGB(120, 126, 138) : kMuted,
+                       DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        }
+        const std::wstring label =
+            cell.node == g_record.root() ? std::wstring(L"起") : moveLabel(node.move);
+        drawTextAt(dc, label, textLeft + scale(28), cell.box.top, cell.box.right - textLeft - scale(30),
+                   height, g_fontSmall,
                    selected ? kText : (trunk ? RGB(226, 231, 240) : kMuted),
                    DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         if (node.analysis.valid && node.analysis.proven) {
-            filledCircle(dc, cell.box.right - scale(4), cell.box.top + scale(4), scale(2), kGold);
-        }
-        if (node.children.size() > 1) {
-            // A branch point: the alternatives start below it.
-            line(dc, cell.box.right, cell.box.top + (cell.box.bottom - cell.box.top) / 2,
-                 cell.box.right + scale(3), cell.box.top + (cell.box.bottom - cell.box.top) / 2,
-                 RGB(96, 106, 124));
+            filledCircle(dc, cell.box.right - scale(8), cell.box.top + height / 2, scale(2), kGold);
         }
     }
     SelectClipRgn(dc, nullptr);
@@ -2440,6 +2480,7 @@ bool loadRecordFromFile() {
 }
 
 bool loadRecordFromText(const std::string& text) {
+    const Ruleset previousRuleset = g_ruleset;
     GameRecord loaded;
     Ruleset ruleset = g_ruleset;
     std::string error;
@@ -2456,14 +2497,14 @@ bool loadRecordFromText(const std::string& text) {
     syncRulesetChecks();
     saveSettings();
     if (g_engineChoice != EngineChoice::Off && g_engineReady) {
-        // The rule set may have changed with the record: the engine has to be
-        // restarted, not just replayed.
-        const EngineChoice keep = g_engineChoice;
-        stopEngineProcess();
-        g_engineChoice = keep;
-        startEngineProcess();
+        // The engine takes the rule set at start-up, so only a record with another
+        // rule set needs a restart; otherwise replaying the line is enough.  The
+        // restart is also the fragile path (a probe racing the process it just
+        // killed), so it is worth not taking it when nothing changed.
+        if (ruleset != previousRuleset) startEngineProcess();
+        else syncEnginePosition();
     }
-    g_treeScroll = 0;
+    g_treeScroll = std::max(0, treeScrollFor(g_record.current()));
     refresh(true);
     if (aiToMove()) maybeAiMove();
     return true;
