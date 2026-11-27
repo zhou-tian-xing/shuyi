@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Stage the four 1.0 packages (plus a source archive) and smoke-test each one.
+"""Stage the four release packages (plus a source archive) and smoke-test each one.
 
-    python release/build_1_0.py --model models/b6c96-s305983-d3226791.bin
+    python release/build_packages.py --version 1.1 --tag v1.1
+    python release/build_packages.py --version 1.1 --tag v1.1 --model models/b6c96.bin
 
 Products, because the UI and the engine are separate programs:
 
-    shuyi-1.0-engine-cpu.zip   headless CPU engine
-    shuyi-1.0-engine-cuda.zip  headless CUDA engine
-    shuyi-1.0-ui-cpu.zip       UI + CPU engine + the strongest model
-    shuyi-1.0-ui-cuda.zip      UI + CUDA engine + the strongest model
+    shuyi-<version>-engine-cpu.zip   headless CPU engine
+    shuyi-<version>-engine-cuda.zip  headless CUDA engine
+    shuyi-<version>-ui-cpu.zip       UI + CPU engine
+    shuyi-<version>-ui-cuda.zip      UI + CUDA engine
+
+Weights are *not* shipped by default: they are published separately, and a package
+that carries one goes stale the moment a stronger one exists.  `--model` is still
+there for a build that should carry one.
 
 Every package names its engine `shuyi_engine.exe`, so unzipping the CUDA engine
 package over a UI package swaps the backend without editing a config file.  The
@@ -47,23 +52,23 @@ ruleset=nopass
 COMMON_TAIL = """
 一分钟上手
 ----------
-1. 解压到任意目录（不要放在中文路径或桌面以外需要权限的地方）。
-2. 双击 shuyi.exe。状态栏应显示“引擎已启动：shuyi_engine.exe”。
-3. 默认是「双人对弈 + 无过手规则」。点棋盘落子，或按空格让引擎分析当前局面。
-4. 引擎菜单 → 设置… 可改「分析访问上限 / 落子访问上限 / A值」。
-   访问量是唯一与机器无关的预算：512 次模拟在笔记本和 GPU 上含义相同。
-5. 想和引擎下棋：引擎菜单 → MCTS + 网络（模型已随包附带）。
+1. 解压到任意目录。
+2. 双击 shuyi.exe。左侧「AI评估」那一行应显示引擎和模型；没有就说明没找到引擎。
+3. 点棋盘落子；空格让引擎分析当前局面，再按一次暂停。
+4. 左侧是分析的结果（胜率、目差、选点、走势），右侧是棋谱树：
+   ↑/↓ 回溯（↓ 走主干），点节点跳过去，Delete 删掉一手和它后面的走法。
+5. 新局 / 保存 / 载入在左上角，右键没有菜单。
 
 数字怎么看
 ----------
-* 每个点上的数字是这一着在棋盘格上的推荐棋子数字；
-* 点的颜色是胜率，已解算则精确值、否则 Wilson 95% 置信下界，右上角摘要同一口径；
+* 每个点上的数字是这一格推荐的棋子数字；
+* 点的颜色是胜率，已解算则精确值、否则 Wilson 95% 置信下界；
 * 已解算的点显示目差（+3 / -12），因为胜率只有 0% 和 100%，分不出输 2 目和输 18 目；
 * 没解算的点显示胜率、访问数和均分；均分没有来源时显示 --，不会用胜率反推。
 """
 
-UI_README = """数弈 1.0
-========
+UI_README = """数弈 {version}
+=========
 
 双击 shuyi.exe 即可。界面不含任何搜索代码：引擎是旁边的 shuyi_engine.exe，
 由 shuyi-ui.ini 里的 engine= 指定，两个程序只通过文本协议通信。
@@ -72,7 +77,7 @@ UI_README = """数弈 1.0
 ----------
 * shuyi.exe             Win32 界面（管规则、状态、显示）
 * shuyi_engine.exe      {engine_note}
-* models/               随包权重（{model_note}）
+* models/               {model_note}
 * shuyi-ui.ini          界面设置
 * RULES.zh-CN.md       规则全文
 * ENGINE_PROTOCOL.md   引擎协议（行协议 + JSON 分析流）
@@ -83,11 +88,11 @@ UI_README = """数弈 1.0
 ------
 把任意 `b<blocks>c<channels>-s<steps>-d<data>.bin` 放进 models/，
 菜单「引擎 → MCTS + 网络」里就会出现，不用重启，也不用改配置。
-规则集必须匹配（nopass 的权重不能用在 classic 上）。
+规则集必须匹配（nopass 的权重不能用在 classic 上），不匹配的模型会被拒绝加载。
 """
 
-ENGINE_README = """数弈 1.0 — 无头引擎
-==================
+ENGINE_README = """数弈 {version} — 无头引擎
+=====================
 
 这是引擎，没有界面。它说行协议（见 ENGINE_PROTOCOL.md），由调用方驱动：
 
@@ -113,8 +118,8 @@ ENGINE_README = """数弈 1.0 — 无头引擎
     set_model models/<name>.bin
     set_engine mcts_nn
 
-权重是数据，不随这个包发布。最强的一份在
-https://github.com/zhou-tian-xing/shuyi/releases/tag/v1.0 和仓库的 models/ 目录里。
+权重是数据，不随这个包发布。发布页里有单独的最强模型：
+https://github.com/zhou-tian-xing/shuyi/releases
 """
 
 
@@ -143,7 +148,7 @@ def variant_spec() -> dict:
 
 
 def stage(stage_dir: Path, engine: Path, ui: Path | None, model: Path | None,
-          cuda: bool, runtime: list[Path]) -> None:
+          cuda: bool, runtime: list[Path], version: str) -> None:
     stage_dir.mkdir(parents=True)
     shutil.copy2(engine, stage_dir / "shuyi_engine.exe")
     for dll in runtime:
@@ -152,9 +157,7 @@ def stage(stage_dir: Path, engine: Path, ui: Path | None, model: Path | None,
         shutil.copy2(ui, stage_dir / "shuyi.exe")
         (stage_dir / "shuyi-ui.ini").write_text(INI, encoding="utf-8")
         shutil.copy2(REPO / "docs" / "RULES.zh-CN.md", stage_dir / "RULES.zh-CN.md")
-        shutil.copy2(REPO / "protocol" / "ENGINE_PROTOCOL.md", stage_dir / "ENGINE_PROTOCOL.md")
-    else:
-        shutil.copy2(REPO / "protocol" / "ENGINE_PROTOCOL.md", stage_dir / "ENGINE_PROTOCOL.md")
+    shutil.copy2(REPO / "protocol" / "ENGINE_PROTOCOL.md", stage_dir / "ENGINE_PROTOCOL.md")
     if model is not None and ui is not None:
         (stage_dir / "models").mkdir()
         shutil.copy2(model, stage_dir / "models" / model.name)
@@ -164,16 +167,20 @@ def stage(stage_dir: Path, engine: Path, ui: Path | None, model: Path | None,
                    "cublas64_12.dll、cublasLt64_12.dll 必须在 PATH 或本目录），另有 NVIDIA 驱动；"
                    "VC++ 运行库已随包附带" if cuda
                    else "CPU 引擎（任何 x64 Windows 都能跑，无需额外组件）")
-    model_note = f"{model.name}，ELO +2708" if model is not None and ui is not None else "无"
+    if model is not None and ui is not None:
+        model_note = f"{model.name}（随包）"
+    else:
+        model_note = "不含权重，见项目发布页"
     if ui is not None:
         (stage_dir / "README.txt").write_text(
-            UI_README.format(engine_note=engine_note, model_note=model_note), encoding="utf-8")
+            UI_README.format(version=version, engine_note=engine_note, model_note=model_note),
+            encoding="utf-8")
     else:
         (stage_dir / "README.txt").write_text(
-            ENGINE_README.format(engine_note=engine_note), encoding="utf-8")
+            ENGINE_README.format(version=version, engine_note=engine_note), encoding="utf-8")
 
-    lines = ["数弈 1.0 build",
-             f"version  1.0",
+    lines = [f"数弈 {version} build",
+             f"version  {version}",
              f"commit   {git('rev-parse', '--short', 'HEAD')}",
              f"date     {subprocess.run(['powershell', '-NoProfile', '-Command',
                                         'Get-Date -Format o'], capture_output=True, text=True,
@@ -211,7 +218,7 @@ def smoke(stage_dir: Path, ui: bool, cuda: bool, model: Path | None,
         raise SystemExit(f"{stage_dir.name}: engine did not answer protocol v2: {out[:300]}")
     if f"cuda={int(cuda)}" not in out:
         raise SystemExit(f"{stage_dir.name}: expected cuda={int(cuda)}: {out[:300]}")
-    if model is not None and ui and "set_engine mcts_nn" in stream:
+    if model is not None and ui:
         last = proc.stdout.strip().splitlines()[-2:]
         if any("error" in line.lower() for line in last):
             raise SystemExit(f"{stage_dir.name}: model did not load: {last}")
@@ -237,24 +244,28 @@ def zip_dir(stage_dir: Path, archive: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", type=Path, required=True,
-                        help="weight to ship inside the UI packages")
-    parser.add_argument("--out", type=Path, default=REPO / "dist" / "1.0")
-    parser.add_argument("--tag", default="v1.0")
+    parser.add_argument("--version", default="1.1", help="version string in names and READMEs")
+    parser.add_argument("--tag", default="v1.1", help="git tag the source archive comes from")
+    parser.add_argument("--model", type=Path, default=None,
+                        help="weight to ship inside the UI packages (default: none)")
+    parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--cuda-bin", type=Path, default=Path("E:/CUDA/v12.4/bin"),
                         help="directory holding cudart64_12.dll and cublas64_12.dll")
     args = parser.parse_args()
 
-    model = (REPO / args.model).resolve() if not args.model.is_absolute() else args.model
-    if not model.is_file():
-        raise SystemExit(f"model not found: {model}")
+    version = args.version
+    model = None
+    if args.model is not None:
+        model = (REPO / args.model).resolve() if not args.model.is_absolute() else args.model
+        if not model.is_file():
+            raise SystemExit(f"model not found: {model}")
     specs = variant_spec()
     for name, spec in specs.items():
         for key in ("engine", "ui"):
             if spec[key] is not None and not spec[key].is_file():
                 raise SystemExit(f"{name}: missing {spec[key]}")
 
-    out = args.out.resolve()
+    out = (args.out or (REPO / "dist" / version)).resolve()
     out.mkdir(parents=True, exist_ok=True)
     sources = git("status", "--porcelain")
     if sources:
@@ -274,18 +285,18 @@ def main() -> int:
 
     for name, spec in specs.items():
         cuda = spec["engine"] == specs["engine-cuda"]["engine"]
-        stage_dir = out / f"shuyi-1.0-{name}"
+        stage_dir = out / f"shuyi-{version}-{name}"
         if stage_dir.exists():
             shutil.rmtree(stage_dir)
-        stage(stage_dir, spec["engine"], spec["ui"], model, cuda, runtime if cuda else [])
+        stage(stage_dir, spec["engine"], spec["ui"], model, cuda, runtime if cuda else [], version)
         smoke(stage_dir, spec["ui"] is not None, cuda, model, args.cuda_bin if cuda else None)
-        archive = out / f"shuyi-1.0-{name}.zip"
+        archive = out / f"shuyi-{version}-{name}.zip"
         archive.unlink(missing_ok=True)
         zip_dir(stage_dir, archive)
         print(f"{archive.name:32s} {archive.stat().st_size / 1024 / 1024:6.1f} MB  smoke ok")
 
-    source_zip = out / "shuyi-1.0-source.zip"
-    subprocess.run(["git", "archive", "--format=zip", f"--prefix=shuyi-1.0/",
+    source_zip = out / f"shuyi-{version}-source.zip"
+    subprocess.run(["git", "archive", "--format=zip", f"--prefix=shuyi-{version}/",
                     "-o", str(source_zip), args.tag], cwd=REPO, check=True)
     print(f"{source_zip.name:32s} {source_zip.stat().st_size / 1024 / 1024:6.1f} MB  from {args.tag}")
     return 0

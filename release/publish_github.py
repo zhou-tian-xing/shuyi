@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Create the GitHub release for a tag and upload its assets.
 
-    python release/publish_github.py --tag v1.0 --notes release/NOTES-1.0.md \\
-        --asset dist/1.0/*.zip models/b6c96-s305983-d3226791.bin
+    python release/publish_github.py --tag v1.1 --name "数弈 1.1" \\
+        --notes release/NOTES-1.1.md --asset dist/1.1/*.zip dist/1.1/screenshot-*.png
 
 The token comes from the credential helper git already uses (`git credential
 fill`), so nothing is read from a file or an environment variable and nothing is
@@ -52,7 +52,7 @@ def call(method: str, url: str, auth: str, payload=None, raw: bytes | None = Non
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", default="v1.0")
-    parser.add_argument("--name", default="数弈 1.0")
+    parser.add_argument("--name", default="数弈")
     parser.add_argument("--notes", type=Path, required=True)
     parser.add_argument("--asset", type=Path, nargs="+", required=True)
     parser.add_argument("--repo", default="zhou-tian-xing/shuyi")

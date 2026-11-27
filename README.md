@@ -17,7 +17,7 @@
 
 目前模型文件没有统一发布通道，因为模型文件会让 clone/push 变得缓慢，目前只会在 release 时发布当时的最强模型。
 
-![数弈原生界面与 MCTS 分析](docs/screenshot_1_0.png)
+![数弈原生界面与 MCTS 分析](docs/screenshot_1_1.png)
 
 ## Windows用户使用
 
@@ -78,7 +78,7 @@ cmake --build C:/shuyi_cuda_build --config Release
 出安装包（四个包 + 源码包）：
 
 ```bash
-python release/build_1_0.py --model <某个 .bin>
+python release/build_packages.py --version 1.1 --tag v1.1
 ```
 
 ## 规则
@@ -97,15 +97,19 @@ A 值默认 nopass +0.5、blocking +1.26、classic −0.5，可在界面设置�
 
 ## 权重
 
-权重不随仓库发布。获取方式只有两处：
+权重不随仓库、也不随安装包发布：它只是数据，而且一直在变。
+[Releases](https://github.com/zhou-tian-xing/shuyi/releases) 的资产里有单独的最强模型。
 
-- 安装包里带一份当时最强的权重；
-- [Releases](https://github.com/zhou-tian-xing/shuyi/releases) 的资产里有历史权重和单独的最强模型。
-
-把任意 `b<blocks>c<channels>-s<steps>-d<data>.bin` 放进 `models/`（或安装包同目录），界面菜单会自动列出；
+把任意 `b<blocks>c<channels>-s<steps>-d<data>.bin` 放进 `models/`，界面菜单会自动列出；
 规则集写在模型头里，不在文件名里。
 
 ## 评测
+
+![棋力随训练数据量增长](docs/figures/elo_vs_data.png)
+
+50 份可评分权重、20,500 局的对局表。横轴是累计自对弈局面数（对数），纵轴是 64 visits 下的 Elo
+（`random = 0`），每种架构一条逻辑斯蒂拟合：同样的数据量下更大的网络更强，而在同一条曲线上，
+数据还在增加时棋力也还在增加。
 
 [`training/leaderboard.py`](training/leaderboard.py) 从 `runs/leaderboard/matches_<visits>.csv` 拟合 Elo，
 锚点 `random = 0`，按 visits 分表、不混预算。榜单写到 `runs/leaderboard/leaderboard.md`。
