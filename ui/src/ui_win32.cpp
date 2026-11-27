@@ -129,6 +129,10 @@ int g_analysisNode = -1;
 // (`clear_board`, a new position, a new process).  Visits are only comparable
 // inside a run, so nothing may be refused across two of them.
 int g_analysisRun = 0;
+// The command id of the `analyze` whose `info` lines belong to `g_analysisNode`.
+// A line from an earlier search must never be filed under the position on screen:
+// it is a number about another position, and it would show up as a wrong one.
+std::string g_analysisId;
 
 constexpr double kDefaultAValue = 0.5;
 constexpr double kAValueStep = 0.5;
@@ -376,6 +380,7 @@ void clearAnalysisState() {
     g_analysisOn = false;
     g_analysisFinished = false;
     g_analysisNode = -1;
+    g_analysisId.clear();
 }
 
 // The window is a review surface: a position where the computer is to move does
@@ -401,14 +406,18 @@ std::string playCommand(Player side, Move move) {
     return line + squareName(move.cell) + " " + std::to_string(static_cast<int>(move.number));
 }
 
-// Navigation: the same record, another node.  The panel shows that node's cached
-// analysis instead of whatever happened to be on screen before.
+// Navigation: the same record, another node.
 //
 // Stepping forward is a *move* for the engine, not a new position: `play` lets it
 // carry the subtree it just searched into the child, so an analysis started there
 // continues from the visits the parent's search already spent on it.  Going up (or
 // jumping across the tree) has to rebuild the board from the root, which throws
 // the tree away -- the numbers then start again and the panel says so.
+//
+// Analysis is a mode here too: if it was running, it is running at the node you
+// land on, and it starts there without a second Space.  That is also what keeps
+// the panel honest -- the numbers on screen are the ones this search has, not the
+// ones some earlier search left behind, so nothing stale has to be cleared by hand.
 void goToNode(int id) {
     if (!g_record.contains(id)) return;
     if (id == g_record.current()) {
@@ -416,6 +425,7 @@ void goToNode(int id) {
         return;
     }
     const int from = g_record.current();
+    const bool wasAnalyzing = g_analysisOn || g_analysisFinished;
     sendEngineStopIfRunning();
     // The move is spelled before the record moves: the side to move at the child
     // is the opponent's, so depth is what says whose move it was.
@@ -439,6 +449,7 @@ void goToNode(int id) {
     }
     noteComputerToMove();
     refresh(true);
+    if (wasAnalyzing && !g_position.gameOver()) startEngineAnalysis();
 }
 
 void sendEngineStopIfRunning() {
@@ -551,8 +562,13 @@ void startEngineAnalysis(int visits) {
     g_analysisOn = true;
     g_analysisFinished = false;
     g_analysisNode = g_record.current();
-    sendEngine("analyze " + std::string(g_position.sideToMove() == Player::Red ? "red" : "black") +
-               " " + std::to_string(std::max(0, visits)));
+    // Tag the command: the engine echoes the id on every `info` line, so the
+    // window can tell this search's numbers from whatever the previous one was
+    // still sending when the position changed.
+    g_analysisId = std::to_string(++g_commandId);
+    sendEngine(g_analysisId + " analyze " +
+               std::string(g_position.sideToMove() == Player::Red ? "red" : "black") + " " +
+               std::to_string(std::max(0, visits)));
     g_engineMessage = visits > 0 ? L"分析中" : L"分析中（不限访问）";
     refresh();
 }
@@ -1422,14 +1438,20 @@ void handleEngineLine(const std::string& raw) {
         }
     }
     if (line.rfind("info ", 0) == 0) {
-        if ((g_analysisOn || g_enginePending) && g_analysisNode >= 0) {
+        // Only the search that is running now may write to the node on screen: a
+        // line from the previous one is a number about another position.
+        const std::string& running = g_enginePending ? g_pendingReplyId : g_analysisId;
+        if ((g_analysisOn || g_enginePending) && g_analysisNode >= 0 && commandId == running) {
             applyEngineAnalysis(g_analysisNode, line.substr(5));
         }
         return;
     }
     if (line.rfind("= done", 0) == 0) {
         // The analysis ran out of budget on its own.  The numbers stay on screen
-        // and the tree stays in the engine, so Space can extend it.
+        // and the tree stays in the engine, so Space can extend it.  A budget that
+        // ends late belongs to a search that is no longer on screen: ignore it,
+        // or it would pause the search that replaced it.
+        if (!g_analysisId.empty() && commandId != g_analysisId) return;
         g_analysisOn = false;
         g_analysisFinished = true;
         g_engineMessage = L"已达访问上限";
@@ -2611,8 +2633,8 @@ void showGuide() {
     text += L"· 点击棋盘：落子。\n";
     text += L"· 空格：开始 / 暂停分析；分析到上限后再按一次会继续，不再限量。开着分析落子，"
             L"会在新局面自动接着算（到过上限也一样）。\n";
-    text += L"· ↑ / ↓：在棋谱里上一步 / 下一步（↓ 走主干）。翻棋谱不会让电脑落子，"
-            L"要它走一步用 引擎 → 让电脑走一步。\n";
+    text += L"· ↑ / ↓：在棋谱里上一步 / 下一步（↓ 走主干）。开着分析时，翻到哪个局面就在哪个局面"
+            L"接着算，不用再按空格。翻棋谱不会让电脑落子，要它走一步用 引擎 → 让电脑走一步。\n";
     text += L"· Delete：删除当前着法及其后续，连同它们的分析。\n";
     text += L"· Ctrl+S：保存棋谱（等同 文件 → 保存棋谱…）。\n";
     text += L"· 左侧面板是分析的产物，右侧是棋谱：每一着一行，换个走法会在那一手后面缩进出一段"
