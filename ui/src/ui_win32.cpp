@@ -3018,14 +3018,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
     g_pendingOpen = openPath;
 
     // If an engine is discoverable next to the window, load it now so analysis is
-    // one keypress away.  If there is none, the window still starts.
-    if (!chooseEnginePath().empty()) {
+    // one keypress away.  A package ships no weights, so "an engine but no model"
+    // is a normal state: it must open quietly with the engine off, not greet the
+    // user with an error dialog for a file they were never given.
+    if (!chooseEnginePath().empty() && !defaultModelPath().empty()) {
         g_engineChoice = EngineChoice::MctsNn;
         if (!startEngineProcess()) {
             g_engineChoice = EngineChoice::Off;
             g_engineReady = false;
         }
         syncEngineChecks();
+    } else if (!chooseEnginePath().empty()) {
+        g_engineMessage = L"没有模型：把 .bin 放进 models/";
     }
 
     MSG message{};
