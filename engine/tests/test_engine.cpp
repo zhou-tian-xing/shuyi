@@ -1,10 +1,9 @@
-#include "shuyi/ai.h"
 #include "shuyi/endgame.h"
 #include "shuyi/engine.h"
 #include "shuyi/nn.h"
-#include "shuyi/tt.h"
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <iostream>
@@ -33,7 +32,6 @@ void checkImpl(bool condition, const char* expression, int line) {
 EngineOptions optionsFor(std::uint64_t seed) {
     EngineOptions options;
     options.seed = seed;
-    options.ttSizeMb = 4;
     options.mctsMaxChildren = 24;
     options.aValue = 1.0;
     return options;
@@ -245,7 +243,7 @@ void testExactEndgamePublished() {
 // deep and the cheap gate applies.
 void testExactEndgameAfterSearch() {
     int checked = 0;
-    for (int game = 0; game < 2; ++game) {
+    for (int game = 0; game < 4; ++game) {
         Position late;
         late.setRuleset(Ruleset::NoPass);
         std::uint64_t seed = 4242 + static_cast<std::uint64_t>(game) * 977;
@@ -258,34 +256,55 @@ void testExactEndgameAfterSearch() {
         if (kTotalMoves - late.stones() != 7) continue;
 
         EngineOptions options = optionsFor(51 + game);
+        // The default clock (400 ms) is a *policy*: it keeps the stream alive when
+        // the solve turns out expensive.  This test is about the mechanism, so it
+        // asks for a deterministic budget instead of whatever the machine manages.
+        options.exactEndgameAfterNodes = 2000000;
+        options.exactEndgameAfterTimeMs = 0;
         auto engine = makeEngine(EngineKind::Mcts, options);  // no model needed
         SearchRequest request;
         request.visits = 128;
         const Analysis analysis = engine->search(late, request);
         CHECK(analysis.valid);
-        // If the solver ran out of budget the answer is an honest estimate; when it
-        // answered, it must be the exact answer for every legal move.
-        if (!analysis.proven) continue;
+        // Either an exact solve, or an honest search: a proven result with zero
+        // visits is the only shape that may claim certainty, and every other
+        // answer must carry the visits it was sampled with.
+        if (!analysis.proven) {
+            CHECK(analysis.visits > 0);
+            continue;
+        }
         CHECK(analysis.hasScore);
-        CHECK(analysis.visits == 0);           // solved, not sampled
         CHECK(late.isLegal(analysis.best));
         CHECK(!analysis.cells.empty());
-        double best = -1e18;
+        // A proven root has two honest shapes: the solver solved the whole
+        // position (no visits, every cell exact), or one move was solved and it
+        // wins by force (visits > 0, and only that cell is exact).  The rule this
+        // pins is per cell: a cell that says "solved" carries the exact margin,
+        // and a cell that is not solved carries the visits it was sampled with.
+        int provenCells = 0;
         for (const CellAnalysis& info : analysis.cells) {
-            CHECK(info.proven);
-            CHECK(info.hasScore);
             CHECK(late.isLegal(info.move));
+            if (!info.proven) {
+                CHECK(info.visits > 0);
+                continue;
+            }
+            ++provenCells;
+            CHECK(info.hasScore);
             Position child = late;
             child.play(info.move);
-            const double value = -bruteForceScore(child, options.aValue);
-            CHECK(std::fabs(info.averageScore - value) < 1e-9);
-            best = std::max(best, value);
+            CHECK(std::fabs(info.averageScore + bruteForceScore(child, options.aValue)) < 1e-9);
         }
-        CHECK(std::fabs(analysis.averageScore - best) < 1e-9);
+        CHECK(provenCells > 0);
+        // A solved move outranks every sample: the panel must be showing one.
+        bool bestIsProven = false;
+        for (const CellAnalysis& info : analysis.cells) {
+            if (info.move == analysis.best) bestIsProven = info.proven;
+        }
+        CHECK(bestIsProven);
         // The cached answer must be returned again, without re-solving: an
         // extending analysis calls search() repeatedly on the same position.
         const Analysis again = engine->search(late, request);
-        CHECK(again.proven && again.hasScore && again.visits == 0);
+        CHECK(again.proven && again.hasScore);
         CHECK(std::fabs(again.averageScore - analysis.averageScore) < 1e-9);
         ++checked;
     }
@@ -307,6 +326,8 @@ void testExactGateStopsAtSeven() {
     }
     if (kTotalMoves - late.stones() != 8) return;
     EngineOptions options = optionsFor(61);
+    // 8 plies is 10 M nodes and 15-25 s: the answer must come back from the
+    // search, never from a zero-visit "exact" claim.
     auto engine = makeEngine(EngineKind::Mcts, options);
     SearchRequest request;
     request.visits = 128;
@@ -314,6 +335,34 @@ void testExactGateStopsAtSeven() {
     CHECK(analysis.valid);
     CHECK(analysis.visits > 0);   // it searched
     CHECK(!(analysis.proven && analysis.visits == 0));
+}
+
+// The solver must stop on the clock, not on luck.  A 9-ply position needs seconds
+// (measured 4-6 s, and some never finish inside 10 M nodes); with a deadline the
+// caller gets "not solved" back in the time it asked for and can publish the
+// search result instead.
+void testSolverRespectsTheClock() {
+    Position late;
+    late.setRuleset(Ruleset::NoPass);
+    std::uint64_t seed = 900;
+    while (kTotalMoves - late.stones() > 9) {
+        const std::vector<Move> moves = late.legalMoves();
+        if (moves.empty()) break;
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        late.play(moves[seed % moves.size()]);
+    }
+    if (kTotalMoves - late.stones() != 9) return;
+    const auto start = std::chrono::steady_clock::now();
+    const EndgameSolution solved = solveEndgame(late, 0.5, 10000000, 80);
+    const double ms = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - start)
+                          .count();
+    CHECK(!solved.solved);   // 9 plies is not an answer this budget can buy
+    CHECK(ms < 400.0);       // and it must not overrun the 80 ms it was given
+    // Without a clock the same call is free to run to its node budget; that is
+    // the mode the tests above use for exact answers.
+    const EndgameSolution unbounded = solveEndgame(late, 0.5, 4000000, 0);
+    CHECK(unbounded.solved || unbounded.nodes >= 4000000);
 }
 
 // Adaptive proving: the search spends proof budget on the moves it likes, and a
@@ -496,77 +545,23 @@ void testSymmetryReport() {
 void testVisitBudget() {
     Position position = classicStart();
     const int budget = 200;
-
-    for (EngineKind kind : {EngineKind::Mcts}) {
-        EngineOptions options = optionsFor(991);
-        auto engine = makeEngine(kind, options);
-        SearchRequest request;
-        request.timeLimitMs = 0; // no clock at all
-        request.visits = budget;
-        const Analysis first = engine->search(position, request);
-        CHECK(first.valid);
-        CHECK(first.visits == budget);
-    }
-
-    // Alpha-beta: one visit is one node.  It finishes the iteration it is in, so
-    // the count can overshoot; that overshoot must be identical run to run.
-    const auto runPruning = [&](long long* nodes, Move* move) {
-        EngineOptions options = optionsFor(992);
-        auto engine = makeEngine(EngineKind::Pruning, options);
-        SearchRequest request;
-        request.timeLimitMs = 0;
-        request.visits = budget * 10;
-        const Analysis analysis = engine->search(position, request);
-        CHECK(analysis.valid);
-        if (nodes) *nodes = analysis.nodes;
-        if (move) *move = analysis.best;
-    };
-    long long nodesA = 0, nodesB = 0;
-    Move moveA{}, moveB{};
-    runPruning(&nodesA, &moveA);
-    runPruning(&nodesB, &moveB);
-    CHECK(nodesA >= budget * 10);
-    CHECK(nodesA <= budget * 10 * 4);
-    CHECK(nodesA == nodesB);
-    CHECK(moveA == moveB);
+    EngineOptions options = optionsFor(991);
+    auto engine = makeEngine(EngineKind::Mcts, options);
+    SearchRequest request;
+    request.timeLimitMs = 0; // no clock at all
+    request.visits = budget;
+    const Analysis first = engine->search(position, request);
+    CHECK(first.valid);
+    CHECK(first.visits == budget);
 }
 
-void testTt() {
-    TranspositionTable table(1);
-    table.newSearch();
-    Move move(index(4, 4), 7);
-    table.store(0x123456789ABCDEF0ULL, 4, 12, TTFlag::Exact, move);
-    int value = 0;
-    Move best;
-    CHECK(table.probe(0x123456789ABCDEF0ULL, 4, -100, 100, value, best));
-    CHECK(value == 12);
-    CHECK(best == move);
-    CHECK(!table.probe(0x123456789ABCDEF1ULL, 4, -100, 100, value, best));
-}
 
-void testSearchProgress() {
-    Position position = classicStart();
-    SearchOptions search;
-    search.timeLimitMs = 40;
-    search.maxDepth = 3;
-    int reports = 0;
-    search.onProgress = [&](const SearchProgress& progress) {
-        ++reports;
-        CHECK(progress.nodes >= 0);
-    };
-    TranspositionTable table(2);
-    const SearchResult result = searchAlphaBeta(position, search, table);
-    CHECK(result.move.valid());
-    CHECK(position.isLegal(result.move));
-    CHECK(reports > 0);
-}
 
 void testEngineKinds() {
     Position position = classicStart();
     SearchRequest request;
     request.timeLimitMs = 35;
-    for (EngineKind kind : {EngineKind::Random, EngineKind::Pruning, EngineKind::Mcts,
-                            EngineKind::MctsNn}) {
+    for (EngineKind kind : {EngineKind::Random, EngineKind::Mcts, EngineKind::MctsNn}) {
         EngineOptions options = optionsFor(1234 + static_cast<int>(kind));
         options.nnModelPath = std::string(SHUYI_SOURCE_DIR) + "/models/shuyi_resnet_v1.bin";
         auto engine = makeEngine(kind, options);
@@ -598,82 +593,7 @@ void testEngineKinds() {
     }
 }
 
-void testAspirationPvs() {
-    Position position = classicStart();
-    SearchOptions base;
-    base.timeLimitMs = 5000;
-    base.maxDepth = 4;
-    base.rootBranching = 10;
-    base.maxBranching = 6;
-    base.seed = 0xA5A5A5A5ULL;
-    base.aspirationWindow = 1;
-    base.usePvs = true;
-    // Selective beam + TT can legitimately change which moves survive between
-    // re-searches, so compare the window algorithm with a deterministic tree.
-    base.useTt = false;
 
-    TranspositionTable tableA(2);
-    const SearchResult aspiration = searchAlphaBeta(position, base, tableA);
-    CHECK(aspiration.completed);
-    CHECK(aspiration.depth >= 4);
-    CHECK(aspiration.windowResearches > 0);
-    CHECK(aspiration.pvsResearches > 0);
-
-    SearchOptions full = base;
-    full.aspirationWindow = 0;
-    full.usePvs = false;
-    TranspositionTable tableB(2);
-    const SearchResult reference = searchAlphaBeta(position, full, tableB);
-    CHECK(reference.completed);
-    CHECK(reference.depth == aspiration.depth);
-    if (reference.value != aspiration.value) {
-        std::cerr << "aspiration value=" << aspiration.value << " depth=" << aspiration.depth
-                  << " windowResearches=" << aspiration.windowResearches
-                  << " pvs=" << aspiration.pvsResearches
-                  << " reference value=" << reference.value << " depth=" << reference.depth
-                  << "\\n";
-    }
-    CHECK(reference.value == aspiration.value);
-    CHECK(position.isLegal(aspiration.move));
-    CHECK(position.isLegal(reference.move));
-
-    SearchOptions fullPvs = base;
-    fullPvs.aspirationWindow = 0;
-    fullPvs.usePvs = true;
-    TranspositionTable tableD(2);
-    const SearchResult pvsOnly = searchAlphaBeta(position, fullPvs, tableD);
-    CHECK(pvsOnly.completed);
-    if (pvsOnly.value != reference.value) {
-        std::cerr << "pvsOnly value=" << pvsOnly.value << " depth=" << pvsOnly.depth
-                  << " pvs=" << pvsOnly.pvsResearches << " reference=" << reference.value << "\\n";
-    }
-    CHECK(pvsOnly.value == reference.value);
-
-    SearchOptions noPvs = base;
-    noPvs.aspirationWindow = 0;
-    noPvs.usePvs = false;
-    TranspositionTable tableC(2);
-    const SearchResult plain = searchAlphaBeta(position, noPvs, tableC);
-    CHECK(plain.completed);
-    if (plain.value != reference.value) {
-        std::cerr << "noPvs value=" << plain.value << " depth=" << plain.depth
-                  << " reference=" << reference.value << "\\n";
-    }
-    CHECK(plain.value == reference.value);
-}
-
-void testHandAwareEvaluation() {
-    Position empty;
-    CHECK(evaluateHandAware(empty) == 0);
-    CHECK(evaluateHandAware(empty, 0.0) == 0);
-
-    Position position = classicStart();
-    CHECK(position.play(Move(index(4, 4), 9))); // red spends a high number
-    CHECK(position.play(Move(index(0, 0), 1)));  // black spends a low number
-    const int noHand = evaluateHandAware(position, 0.0);
-    const int withHand = evaluateHandAware(position, 1.0);
-    CHECK(noHand != withHand);
-}
 
 void testDirichletRoot() {
     Position position = classicStart();
@@ -849,16 +769,13 @@ void testNoPassUsesTheModel() {
 } // namespace
 
 int runEngineTests() {
-    testTt();
-    testSearchProgress();
-    testAspirationPvs();
-    testHandAwareEvaluation();
     testEngineKinds();
     testDirichletRoot();
     testNnModel();
     testEndgameExactScore();
     testExactEndgameAfterSearch();
     testExactGateStopsAtSeven();
+    testSolverRespectsTheClock();
     testAdaptiveProof();
     testNoPassUsesTheModel();
     testNoHardValueWithoutProof();

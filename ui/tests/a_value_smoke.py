@@ -1,4 +1,10 @@
-"""Drive the Win32 A-value settings, menu and shortcuts against a temporary INI."""
+"""Drive the Win32 A-value controls and the settings dialog against a temp INI.
+
+The A value has exactly two entry points now: the −/+ buttons in the bottom bar
+(which send ID_A_MINUS / ID_A_PLUS) and the settings dialog.  The old A-value menu
+and the `[` / `]` keys are gone, so this test would fail if either came back by
+accident, and it checks the value actually reaches shuyi-ui.ini.
+"""
 import ctypes
 import os
 import shutil
@@ -18,6 +24,11 @@ user32.SendMessageTimeoutW.argtypes = [
     wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
     wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t),
 ]
+
+ID_SETTINGS = 5010
+ID_SETTINGS_OK = 6001
+ID_A_PLUS = 3001
+ID_A_MINUS = 3002
 
 
 def wait_window(proc, class_name):
@@ -70,22 +81,20 @@ def main(binary):
         with subprocess.Popen([exe], cwd=root, env=env) as proc:
             try:
                 window = wait_window(proc, "ShuyiNativeWindow")
-                send(window, 0x0111, 5010)  # WM_COMMAND: open Settings
+                # The dialog is the only place the default can be applied.
+                send(window, 0x0111, ID_SETTINGS)
                 dialog = wait_window(proc, "ShuyiSettingsWindow")
-                send(dialog, 0x0111, 6001)  # Apply the fresh default
-                assert a_value(ini) == 0.5
-                send(window, 0x0100, 0xDB)  # [
-                assert a_value(ini) == 0.0
-                send(window, 0x0111, 3002)  # A -0.5 menu
-                assert a_value(ini) == -0.5
-                send(window, 0x0100, 0xDD)  # ]
-                assert a_value(ini) == 0.0
-                send(window, 0x0111, 3001)  # A +0.5 menu
-                assert a_value(ini) == 0.5
-                send(window, 0x0111, 3005)  # A = +2 preset
-                assert a_value(ini) == 2.0
-                send(window, 0x0111, 3006)  # Restore defaults
-                assert a_value(ini) == 0.5
+                send(dialog, 0x0111, ID_SETTINGS_OK)
+                assert a_value(ini) == 0.5, a_value(ini)
+                # The bottom bar's − / + buttons.
+                send(window, 0x0111, ID_A_MINUS)
+                assert a_value(ini) == 0.0, a_value(ini)
+                send(window, 0x0111, ID_A_MINUS)
+                assert a_value(ini) == -0.5, a_value(ini)
+                send(window, 0x0111, ID_A_PLUS)
+                assert a_value(ini) == 0.0, a_value(ini)
+                send(window, 0x0111, ID_A_PLUS)
+                assert a_value(ini) == 0.5, a_value(ini)
                 send(window, 0x0010)  # WM_CLOSE
                 assert proc.wait(timeout=5) == 0
             finally:

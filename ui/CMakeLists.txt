@@ -30,15 +30,17 @@ else()
     add_compile_options(-finput-charset=UTF-8)
 endif()
 
-add_executable(shuyi WIN32
+add_executable(shuyi
+    WIN32
     src/ui_win32.cpp
     src/engine_client.cpp
     src/engine_protocol.cpp
+    src/game_record.cpp
     src/json.cpp
     src/discovery.cpp
 )
 target_include_directories(shuyi PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(shuyi PRIVATE shuyi_core comctl32 gdi32 user32)
+target_link_libraries(shuyi PRIVATE shuyi_core comctl32 gdi32 user32 shell32)
 if(MSVC)
     target_compile_options(shuyi PRIVATE /W4)
 else()
@@ -76,6 +78,24 @@ else()
     target_compile_options(shuyi_ui_tests PRIVATE -finput-charset=UTF-8 -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME shuyi_ui_view COMMAND shuyi_ui_tests)
+
+# The record tree: navigation, variation reuse, deletion and the saved text.  It
+# needs no window, and a tree that quietly drops a branch is exactly the kind of
+# bug a screenshot cannot show.
+add_executable(shuyi_record_tests
+    tests/test_game_record.cpp
+    src/game_record.cpp
+    src/engine_protocol.cpp
+    src/json.cpp
+)
+target_include_directories(shuyi_record_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(shuyi_record_tests PRIVATE shuyi_core)
+if(MSVC)
+    target_compile_options(shuyi_record_tests PRIVATE /utf-8 /W4)
+else()
+    target_compile_options(shuyi_record_tests PRIVATE -finput-charset=UTF-8 -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME shuyi_ui_record COMMAND shuyi_record_tests)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)

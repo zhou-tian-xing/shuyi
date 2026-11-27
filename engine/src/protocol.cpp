@@ -255,7 +255,7 @@ void ProtocolSession::handle(const std::string& raw) {
         return respond(true,
                        "protocol_version name version list_commands capabilities boardsize "
                        "ruleset clear_board play genmove analyze stop set_engine set_backend "
-                       "set_model set_visits set_time set_a set_window set_pvs bench selfplay quit");
+                       "set_model set_visits set_time set_a bench selfplay quit");
     }
     if (command == "capabilities") return cmdCapabilities();
     if (command == "quit") {
@@ -413,29 +413,6 @@ void ProtocolSession::handle(const std::string& raw) {
         std::ostringstream formatted;
         formatted << value;
         return respond(true, formatted.str());
-    }
-    if (command == "set_window") {
-        int halfWidth = 0;
-        if (!(input >> halfWidth)) return respond(false, "usage: set_window <points>");
-        if (halfWidth < 0) return respond(false, "window must be >= 0");
-        stopAndJoin();
-        options_.aspirationWindow = halfWidth;
-        std::string error;
-        if (!rebuild(kind_, &error, false)) return respond(false, error);
-        return respond(true, std::to_string(halfWidth));
-    }
-    if (command == "set_pvs") {
-        std::string value;
-        if (!(input >> value)) return respond(false, "usage: set_pvs on|off");
-        value = lower(value);
-        bool enabled = false;
-        if (value == "on" || value == "1") enabled = true;
-        else if (value != "off" && value != "0") return respond(false, "usage: set_pvs on|off");
-        stopAndJoin();
-        options_.usePvs = enabled;
-        std::string error;
-        if (!rebuild(kind_, &error, false)) return respond(false, error);
-        return respond(true, enabled ? "on" : "off");
     }
     if (command == "play") {
         std::string color;
@@ -606,7 +583,6 @@ void ProtocolSession::cmdAnalyze(const std::string& args, bool playMode) {
     const std::string turn = sideName(snapshot.sideToMove());
     const std::string backend = backendUsed_;
     const bool analysisMode = !playMode;
-    const EngineKind kind = kind_;
     // Only a budget ends an analysis by itself; a clock budget applies to genmove
     // and to a front end that explicitly asks for no visit limit on a move.
     const int timeLimit = (analysisMode && visits == 0) ? 0 : (visits > 0 ? 0 : options_.timeLimitMs);
@@ -617,7 +593,7 @@ void ProtocolSession::cmdAnalyze(const std::string& args, bool playMode) {
     searchId_ = id;
 
     worker_ = std::thread([this, snapshot, engine, id, turn, backend, analysisMode, visits, interval,
-                           timeLimit, tag, kind]() {
+                           timeLimit, tag]() {
         const Clock::time_point started = Clock::now();
         SearchRequest request;
         request.visits = visits;
@@ -633,18 +609,7 @@ void ProtocolSession::cmdAnalyze(const std::string& args, bool playMode) {
             writeLine(line);
         };
 
-        Analysis last;
-        if (analysisMode && kind == EngineKind::Pruning && visits == 0) {
-            // Alpha-beta stops at its depth limit, so keep refining until the
-            // front end asks to stop.
-            while (!stop_.load(std::memory_order_relaxed)) {
-                request.timeLimitMs = 1000;
-                last = engine->search(snapshot, request);
-                if (!last.valid) break;
-            }
-        } else {
-            last = engine->search(snapshot, request);
-        }
+        Analysis last = engine->search(snapshot, request);
 
         const bool stopped = stop_.load(std::memory_order_relaxed);
         if (!analysisMode) {

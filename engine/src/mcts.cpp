@@ -151,7 +151,8 @@ public:
         // winning line and leaves the margin unpublished.
         if (options_.exactEndgamePlies > 0 &&
             pliesRemaining(position) <= options_.exactEndgamePlies) {
-            Analysis exact = exactAnalysis(position, kExactEndgameNodes);
+            Analysis exact = exactAnalysis(position, kExactEndgameNodes,
+                                           options_.exactEndgameTimeMs);
             if (exact.valid) {
                 // Publish it like any other snapshot: a front end learns the
                 // position from the info stream, and a search that returns without
@@ -218,7 +219,8 @@ public:
         if (options_.exactEndgameAfterPlies > options_.exactEndgamePlies &&
             pliesLeft <= options_.exactEndgameAfterPlies &&
             !(analysis.proven && analysis.hasScore)) {
-            Analysis exact = exactAnalysis(position, options_.exactEndgameAfterNodes);
+            Analysis exact = exactAnalysis(position, options_.exactEndgameAfterNodes,
+                                           options_.exactEndgameAfterTimeMs);
             if (exact.valid) {
                 lateExactCached_ = exact;
                 lateExactHasScore_ = true;
@@ -773,7 +775,8 @@ private:
             proofSpentNodes_ += budget;
             Position child = rootPosition;
             child.play(edges_[e].move);
-            const EndgameSolution solved = solveEndgame(child, options_.aValue, budget);
+            const EndgameSolution solved =
+                solveEndgame(child, options_.aValue, budget, options_.proofTimeMs);
             if (!solved.solved) continue;
             const int node = edges_[e].child;
             // Value from the child's side to move: the solver's score is too.
@@ -949,11 +952,13 @@ private:
     // result: proven, with a margin on every cell.  `visits` stays 0 because no
     // simulation ran -- the front end shows that as "solved", not as an empty
     // search.
-    Analysis exactAnalysis(const Position& position, long long nodeBudget) const {
+    Analysis exactAnalysis(const Position& position, long long nodeBudget,
+                           int timeLimitMs) const {
         Analysis analysis;
         analysis.kind = kind();
         analysis.valid = false;
-        const EndgameSolution solved = solveEndgame(position, options_.aValue, nodeBudget);
+        const EndgameSolution solved =
+            solveEndgame(position, options_.aValue, nodeBudget, timeLimitMs);
         if (!solved.solved) return analysis;
         analysis.valid = true;
         analysis.proven = true;
@@ -1149,7 +1154,7 @@ private:
             cellInfo.winrate = edgeValue(edge);
             cellInfo.averageScore = edgeScore(edge);
             cellInfo.hasScore = edgeHasScore(edge);
-            cellInfo.hasData = edge.visits > 0;
+            cellInfo.hasData = edge.visits > 0 || cellInfo.proven;
             cellInfo.proven = edgeProven(edge);
             if (!cellInfo.hasScore && cellInfo.proven) {
                 // Solved without a final margin (see snapshot): the visits to the

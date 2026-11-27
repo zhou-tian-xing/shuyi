@@ -1,4 +1,3 @@
-#include "shuyi/ai.h"
 #include "shuyi/position.h"
 
 #include <algorithm>
@@ -228,33 +227,6 @@ void testAValue() {
     CHECK(position.outcome(0.0) == expected);
 }
 
-void testAi() {
-    Position position = classicStart();
-    SearchOptions options;
-    options.timeLimitMs = 120;
-    options.seed = 42;
-    const SearchResult result = think(position, options);
-    CHECK(result.move.valid());
-    CHECK(position.isLegal(result.move));
-    CHECK(position.play(result.move));
-    CHECK(position.validate());
-
-    // The AI must also work at the very end of the game and never hang.
-    Position late;
-    std::mt19937 rng(7);
-    while (late.ply() < 48) {
-        const auto moves = late.legalMoves();
-        std::uniform_int_distribution<std::size_t> pick(0, moves.size() - 1);
-        late.play(moves[pick(rng)]);
-    }
-    options.timeLimitMs = 80;
-    for (int i = 0; i < 6 && !late.gameOver(); ++i) {
-        const Move move = chooseMove(late, options);
-        CHECK(move.valid());
-        CHECK(late.play(move));
-    }
-    CHECK(late.gameOver());
-}
 
 } // namespace
 
@@ -269,24 +241,6 @@ int main() {
     const auto step = [&](const char* name) {
         if (trace) std::cerr << "[test] " << name << std::endl;
     };
-    if (std::getenv("SHUYI_SEARCH_SMOKE")) {
-        std::cerr << "[smoke] think from an empty board" << std::endl;
-        Position fresh;
-        SearchOptions smokeOptions;
-        smokeOptions.timeLimitMs = 120;
-        if (const char* depth = std::getenv("SHUYI_SMOKE_DEPTH")) {
-            smokeOptions.maxDepth = std::atoi(depth);
-        }
-        if (std::getenv("SHUYI_SMOKE_NO_PVS")) smokeOptions.usePvs = false;
-        if (std::getenv("SHUYI_SMOKE_NO_ASP")) smokeOptions.aspirationWindow = 0;
-        if (std::getenv("SHUYI_SMOKE_NO_TT")) smokeOptions.useTt = false;
-        std::cerr << "[smoke] depth=" << smokeOptions.maxDepth
-                  << " pvs=" << smokeOptions.usePvs
-                  << " asp=" << smokeOptions.aspirationWindow
-                  << " tt=" << smokeOptions.useTt << std::endl;
-        const SearchResult smoke = think(fresh, smokeOptions);
-        std::cerr << "[smoke] ok " << squareName(smoke.move.cell) << std::endl;
-    }
     step("geometry");
     testGeometry();
     step("InitialPosition");
@@ -306,7 +260,6 @@ int main() {
     step("AValue");
     testAValue();
     step("Ai");
-    testAi();
     step("rules");
     failures += runRulesTests();
     step("komi");

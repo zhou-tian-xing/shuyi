@@ -13,7 +13,7 @@
 
 namespace shuyi {
 
-enum class EngineKind : std::uint8_t { Random = 0, Pruning = 1, Mcts = 2, MctsNn = 3 };
+enum class EngineKind : std::uint8_t { Random = 0, Mcts = 1, MctsNn = 2 };
 
 const char* engineName(EngineKind kind);
 bool parseEngineName(const std::string& name, EngineKind& kind);
@@ -36,8 +36,6 @@ struct EngineOptions {
     // machines, and an unbounded analysis drifted into millions of visits.  Set
     // 0 explicitly (protocol: `set_visits 0`) to fall back to the clock.
     int visits = 512;
-    int ttSizeMb = 16;
-    int maxDepth = 12;
     int mctsMaxChildren = 48;
     // Root width ceiling when searching against a clock (a visit budget sizes the
     // root itself: one network forward per root move, so a 512-visit search opens
@@ -54,13 +52,20 @@ struct EngineOptions {
     // Measured on a 3080 laptop CPU: 3-6 stones left costs 1-34 ms (the hands are
     // nearly empty, so the branching is small); 7 costs seconds.  0 disables.
     int exactEndgamePlies = 6;
-    // After the search, one more ply is still worth solving outright.  Measured
-    // with tools/research/endgame_cost.cpp: a 7-ply position needs 0.5-1.8 M nodes
-    // (1-4 s) with alpha-beta, so a few thousand visits can never prove it, while
-    // the solver usually can; 8 plies already needs 10 M nodes and 15-25 s, so the
-    // second gate stops at 7.  0 disables the second-chance solve.
+    // Wall clock for that solve.  Nodes are not milliseconds: the same 7-ply
+    // position measured anywhere between 15 k and 1.8 M nodes
+    // (tools/research/endgame_cost.cpp), and the number of legal moves predicts
+    // nothing (14 moves cost 15 k nodes, 37 moves cost 33 k, 32 moves cost 531 k).
+    // Hence a ply gate plus a clock, never a move-count estimate.
+    int exactEndgameTimeMs = 500;
+    // After the search, one more ply is still worth solving outright.  The clock
+    // is deliberately short: at 7 plies left a full solve needs 0.5-1.8 M nodes
+    // (0.5-2 s), which is a stall in the middle of an analysis.  With this budget
+    // the cheap endgames are still solved exactly and the expensive ones fall back
+    // to the search result instead of freezing the stream.
     int exactEndgameAfterPlies = 7;
-    long long exactEndgameAfterNodes = 2000000;
+    long long exactEndgameAfterNodes = 1500000;
+    int exactEndgameAfterTimeMs = 400;
     // Adaptive proving of the moves the search likes.  After the visits, the most
     // visited root moves are solved outright, each with a budget that starts small
     // and doubles on every pass while it keeps failing, up to proofMaxNodes.  A
@@ -74,14 +79,15 @@ struct EngineOptions {
     // budget is spent).  Interleaving is what makes the doubling schedule reach a
     // useful budget inside one analysis: 512 visits buys four passes.
     int proofEveryVisits = 512;
-    long long proofStartNodes = 100000;
-    long long proofMaxNodes = 2000000;
-    // Hard ceiling on what proving may spend on one tree, across all passes: a
-    // hopeless position must not keep doubling forever.
-    long long proofMaxTotalNodes = 1500000;
+    // Starting budget, per-pass ceiling and total ceiling for proving.  Every
+    // attempt also has a wall-clock limit, because one ply of solving costs
+    // anything from 15 k to 1.8 M nodes: proving must be a bounded speculation,
+    // not a second search that owns the analysis.
+    long long proofStartNodes = 60000;
+    long long proofMaxNodes = 400000;
+    long long proofMaxTotalNodes = 400000;
+    int proofTimeMs = 100;
     int proofMaxPlies = 8;
-    int aspirationWindow = 24;
-    bool usePvs = true;
     // There is deliberately no tree-size cap: a cap silently changed how leaves
     // were scored once it was reached (a stale build reported a hard 100% win at
     // ~35k visits that way).  The tree grows until the visit budget is spent, and
@@ -144,9 +150,6 @@ struct Analysis {
     Move best{};
     int depth = 0;
     long long nodes = 0;
-    int window = 0;
-    int windowResearches = 0;
-    int pvsResearches = 0;
     int visits = 0;
     double winrate = 0.5;
     int score = 0; // side-to-move perspective, includes the A value

@@ -12,21 +12,17 @@
 
 include/shuyi/
   engine.h        Engine 基类、EngineOptions、SearchRequest（visits/interval）、Analysis
-  ai.h            剪枝搜索：SearchOptions（nodeLimit）、SearchResult、searchAlphaBeta
-  ai_policy.h     "评估 + 排序"策略接口；规则特异的实现由 ai_blocking.cpp 提供
+  endgame.h       终盘精确求解：可控节点预算 + 墙钟上限
   nn.h            策略价值网络：SHUYINN3/SHUYINN4 文件格式、特征平面、CPU 前向、分数头
   nn_cuda.h       CUDA 批量前向接口
-  tt.h            置换表
   protocol.h      行协议会话：命令解析、位置状态、单搜索线程
 
 src/
-  ai.cpp          迭代加深 + aspiration window + PVS；nodeLimit 在这里生效
-  ai_blocking.cpp 阻挡规则的评估与排序——规则特异代码只放这里
   mcts.cpp        PUCT 树搜索：强制过手、证明回传、对称轨道、访问预算
-  engine.cpp      四种 Engine 实现（random / pruning / mcts / mcts_nn）
+  endgame.cpp     终盘 negamax（play/undo），节点预算 + 墙钟
+  engine.cpp      Engine 实现（random / mcts / mcts_nn）
   nn.cpp          模型读写 + CPU 前向
   nn_cuda.cu      im2col + cuBLAS 的 CUDA 前向（含分数头）
-  tt.cpp          置换表
   protocol.cpp    命令集、严格错误、启动握手、bench / selfplay
   protocol_json.cpp  Analysis → JSON
   main.cpp        stdin 循环
@@ -46,8 +42,8 @@ cmake -S engine -B build-engine-cuda -DSHUYI_CUDA=ON -DCUDAToolkit_ROOT=<cuda>
 
 ## 三条不能破的规则
 
-1. **评估预算只能按 visits。** `SearchRequest::visits` 是唯一预算；剪枝引擎把它解释成**节点数**
-   （完全不看墙钟），MCTS 解释成模拟次数。默认 512。`visits 0` 表示分析不限量（直到 `stop`），
+1. **评估预算只能按 visits。** `SearchRequest::visits` 是唯一预算，一次访问就是一次模拟
+   （网络前向或 rollout）。默认 512。`visits 0` 表示分析不限量（直到 `stop`），
    落子则退回墙钟——因为落子必须回来。
 2. **没有隐藏的停止条件。** 搜索只会因为预算、墙钟或 `stop` 结束。**不要**加树大小上限：
    曾经的上限在 3.5 万 visits 时把未终局叶子当终局，产生了假的 100% 胜率。

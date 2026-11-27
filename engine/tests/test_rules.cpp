@@ -5,7 +5,6 @@
 // never block.  Everything else (score, 54 stones, three copies per number) is the
 // classic game, so these tests also pin down that switching the rule set does not
 // disturb the score.
-#include "shuyi/ai.h"
 #include "shuyi/format.h"
 #include "shuyi/position.h"
 #include "shuyi/rules.h"
@@ -256,15 +255,6 @@ void testPassRoundTrip() {
     }
 }
 
-void testBlockingSearchFindsMoves() {
-    Position position = blockingStart();
-    SearchOptions options;
-    options.timeLimitMs = 40;
-    options.maxDepth = 4;
-    const SearchResult result = searchAlphaBeta(position, options, *new TranspositionTable(4));
-    CHECK(result.move.valid());
-    CHECK(position.isLegal(result.move));
-}
 
 void testVisitAbbreviations() {
     // The mark shows at most four characters, so 1.2k / 12k / 120k / 1.2M.
@@ -421,7 +411,6 @@ int runRulesTests() {
     testNoPassEndsWhenStarved();
     testNoPassPlacementMatchesBlocking();
     testPassRoundTrip();
-    testBlockingSearchFindsMoves();
     testRulesetNames();
     testVisitAbbreviations();
     testScoreFormatting();

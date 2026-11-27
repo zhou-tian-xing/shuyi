@@ -60,5 +60,27 @@ int main() {
             }
         }
     }
+
+    // The same positions under the limits the engine actually uses: a node
+    // budget plus a wall-clock deadline.  What matters for a front end is that
+    // the worst case is bounded, not that every position is solved.
+    std::printf("\nwith deadlines (node budget + wall clock)\n");
+    struct Limit { long long nodes; int ms; };
+    const Limit limits[] = {{250000LL, 120}, {1500000LL, 400}, {3000000LL, 800}};
+    for (int plies = 5; plies <= 9; ++plies) {
+        for (int which = 0; which < 4; ++which) {
+            Position position = latePosition(plies, 1000 + static_cast<std::uint64_t>(which) * 7919);
+            if (kTotalMoves - position.stones() != plies) continue;
+            for (const Limit& limit : limits) {
+                const auto start = std::chrono::steady_clock::now();
+                const EndgameSolution solved = solveEndgame(position, 0.5, limit.nodes, limit.ms);
+                const double ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - start)
+                                      .count();
+                std::printf("%5d %5d %8lld/%-4d %8lld %s (%.1f ms)\n", plies, which, limit.nodes,
+                            limit.ms, solved.nodes, solved.solved ? "solved" : "GAVE UP", ms);
+            }
+        }
+    }
     return 0;
 }

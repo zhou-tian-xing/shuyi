@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Cross-line arena: every player, one rating list.
 
-All players are processes speaking the same line protocol, so a hand-written
-pruning engine, a CPU MCTS, a CPU MCTS+NN and a GPU model sit in the same
-tournament:
+All players are processes speaking the same line protocol, so a CPU MCTS, a CPU
+MCTS+NN and a GPU model sit in the same tournament:
 
     random                       shuyi_engine.exe, uniform random (the Elo anchor)
-    pruning                      shuyi_engine.exe, Alpha-Beta
     mcts                         shuyi_engine.exe, CPU MCTS
     mcts_nn:<model>              shuyi_engine.exe, CPU MCTS + network
     gpu:<model>                  shuyi_selfplay_gpu.exe --mode serve (batched CUDA)
@@ -19,7 +17,7 @@ training/rule_probe.py's scorer, which is the same formula both engines use; no
 third-party result reporting is involved.
 
     python training/arena.py --games 16 --visits 128 \
-        --players random pruning mcts mcts_nn:models/shuyi_resnet_v2.bin \
+        --players random mcts mcts_nn:models/shuyi_resnet_v2.bin \
                   gpu:docs/srv1_run/models/gen_002.bin
     python training/elo.py --report runs/probes/arena/classic.json --anchor random
 """
@@ -118,9 +116,9 @@ class EnginePlayer(Process):
             self.send(f"set_model {model}")
             self.read_result()
         # Every player is budgeted in visits, never in milliseconds: a clock
-        # budget turns a rating into a benchmark of the host.  For the pruning
-        # engine one "visit" is one node (one leaf evaluation), for MCTS it is
-        # one simulation -- see training/evalconfig.py.
+        # budget turns a rating into a benchmark of the host.  One visit is one
+        # tree simulation (one network evaluation or one rollout) -- see
+        # training/evalconfig.py.
         for command in (f"set_visits {args.visits}", f"set_time {args.hang_guard_ms}",
                         f"set_a {args.komi}"):
             self.send(command)

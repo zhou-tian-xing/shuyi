@@ -50,7 +50,9 @@ std::vector<int> rankAnalysisCells(const EngineAnalysisView& view, const Positio
     std::vector<int> order;
     for (int index = 0; index < kCells; ++index) {
         const CellAnalysisView& cell = view.cells[index];
-        if (view.hasCell[index] && cell.hasData && (cell.proven || cell.visits > 0) &&
+        // A solved cell is data even without visits: the solver answers without
+        // simulating anything.  Any other cell needs the visits it was sampled with.
+        if (view.hasCell[index] && (cell.proven || (cell.hasData && cell.visits > 0)) &&
             position.isLegal(cell.move)) {
             order.push_back(index);
         }
@@ -58,10 +60,16 @@ std::vector<int> rankAnalysisCells(const EngineAnalysisView& view, const Positio
     std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
         const CellAnalysisView& lhs = view.cells[a];
         const CellAnalysisView& rhs = view.cells[b];
+        // A solved move outranks every estimate.  The Wilson bound exists to rank
+        // guesses by how little is known about them; a proof is not a guess, and
+        // the engine itself prefers a proven move over a ~99% sample when it picks
+        // one.  Ranking the display the other way made the panel show a sampled
+        // 62% as "best" while the engine had already solved a different move -- and
+        // the user had no way to see that the answer was known.
+        if (lhs.proven != rhs.proven) return lhs.proven;
         const double lhsRate = displayWinRate(lhs);
         const double rhsRate = displayWinRate(rhs);
         if (lhsRate != rhsRate) return lhsRate > rhsRate;
-        if (lhs.proven != rhs.proven) return lhs.proven;
         if (lhs.proven) {
             if (lhs.hasScore != rhs.hasScore) return lhs.hasScore;
             if (lhs.hasScore && lhs.averageScore != rhs.averageScore) {

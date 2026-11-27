@@ -56,8 +56,8 @@ struct Game {
 void usage() {
     std::cout
         << "usage: shuyi_match [options]\n"
-        << "  --a-engine NAME  random|pruning|mcts|mcts_nn (default mcts_nn)\n"
-        << "  --b-engine NAME  random|pruning|mcts|mcts_nn (default mcts_nn)\n"
+        << "  --a-engine NAME  random|mcts|mcts_nn (default mcts_nn)\n"
+        << "  --b-engine NAME  random|mcts|mcts_nn (default mcts_nn)\n"
         << "  --a-model PATH   model for A when A is mcts_nn\n"
         << "  --b-model PATH   model for B when B is mcts_nn\n"
         << "  --a-name NAME    label in the report\n"
@@ -127,8 +127,6 @@ std::unique_ptr<Engine> create(EngineKind kind, const Options& options, const st
     engineOptions.seed = seed;
     engineOptions.timeLimitMs = options.visits > 0 ? 0 : options.timeMs;
     engineOptions.visits = options.visits;
-    engineOptions.maxDepth = 10;
-    engineOptions.ttSizeMb = 16;
     engineOptions.mctsMaxChildren = 32;
     engineOptions.mctsRootChildren = 64;
     engineOptions.nnModelPath = model;

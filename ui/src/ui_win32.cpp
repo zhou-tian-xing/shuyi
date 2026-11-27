@@ -1,25 +1,38 @@
 // 数弈 — native Win32/GDI user interface.  No web view, browser, or HTML.
+//
+// The window is one board and three pieces of chrome:
+//
+//   top-left     new game, save, load — the actions a game needs;
+//   left         what the analysis produced: the verdict, the move list, the
+//                score, and the curves of the line on screen;
+//   right        the record tree: every move ever played from this game, with a
+//                branch per alternative, so going back is navigation, not undo;
+//   bottom       the A value and the pieces still in hand, small.
+//
+// Everything else lives in the menu bar (four items) or in the help window.
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <shellapi.h>
 
-#include "shuyi/format.h"
-#include "shuyi/position.h"
-#include "shuyi/io.h"
 #include "discovery.h"
 #include "engine_client.h"
 #include "engine_view.h"
+#include "game_record.h"
+#include "shuyi/format.h"
+#include "shuyi/io.h"
+#include "shuyi/position.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstring>
 #include <cstdio>
+#include <cstring>
+#include <functional>
 #include <iomanip>
-#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -29,11 +42,11 @@ using namespace shuyi;
 namespace {
 
 // ---------------------------------------------------------------------------
-// Command ids / app state
+// Command ids
 // ---------------------------------------------------------------------------
-constexpr int ID_NEW = 1001;
-constexpr int ID_UNDO = 1002;
-constexpr int ID_EXIT = 1003;
+constexpr int ID_NEW_GAME = 1001;
+constexpr int ID_SAVE_RECORD = 1002;
+constexpr int ID_LOAD_RECORD = 1003;
 
 constexpr int ID_MODE_PVP = 2001;
 constexpr int ID_MODE_HUMAN_RED = 2002;
@@ -41,26 +54,20 @@ constexpr int ID_MODE_HUMAN_BLACK = 2003;
 
 constexpr int ID_A_PLUS = 3001;
 constexpr int ID_A_MINUS = 3002;
-constexpr int ID_A_ZERO = 3003;
-constexpr int ID_A_ONE = 3004;
-constexpr int ID_A_TWO = 3005;
-constexpr int ID_A_DEFAULT = 3006;
 
-constexpr int ID_RULES = 4001;
-constexpr int ID_ABOUT = 4002;
+constexpr int ID_GUIDE = 4001;
+constexpr int ID_PROJECT_PAGE = 4002;
+constexpr int ID_ABOUT = 4003;
 
 constexpr int ID_RULESET_CLASSIC = 5101;
 constexpr int ID_RULESET_BLOCKING = 5102;
 constexpr int ID_RULESET_NOPASS = 5103;
 constexpr int ID_ENGINE_OFF = 5001;
-constexpr int ID_ENGINE_PRUNING = 5002;
 constexpr int ID_ENGINE_MCTS = 5003;
 constexpr int ID_ENGINE_MCTS_NN = 5004;  // popup: one entry per model file
 constexpr int ID_ENGINE_PICK = 5007;
 constexpr int ID_ENGINE_AUTO = 5008;
 constexpr int ID_ENGINE_INFO = 5009;
-constexpr int ID_ANALYZE = 5005;
-constexpr int ID_ENGINE_STOP = 5006;
 constexpr int ID_SETTINGS = 5010;
 constexpr int ID_MODEL_RESCAN = 6090;
 constexpr int ID_MODEL_BASE = 6100;  // + model index
@@ -68,19 +75,22 @@ constexpr int ID_MODEL_LIMIT = 6400; // exclusive upper bound, below nothing els
 constexpr int ID_SETTINGS_OK = 6001;
 constexpr int ID_SETTINGS_CANCEL = 6002;
 
+constexpr const wchar_t* kProjectUrl = L"https://github.com/zhou-tian-xing/shuyi";
+
 // Simulations per analysis and per move are settings (default 512).  A visit
 // budget is the only machine-independent unit: 512 visits is 512 visits on the
-// laptop and on the GPU, so two runs of the same position are comparable.  The
-// default matches the evaluation budget in training/evalconfig.py.
+// laptop and on the GPU, so two runs of the same position are comparable.
 constexpr int kDefaultVisits = 512;
-// Window class of the settings popup (registered in wWinMain).
 constexpr const wchar_t* kSettingsClass = L"ShuyiSettingsWindow";
 
 constexpr UINT WM_APP_RESET = WM_APP + 1;
 
 enum class Mode { Pvp, HumanRed, HumanBlack };
-enum class EngineChoice { Off, Pruning, Mcts, MctsNn };
+enum class EngineChoice { Off, Mcts, MctsNn };
 
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
 HWND g_hwnd = nullptr;
 HMENU g_menu = nullptr;
 HMENU g_modeMenu = nullptr;
@@ -88,11 +98,10 @@ HMENU g_rulesetMenu = nullptr;
 HMENU g_engineMenu = nullptr;
 HMENU g_modelMenu = nullptr;
 int g_modelMenuPosition = -1;
-// Every *.bin the UI can find, indexed to match menu ids ID_MODEL_BASE + i.
+
 struct ModelEntry {
     // Win32 *A functions speak the ANSI code page, so paths found by scanning are
-    // ANSI.  The engine process re-parses its command line through Utf8Args, so it
-    // needs UTF-8.  Keep both instead of guessing at each use.
+    // ANSI; the engine re-parses its command line as UTF-8.  Keep both.
     std::string path;        // ANSI, for Win32 / fopen
     std::string enginePath;  // UTF-8, what set_model receives
     std::wstring label;      // "run-name/file.bin", unique in the menu
@@ -101,51 +110,44 @@ struct ModelEntry {
 };
 std::vector<ModelEntry> g_modelList;
 std::string g_nnModelPath;
-// The engine is a separate program.  Its path is a user setting (shuyi-ui.ini),
-// not something guessed from where this executable happens to live.
-std::wstring g_enginePath;      // configured by the user, persisted
-std::wstring g_enginePathUsed;  // what the running process actually is
-bool g_engineAuto = true;       // no explicit path: fall back to discovery
+// The engine is a separate program.  Its path is a user setting (shuyi-ui.ini).
+std::wstring g_enginePath;
+std::wstring g_enginePathUsed;
+bool g_engineAuto = true;
 HINSTANCE g_instance = nullptr;
+
+// The record owns the game; the position is always "the node on screen".
+GameRecord g_record;
 Position g_position;
+// Which record node the running analysis belongs to (-1: none).  The analysis is
+// cached *on that node*, so navigating away and back shows the same numbers.
+int g_analysisNode = -1;
+
 constexpr double kDefaultAValue = 0.5;
 constexpr double kAValueStep = 0.5;
 double g_aValue = kDefaultAValue;
-
-double normalizeAValue(double value) {
-    const double bounded = std::clamp(value, -40.0, 40.0);
-    const double rounded = std::round(bounded / kAValueStep) * kAValueStep;
-    return rounded == 0.0 ? 0.0 : rounded;
-}
 int g_selected = 1;
 int g_hoverCell = -1;
 bool g_thinking = false;
-// Two players by default: the window is a board and an analysis tool first.
 Mode g_mode = Mode::Pvp;
 int g_dpi = 96;
+int g_treeScroll = 0;
 
 EngineClient g_engineClient;
 EngineChoice g_engineChoice = EngineChoice::Off;
-EngineAnalysisView g_engineAnalysis;
 bool g_analysisOn = false;
-// The last analysis spent its whole budget: the next Space continues the same
-// tree without a limit instead of starting over at the configured budget.
 bool g_analysisFinished = false;
-// Budgets, editable in the settings window and persisted in shuyi-ui.ini.  0
-// means "no limit" (the search runs until Space is pressed again).
 int g_analysisVisits = kDefaultVisits;
 int g_playVisits = kDefaultVisits;
 bool g_enginePending = false;
-// Id of the `genmove` whose reply we are waiting for.  Without it a stray `= ` ack
-// from `play`/`clear_board` (written before the genmove reply) would be parsed as
-// a move.  The protocol allows an id on every command for exactly this reason.
 std::string g_pendingReplyId;
 int g_commandId = 0;
-std::wstring g_engineMessage = L"外部引擎未启用";
+std::wstring g_engineMessage = L"引擎未启用";
 bool g_engineReady = false;
-// Rule set of the current game.  Switching it is only allowed before the first
-// stone, because the two rules cannot mix inside one game.
 Ruleset g_ruleset = kDefaultRuleset;
+// A record given on the command line is loaded once the window exists.  Loading it
+// before the message loop runs would be undone by the queued reset.
+std::wstring g_pendingOpen;
 
 HFONT g_fontTitle = nullptr;
 HFONT g_fontSubtitle = nullptr;
@@ -161,7 +163,6 @@ const COLORREF kPanel = RGB(36, 41, 50);
 const COLORREF kPanelSoft = RGB(45, 51, 62);
 const COLORREF kPanelDeep = RGB(29, 33, 41);
 const COLORREF kBoard = RGB(225, 201, 153);
-const COLORREF kBoardLight = RGB(240, 220, 178);
 const COLORREF kBoardLine = RGB(105, 77, 44);
 const COLORREF kText = RGB(238, 233, 224);
 const COLORREF kMuted = RGB(166, 170, 178);
@@ -172,9 +173,6 @@ const COLORREF kBlack = RGB(32, 35, 42);
 const COLORREF kBlackSoft = RGB(128, 133, 144);
 const COLORREF kGreen = RGB(105, 188, 133);
 const COLORREF kCyan = RGB(100, 198, 244);
-const COLORREF kBlue = RGB(64, 142, 255);
-const COLORREF kHeatLow = RGB(185, 56, 52);
-const COLORREF kHeatHigh = RGB(49, 157, 92);
 
 int queryDpi() {
     HDC screen = GetDC(nullptr);
@@ -194,12 +192,18 @@ COLORREF mixColor(COLORREF a, COLORREF b, double t) {
                mix(GetBValue(a), GetBValue(b)));
 }
 
-
 void refresh(bool immediate = false);
 void maybeAiMove();
 void setAValue(double value);
-void needEngine(const wchar_t* detail);
 void syncEngineChecks();
+void syncEnginePosition();
+void openSettings();
+void goToNode(int id);
+int treeScrollFor(int id);
+void sendEngineStopIfRunning();
+void startEngineAnalysis();
+bool loadRecordFromPath(const std::wstring& path);
+bool loadRecordFromText(const std::string& text);
 
 // ---------------------------------------------------------------------------
 // Small GDI helpers
@@ -267,8 +271,7 @@ std::wstring signedText(int value) {
     return std::to_wstring(value);
 }
 
-// The A value lives on a half-integer grid (an integer A can draw, a half-integer
-// cannot), so it prints without trailing zeros: "1.5", "1", "-0.5".
+// The A value lives on a half-integer grid, so it prints without trailing zeros.
 std::string formatAValue(double value) {
     char buffer[32]{};
     std::snprintf(buffer, sizeof(buffer), "%.2f", value);
@@ -288,12 +291,18 @@ std::wstring signedValue(double value) {
 }
 
 std::wstring signedDecimal(double value) {
-    // Never "+-0.0": an exact zero has no sign to show.
-    if (value == 0.0) value = 0.0;
+    if (value == 0.0) value = 0.0;  // never "+-0.0"
     std::wostringstream out;
-    if (value >= 0.0) out << L'+';
+    if (std::fabs(value) < 0.05) value = 0.0;
+    if (value > 0.0) out << L'+';
     out << std::fixed << std::setprecision(1) << value;
     return out.str();
+}
+
+double normalizeAValue(double value) {
+    const double bounded = std::clamp(value, -40.0, 40.0);
+    const double rounded = std::round(bounded / kAValueStep) * kAValueStep;
+    return rounded == 0.0 ? 0.0 : rounded;
 }
 
 const wchar_t* outcomeText(Outcome outcome) {
@@ -323,28 +332,104 @@ int firstAvailable(Player player) {
     return 1;
 }
 
-std::wstring turnLabel() {
-    if (g_thinking) return L"电脑思考中…";
-    if (g_position.gameOver()) {
-        const Outcome outcome = g_position.outcome(g_aValue);
-        return std::wstring(L"终局 · ") + outcomeText(outcome);
-    }
-    const Player side = g_position.sideToMove();
-    std::wstring label = side == Player::Red ? L"红方行棋" : L"黑方行棋";
-    if (g_mode != Mode::Pvp) {
-        const bool human = (g_mode == Mode::HumanRed) ? side == Player::Red : side == Player::Black;
-        label += human ? L" · 你" : L" · 电脑";
-    }
-    return label;
+std::wstring widen(const std::string& text) {
+    std::wstring result;
+    result.reserve(text.size());
+    for (unsigned char c : text) result.push_back(static_cast<wchar_t>(c));
+    return result;
 }
 
-std::wstring modeLabel() {
-    switch (g_mode) {
-    case Mode::Pvp: return L"模式：双人对弈";
-    case Mode::HumanRed: return L"模式：人机 · 你执红";
-    case Mode::HumanBlack: return L"模式：人机 · 你执黑";
+// ---------------------------------------------------------------------------
+// The record and the position on screen
+// ---------------------------------------------------------------------------
+EngineAnalysisView& currentAnalysis() {
+    return g_record.node(g_record.current()).analysis;
+}
+
+// Rebuild the position by replaying the tree from the root.  A record is the
+// source of truth: the position is derived, never edited in place, so what the
+// board shows and what the tree says can never disagree.
+void rebuildPosition() {
+    g_position.reset();
+    g_position.setRuleset(g_ruleset);
+    for (int id : g_record.line(g_record.current())) {
+        const Move move = g_record.node(id).move;
+        if (isPass(move)) {
+            g_position.pass();
+        } else if (!g_position.play(move)) {
+            break;  // a corrupt record must not spin
+        }
     }
-    return L"";
+    if (humanToMove()) g_selected = firstAvailable(g_position.sideToMove());
+}
+
+void clearAnalysisState() {
+    g_analysisOn = false;
+    g_analysisFinished = false;
+    g_analysisNode = -1;
+}
+
+// Navigation: the same position, another node.  The engine follows by replaying
+// the line, and the panel shows that node's cached analysis instead of whatever
+// happened to be on screen before.
+void goToNode(int id) {
+    if (!g_record.contains(id)) return;
+    if (id == g_record.current()) {
+        refresh();
+        return;
+    }
+    if (g_engineClient.running()) {
+        sendEngineStopIfRunning();
+    }
+    clearAnalysisState();
+    g_record.select(id);
+    rebuildPosition();
+    g_enginePending = false;
+    g_pendingReplyId.clear();
+    g_thinking = false;
+    if (g_engineChoice != EngineChoice::Off && g_engineReady) syncEnginePosition();
+    refresh(true);
+    if (aiToMove()) maybeAiMove();
+}
+
+void sendEngineStopIfRunning() {
+    if (g_engineClient.running()) g_engineClient.send("stop");
+}
+
+// Plays `move` from the node on screen.  The record is updated first, then the
+// position is rebuilt from it, then the engine is told -- one order everywhere,
+// so the three can never drift apart.
+void recordMove(Move move, Player mover) {
+    // Analysis is a mode, not a one-off: after a move it continues on the new
+    // position unless the user had stopped it.
+    const bool wasAnalyzing = g_analysisOn;
+    const int from = g_record.current();
+    int id = g_record.play(from, move);
+    if (g_engineClient.running()) {
+        g_engineClient.send("stop");
+        g_enginePending = false;
+        g_analysisFinished = false;
+        g_engineClient.send("play " + std::string(mover == Player::Red ? "red" : "black") + " " +
+                            (isPass(move) ? std::string("pass") : squareName(move.cell) + " " +
+                                                                    std::to_string(static_cast<int>(move.number))));
+    }
+    rebuildPosition();
+    // A forced pass is a real move in this game (blocking rule): without a node
+    // for it the record could not reproduce the position.
+    int guard = 0;
+    while (g_position.mustPass() && guard++ < 2) {
+        const Player side = g_position.sideToMove();
+        id = g_record.play(id, Move(kPassCell, kPassNumber));
+        if (g_engineClient.running()) {
+            g_engineClient.send(std::string("play ") + (side == Player::Red ? "red" : "black") +
+                                " pass");
+        }
+        rebuildPosition();
+    }
+    clearAnalysisState();
+    g_treeScroll = treeScrollFor(g_record.current());
+    refresh(true);
+    if (wasAnalyzing && !g_position.gameOver() && !g_enginePending) startEngineAnalysis();
 }
 
 // ---------------------------------------------------------------------------
@@ -352,7 +437,6 @@ std::wstring modeLabel() {
 // ---------------------------------------------------------------------------
 const char* engineChoiceName(EngineChoice choice) {
     switch (choice) {
-    case EngineChoice::Pruning: return "pruning";
     case EngineChoice::Mcts: return "mcts";
     case EngineChoice::MctsNn: return "mcts_nn";
     default: return "off";
@@ -362,31 +446,20 @@ const char* engineChoiceName(EngineChoice choice) {
 std::wstring fileNameOf(const std::string& path) {
     const std::size_t slash = path.find_last_of("/\\");
     const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
-    std::wstring result;
-    result.reserve(name.size());
-    for (unsigned char c : name) result.push_back(static_cast<wchar_t>(c));
-    return result;
+    return widen(name);
 }
 
 std::wstring engineChoiceLabel(EngineChoice choice) {
     switch (choice) {
-    case EngineChoice::Pruning: return L"剪枝";
     case EngineChoice::Mcts: return L"MCTS";
     case EngineChoice::MctsNn: {
         std::wstring label = g_nnModelPath.empty() ? L"MCTS+NN" : L"MCTS+NN · " + fileNameOf(g_nnModelPath);
-        if (g_engineAnalysis.backend == "cuda") label += L" (GPU)";
-        else if (!g_engineAnalysis.backend.empty()) label += L" (CPU)";
+        if (currentAnalysis().backend == "cuda") label += L" (GPU)";
+        else if (!currentAnalysis().backend.empty()) label += L" (CPU)";
         return label;
     }
     default: return L"未启用";
     }
-}
-
-std::wstring widen(const std::string& text) {
-    std::wstring result;
-    result.reserve(text.size());
-    for (unsigned char c : text) result.push_back(static_cast<wchar_t>(c));
-    return result;
 }
 
 bool sendEngine(const std::string& line) {
@@ -394,81 +467,27 @@ bool sendEngine(const std::string& line) {
     return g_engineClient.send(line);
 }
 
-void clearEngineAnalysis() {
-    g_engineAnalysis = EngineAnalysisView{};
-}
-
-// The engine sends one JSON object per `info` line.  An unparseable line is an
-// error on screen, never a silently blank board.
-void applyEngineAnalysis(const std::string& payload) {
+void applyEngineAnalysis(int node, const std::string& payload) {
     EngineAnalysisView view;
     std::string error;
     if (!parseAnalysis(payload, view, &error)) {
         g_engineMessage = L"引擎分析数据无法解析：" + widen(error);
         return;
     }
-    g_engineAnalysis = std::move(view);
+    g_record.setAnalysis(node, std::move(view));
     g_engineMessage = g_enginePending ? L"引擎思考中…" : L"分析中…";
 }
 
-void startEngineAnalysis();
-
-// Under the blocking rule a side can be left with no placement at all; the rules
-// then force a pass.  Apply them here so every entry point (human click, built-in
-// AI, engine move) ends up in the same state, and tell the engine about it.
-void settleForcedPasses() {
-    int guard = 0;
-    bool passed = false;
-    while (g_position.mustPass() && guard++ < 2) {
-        const Player side = g_position.sideToMove();
-        if (!g_position.pass()) break;
-        passed = true;
-        if (g_engineClient.running()) {
-            sendEngine("stop");
-            g_enginePending = false;
-            sendEngine(std::string("play ") + (side == Player::Red ? "red" : "black") + " pass");
-        }
-    }
-    if (passed) {
-        g_engineMessage = L"无合法落点，强制停一手";
-        if (g_position.gameOver()) {
-            g_analysisOn = false;
-            clearEngineAnalysis();
-        }
-    }
-}
-
-void notifyEnginePlay(Move move, Player mover) {
-    if (!g_engineClient.running()) return;
-    sendEngine("stop");
-    g_enginePending = false;
-    // A new position: the previous "budget spent, continue without limit" state no
-    // longer applies.
-    g_analysisFinished = false;
-    if (isPass(move)) {
-        sendEngine(std::string("play ") + (mover == Player::Red ? "red" : "black") + " pass");
-    } else {
-        sendEngine("play " + std::string(mover == Player::Red ? "red" : "black") + " " +
-                   squareName(move.cell) + " " + std::to_string(static_cast<int>(move.number)));
-    }
-    if (!g_analysisOn) clearEngineAnalysis();
-    if (g_analysisOn && !g_position.gameOver()) startEngineAnalysis();
-}
-
-// Start (or extend) the analysis of the current position.  `visits == 0` means
-// no limit: the search keeps growing the same tree until Space stops it.  The
-// previous display is deliberately kept until the first new info line arrives, so
-// the marks do not blink on every refresh.
 void startEngineAnalysis(int visits) {
     if (g_engineChoice == EngineChoice::Off || !g_engineClient.running() || g_position.gameOver()) return;
     g_enginePending = false;
     sendEngine("stop");
     g_analysisOn = true;
     g_analysisFinished = false;
+    g_analysisNode = g_record.current();
     sendEngine("analyze " + std::string(g_position.sideToMove() == Player::Red ? "red" : "black") +
                " " + std::to_string(std::max(0, visits)));
-    g_engineMessage = visits > 0 ? (L"分析中（上限 " + std::to_wstring(visits) + L" 访问，空格停止）")
-                                 : L"分析中（不限访问，空格停止）";
+    g_engineMessage = visits > 0 ? L"分析中" : L"分析中（不限访问）";
     refresh();
 }
 
@@ -476,27 +495,24 @@ void startEngineAnalysis() { startEngineAnalysis(g_analysisVisits); }
 
 void stopEngineAnalysis() {
     g_analysisOn = false;
-    if (g_engineClient.running()) sendEngine("stop");
-    g_engineMessage = g_analysisFinished ? L"已达访问上限（空格继续，不再限量）"
-                                         : L"分析已暂停（空格继续，树保留）";
+    sendEngineStopIfRunning();
+    g_engineMessage = g_analysisFinished ? L"已达访问上限" : L"已暂停";
     refresh();
 }
 
-// Space handler: start, stop, or continue past the limit.  Stopping keeps the
-// numbers on screen -- they are still the best information about this position.
+// Space: start, stop, or continue past the limit.  Stopping keeps the numbers on
+// screen -- they are still the best information about this position.
 void toggleAnalysis() {
-    if (g_position.gameOver()) return;
+    if (g_position.gameOver() || g_engineChoice == EngineChoice::Off) return;
+    // Space must not cancel a move the computer is in the middle of choosing.
+    if (g_enginePending) return;
     if (g_analysisOn) {
         stopEngineAnalysis();
         return;
     }
-    if (!g_engineReady || g_engineChoice == EngineChoice::Off) {
-        g_engineMessage = L"先用 引擎 菜单选一个引擎";
-        refresh();
-        return;
-    }
-    // Continuing after a finished (budget-limited) run ignores the budget: the
-    // visit limit is a stopping point, not a cap on what may be searched.
+    if (!g_engineReady) return;
+    // Continuing after a finished run ignores the budget: the visit limit is a
+    // stopping point, not a cap on what may be searched.
     startEngineAnalysis(g_analysisFinished ? 0 : g_analysisVisits);
 }
 
@@ -505,16 +521,21 @@ void syncEnginePosition() {
     g_enginePending = false;
     g_analysisFinished = false;
     sendEngine("stop");
-    clearEngineAnalysis();
     sendEngine("clear_board");
-    for (std::size_t i = 0; i < g_position.history().size(); ++i) {
-        const Move move = g_position.history()[i];
-        const Player mover = (i % 2 == 0) ? Player::Red : Player::Black;
-        sendEngine("play " + std::string(mover == Player::Red ? "red" : "black") + " " +
-                   squareName(move.cell) + " " + std::to_string(static_cast<int>(move.number)));
+    for (int id : g_record.line(g_record.current())) {
+        const Move move = g_record.node(id).move;
+        // The side alternates from Red at the root; a pass is a move too.
+        const int ply = g_record.depth(id) - 1;
+        const char* side = (ply % 2 == 0) ? "red" : "black";
+        if (isPass(move)) {
+            sendEngine(std::string("play ") + side + " pass");
+        } else {
+            sendEngine(std::string("play ") + side + " " + squareName(move.cell) + " " +
+                       std::to_string(static_cast<int>(move.number)));
+        }
     }
-    if (g_analysisOn && !g_position.gameOver()) startEngineAnalysis();
     g_engineMessage = L"引擎已同步";
+    if (g_analysisOn && !g_position.gameOver()) startEngineAnalysis();
 }
 
 void stopEngineProcess() {
@@ -522,11 +543,11 @@ void stopEngineProcess() {
     g_engineReady = false;
     g_analysisOn = false;
     g_enginePending = false;
-    clearEngineAnalysis();
-    g_engineMessage = L"外部引擎未启用";
+    g_analysisNode = -1;
+    g_engineMessage = L"引擎未启用";
 }
 
-// ANSI (what the *A APIs return) <-> UTF-8 (what argv/Utf8Args and the engine use).
+// ANSI (what the *A APIs return) <-> UTF-8 (what argv and the engine use).
 std::string ansiToUtf8(const std::string& text) {
     if (text.empty()) return text;
     const int wideLength = MultiByteToWideChar(CP_ACP, 0, text.c_str(), -1, nullptr, 0);
@@ -559,16 +580,29 @@ std::wstring widenAnsi(const std::string& text) {
     return wide;
 }
 
+std::string narrowUtf8(const std::wstring& text) {
+    if (text.empty()) return std::string();
+    const int length = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (length <= 1) return std::string();
+    std::string out(static_cast<std::size_t>(length - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, out.data(), length, nullptr, nullptr);
+    return out;
+}
+
+std::string trimAscii(const std::string& text) {
+    std::size_t begin = 0;
+    std::size_t end = text.size();
+    while (begin < end && (text[begin] == ' ' || text[begin] == '\t')) ++begin;
+    while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t')) --end;
+    return text.substr(begin, end - begin);
+}
+
 // ---------------------------------------------------------------------------
 // Model discovery
 //
-// The window can be started from anywhere (Explorer, a shortcut, build/), so
-// "models/" relative to the current directory is not enough: that showed only
-// the two hand-made fixtures and hid every trained network.  Instead scan a few
-// roots -- the executable's own folder, its parent, the working directory, and
-// anything in SHUYI_MODEL_DIRS -- and inside each root collect every *.bin that
-// lives in a directory called "models".  Run names are prefixed so that two
-// gen_000.bin from different runs stay distinguishable.
+// The window can be started from anywhere, so "models/" relative to the current
+// directory is not enough.  Scan a few roots and inside each collect every *.bin
+// that lives in a directory called "models".
 // ---------------------------------------------------------------------------
 std::string exeDirectory() {
     char buffer[MAX_PATH]{};
@@ -588,7 +622,7 @@ std::string normalizedPath(const std::string& path) {
     return result;
 }
 
-bool skipDirectory(const char* name);  // defined below; the root check needs it
+bool skipDirectory(const char* name);  // defined below
 
 std::vector<std::string> modelRoots() {
     std::vector<std::string> roots;
@@ -596,9 +630,6 @@ std::vector<std::string> modelRoots() {
         if (candidate.empty()) return;
         const std::string full = normalizedPath(candidate);
         if (GetFileAttributesA(full.c_str()) == INVALID_FILE_ATTRIBUTES) return;
-        // A build tree carries its own copy of the test fixtures, so scanning it
-        // lists the same model twice under the same name.  Skip the root, not the
-        // copy: the source tree one directory up is the one that ships.
         const std::size_t slash = full.find_last_of("\\/");
         const char* base = slash == std::string::npos ? full.c_str() : full.c_str() + slash + 1;
         if (skipDirectory(base)) return;
@@ -630,7 +661,6 @@ std::vector<std::string> modelRoots() {
 }
 
 // The menu has to say which run a file came from: three runs all ship gen_000.bin.
-// `relative` is the path below the scanned root, e.g. "runs/training/b4c32-nopass-20261124/models/x.bin".
 std::string modelLabelFor(const std::string& relative) {
     std::string path = relative;
     for (char& c : path) {
@@ -651,9 +681,8 @@ std::string modelLabelFor(const std::string& relative) {
     return owner + "/" + file;
 }
 
-// Authoritative: the ruleset is a byte in the model header, so read it instead
-// of guessing from the file name (gen_000.bin says nothing).
-// Training steps encoded in a checkpoint name: b4c32-s34760-d470705.bin -> 34760.
+// The ruleset is a byte in the model header, so read it instead of guessing.
+// Training steps from a checkpoint name: b4c32-s34760-d470705.bin -> 34760.
 int modelStepsFromName(const std::string& name) {
     const std::size_t at = name.find("-s");
     if (at == std::string::npos) return 0;
@@ -675,21 +704,14 @@ int readModelRuleset(const std::string& utf8Path) {
     std::fclose(file);
     if (got < 12) return -1;
     // v4 keeps the v3 header layout and only grows the global vector, so the
-    // rule-set byte is in the same place.  Without this case a v4 model reads as
-    // "unknown" and the menu silently drops it (it only lists models that match
-    // the active rule set), which is exactly how the package ended up with no
-    // model at all after the A-conditioned network shipped.
+    // rule-set byte is in the same place.
     const bool v4 = std::memcmp(header, "SHUYINN4", 8) == 0;
     const bool v3 = std::memcmp(header, "SHUYINN3", 8) == 0;
     const bool v2 = std::memcmp(header, "SHUYINN2", 8) == 0;
     if (!v3 && !v4 && !v2) return -1;
     if (v2) return 0;  // v2 has no ruleset byte; those weights are classic
     if (got < 33) return 0;
-    // magic(8) version(4) channels(4) blocks(4) inputs(4) globals(4) flags(4) ruleset(1)
     const int ruleset = header[32];
-    // Not `== 1 ? 1 : 0`: that maps a nopass model (2) onto classic, and the menu
-    // then hides it, because it only lists models compatible with the rule set in
-    // force.  An unknown byte is "not a model this build understands".
     return ruleset < static_cast<int>(kRulesetCount) ? ruleset : -1;
 }
 
@@ -712,9 +734,6 @@ void addModelsInDirectory(const std::string& dir, const std::string& relative,
 }
 
 bool skipDirectory(const char* name) {
-    // Build trees and the package directory contain copies of the same models;
-    // caches are noise; runs/archive holds finished experiments whose weights are
-    // history, not candidates.
     return _strnicmp(name, "build", 5) == 0 || name[0] == '.' ||
            _stricmp(name, "__pycache__") == 0 || _stricmp(name, "node_modules") == 0 ||
            _stricmp(name, "archive") == 0 || _stricmp(name, "dist") == 0;
@@ -743,9 +762,8 @@ void walkForModels(const std::string& dir, const std::string& relative, int dept
 }
 
 std::uint64_t modelFingerprint(const std::string& utf8Path, std::uint64_t* sizeOut) {
-    // FNV-1a over the bytes.  Two copies of one weights file (the package next to
-    // the exe, the source tree, a server mirror) must not become two menu entries
-    // that look like a choice between different networks.
+    // FNV-1a over the bytes: two copies of one weights file must not become two
+    // menu entries that look like a choice between different networks.
     std::FILE* file = shuyi::fopenUtf8(utf8Path, "rb");
     if (!file) return 0;
     std::uint64_t hash = 1469598103934665603ULL;
@@ -769,10 +787,7 @@ void scanModels() {
     for (const std::string& root : modelRoots()) walkForModels(root, std::string(), 4, found);
     std::sort(found.begin(), found.end(),
               [](const ModelEntry& a, const ModelEntry& b) { return a.label < b.label; });
-    // The same model is reachable through several roots (the exe directory, its
-    // parent, the current directory) and is often copied byte for byte into more
-    // than one of them.  Keep one entry per file path and one per distinct file
-    // content.
+    // Keep one entry per distinct file content, preferring the shallower path.
     std::vector<ModelEntry> unique;
     std::vector<std::pair<std::uint64_t, std::uint64_t>> seen;
     const auto depthOf = [](const std::string& path) {
@@ -786,9 +801,6 @@ void scanModels() {
         for (std::size_t i = 0; i < seen.size(); ++i) {
             if (seen[i].first != size || seen[i].second != print) continue;
             duplicate = true;
-            // Keep the shallower copy: models/x.bin is the name the package ships
-            // and the one a user recognises, runs/<run>/models/x.bin is the same
-            // bytes under the run that produced them.
             if (depthOf(entry.path) < depthOf(unique[i].path)) unique[i] = entry;
             break;
         }
@@ -811,9 +823,6 @@ int modelIndexFor(const std::string& path) {
     return -1;
 }
 
-// Display label for a rule set.  Kept in the front end, not in core: core is
-// included from CUDA translation units, and a Chinese string literal there
-// breaks nvcc's own parser on Windows.
 const wchar_t* rulesetLabel(Ruleset ruleset) {
     switch (ruleset) {
     case Ruleset::Blocking: return L"阻挡";
@@ -832,10 +841,9 @@ const wchar_t* modelRulesetHint(const ModelEntry& entry) {
     return rulesetLabel(static_cast<Ruleset>(entry.ruleset));
 }
 
-// Fallback when nothing has been picked from the menu yet: the model with the
-// most training steps that was trained for the ruleset currently in force.  A
-// model from an incompatible rule set is never selected -- the engine would
-// refuse it, and silently running the wrong network is worse than having none.
+// Fallback when nothing has been picked: the model with the most training steps
+// trained for the rule set in force.  A model from an incompatible rule set is
+// never selected silently.
 std::string defaultModelPath() {
     char buffer[MAX_PATH]{};
     const DWORD length = GetEnvironmentVariableA("SHUYI_NN_MODEL", buffer, MAX_PATH);
@@ -843,8 +851,6 @@ std::string defaultModelPath() {
     if (g_modelList.empty()) scanModels();
     const ModelEntry* best = nullptr;
     for (const ModelEntry& entry : g_modelList) {
-        // `compatible`, not equal: a blocking-trained model is a valid choice
-        // under NoPass (every NoPass game is a blocking game up to its end).
         if (entry.ruleset < 0 ||
             !rulesetCompatible(static_cast<Ruleset>(entry.ruleset), g_ruleset)) {
             continue;
@@ -885,20 +891,17 @@ void syncModelChecks() {
     for (int position = 0; position < count; ++position) {
         const UINT id = GetMenuItemID(g_modelMenu, position);
         if (id < static_cast<UINT>(ID_MODEL_BASE) || id >= static_cast<UINT>(ID_MODEL_LIMIT)) continue;
-        const bool picked = g_engineChoice == EngineChoice::MctsNn && static_cast<int>(id) - ID_MODEL_BASE == index;
+        const bool picked =
+            g_engineChoice == EngineChoice::MctsNn && static_cast<int>(id) - ID_MODEL_BASE == index;
         CheckMenuItem(g_modelMenu, id, MF_BYCOMMAND | (picked ? MF_CHECKED : MF_UNCHECKED));
     }
 }
 
-// Selecting a model both records the path and forces the engine process to
-// restart with it (set_model is only read at startup).
 void setEngineChoice(EngineChoice choice);
 
 void selectModel(int index) {
     if (index < 0 || index >= static_cast<int>(g_modelList.size())) return;
     const ModelEntry& entry = g_modelList[index];
-    // A network trained for an incompatible rule set is not a valid choice: the
-    // engine would refuse it later, so say it here while the reason is obvious.
     if (entry.ruleset < 0 ||
         !rulesetCompatible(static_cast<Ruleset>(entry.ruleset), g_ruleset)) {
         const std::wstring modelLabel = modelRulesetHint(entry);
@@ -915,32 +918,8 @@ void selectModel(int index) {
 }
 
 // ---------------------------------------------------------------------------
-// Engine program setting
-//
-// The front end and the engine are separate programs that may come from
-// different projects; the only contract is the line protocol.  So the engine is
-// a *path the user chooses*, stored next to the window, and remembered:
-//   cmake --install ... --component engine   -> some folder
-//   引擎 -> 选择引擎程序...                  -> point the UI at it
-// Everything else (discovery, preferring a CUDA build) is a convenience fallback
-// for the case where nothing has been chosen yet.
-std::string narrowUtf8(const std::wstring& text) {
-    if (text.empty()) return std::string();
-    const int length = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (length <= 1) return std::string();
-    std::string out(static_cast<std::size_t>(length - 1), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, out.data(), length, nullptr, nullptr);
-    return out;
-}
-
-std::string trimAscii(const std::string& text) {
-    std::size_t begin = 0;
-    std::size_t end = text.size();
-    while (begin < end && (text[begin] == ' ' || text[begin] == '	')) ++begin;
-    while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '	')) --end;
-    return text.substr(begin, end - begin);
-}
-
+// Engine program setting and persistence
+// ---------------------------------------------------------------------------
 std::wstring settingsFilePath() {
     char overridePath[MAX_PATH * 2]{};
     const DWORD overrideLength =
@@ -952,9 +931,8 @@ std::wstring settingsFilePath() {
     return dir.empty() ? std::wstring(L"shuyi-ui.ini") : dir + L"/shuyi-ui.ini";
 }
 
-// Plain `key=value` in UTF-8.  The Win32 profile API would read the file as ANSI
-// and mangle any non-ASCII path, which is exactly what happens to this project's
-// folder name, so the file is parsed here instead.
+// Plain `key=value` in UTF-8: the Win32 profile API reads ANSI and would mangle
+// this project's folder name.
 void loadSettings() {
     g_enginePath.clear();
     const std::wstring file = settingsFilePath();
@@ -992,7 +970,7 @@ void loadSettings() {
         }
     }
     // A shipped package writes `engine=shuyi_engine.exe`: a relative path is
-    // resolved against this executable, not against wherever it was launched from.
+    // resolved against this executable, not against the launch directory.
     if (!g_enginePath.empty()) {
         const bool absolute = (g_enginePath.size() > 1 && g_enginePath[1] == L':') ||
                               g_enginePath[0] == L'\\' || g_enginePath[0] == L'/';
@@ -1028,7 +1006,6 @@ void saveSettings() {
     g_engineAuto = g_enginePath.empty();
 }
 
-// ---------------------------------------------------------------------------
 // The two programs are separate products, so the protocol version is the only
 // compatibility promise.  A different version is refused instead of half-working.
 constexpr int kUiProtocolVersion = 2;
@@ -1058,7 +1035,6 @@ std::wstring chooseEnginePath() {
     for (const std::wstring& path : engineCandidates()) {
         const EngineProbe probe = probeEngine(path);
         if (!probe.answered || probe.proto != std::to_string(kUiProtocolVersion)) continue;
-        // Several compatible engines: the GPU one is the one to run.
         if (probe.backend == "cuda") return path;
         if (cpuBuild.empty()) cpuBuild = path;
     }
@@ -1072,7 +1048,7 @@ bool startEngineProcess() {
     std::wstring enginePath = g_enginePath;
     if (enginePath.empty()) enginePath = chooseEnginePath();
     if (enginePath.empty()) {
-        g_engineMessage = L"没有找到可用的引擎：引擎菜单 → 选择引擎程序…";
+        g_engineMessage = L"没有找到可用的引擎";
         g_engineChoice = EngineChoice::Off;
         return false;
     }
@@ -1088,8 +1064,8 @@ bool startEngineProcess() {
     }
     g_enginePathUsed = enginePath;
 
-    // A rejected command has to stop the start-up: otherwise the window would
-    // sit on an empty analysis and the real cause would never be visible.
+    // A rejected command has to stop the start-up: otherwise the window would sit
+    // on an empty analysis and the real cause would never be visible.
     std::wstring failure;
     const auto run = [&](const std::string& line) {
         if (!failure.empty()) return;
@@ -1106,12 +1082,9 @@ bool startEngineProcess() {
     if (g_engineChoice == EngineChoice::MctsNn) {
         if (g_nnModelPath.empty()) g_nnModelPath = defaultModelPath();
         if (g_nnModelPath.empty()) {
-            // A package without weights is a supported download, so say what to do
-            // instead of starting an engine that cannot analyse anything.
             failure = L"没有可用模型：把 b<blocks>c<channels>-s<steps>-d<data>.bin 放进 "
                       L"models/（或引擎菜单 → MCTS + 网络 → 重新扫描）";
         } else {
-            // The model must be accepted before the engine that needs it is selected.
             run("set_model " + g_nnModelPath);
         }
     }
@@ -1123,13 +1096,10 @@ bool startEngineProcess() {
         run("set_time 650");
     }
     if (failure.empty() && g_engineChoice == EngineChoice::MctsNn) {
-        // `set_model` + `set_engine` both succeeded, but "ready" is the engine's
-        // own answer to "can you search with this network": ask it, once.
         std::string capabilities;
         if (!g_engineClient.command("capabilities", &capabilities, 3000) ||
             capabilities.find("model=1") == std::string::npos) {
-            failure = L"引擎没有加载到模型：\n" + widen(g_nnModelPath) +
-                      L"\n\n请在 引擎 → MCTS + 网络 里选择与当前规则一致的模型。";
+            failure = L"引擎没有加载到模型：\n" + widen(g_nnModelPath);
         }
     }
     if (!failure.empty()) {
@@ -1141,21 +1111,12 @@ bool startEngineProcess() {
     }
 
     g_engineReady = true;
-    const std::wstring engineFile = g_engineClient.path();
-    const std::size_t slash = engineFile.find_last_of(L"\\/");
-    const std::wstring shortName =
-        slash == std::wstring::npos ? engineFile : engineFile.substr(slash + 1);
-    g_engineMessage = L"引擎已启动：" + shortName +
-                      (probe.backend == "cuda" ? L" (CUDA)" : L" (CPU)");
+    g_engineMessage = L"引擎已就绪";
     syncEnginePosition();
     return true;
 }
 
 // ---------------------------------------------------------------- settings ---
-//
-// A visit budget, not a wall clock: "512 visits" means the same search on the
-// laptop and on the GPU.  Both numbers are persisted in shuyi-ui.ini and sent to
-// the engine when it starts (and whenever they change).
 HWND g_settingsWnd = nullptr;
 HWND g_settingsAnalysisEdit = nullptr;
 HWND g_settingsPlayEdit = nullptr;
@@ -1181,18 +1142,12 @@ void closeSettings(bool apply) {
             if (end == buffer || *end != L'\0' || !std::isfinite(value)) return fallback;
             return normalizeAValue(value);
         };
-        const int analysis = readInt(g_settingsAnalysisEdit, g_analysisVisits, 0, 50000000);
-        const int play = readInt(g_settingsPlayEdit, g_playVisits, 1, 50000000);
+        g_analysisVisits = readInt(g_settingsAnalysisEdit, g_analysisVisits, 0, 50000000);
+        g_playVisits = readInt(g_settingsPlayEdit, g_playVisits, 1, 50000000);
         const double aValue = readA(g_settingsAValueEdit, g_aValue);
-        g_analysisVisits = analysis;
-        g_playVisits = play;
-        if (g_engineClient.running()) {
-            sendEngine("set_visits " + std::to_string(g_analysisVisits));
-        }
+        if (g_engineClient.running()) sendEngine("set_visits " + std::to_string(g_analysisVisits));
         if (aValue != g_aValue) setAValue(aValue);
         else saveSettings();
-        g_engineMessage = L"设置已保存（分析 " + std::to_wstring(g_analysisVisits) + L" / 落子 " +
-                          std::to_wstring(g_playVisits) + L" 访问）";
     }
     EnableWindow(g_hwnd, TRUE);
     DestroyWindow(g_settingsWnd);
@@ -1237,7 +1192,7 @@ void openSettings() {
     RECT main{};
     GetWindowRect(g_hwnd, &main);
     const int width = scale(420);
-    const int height = scale(228);
+    const int height = scale(210);
     const int x = main.left + ((main.right - main.left) - width) / 2;
     const int y = main.top + ((main.bottom - main.top) - height) / 2;
     g_settingsWnd = CreateWindowExW(WS_EX_DLGMODALFRAME, kSettingsClass, L"设置",
@@ -1273,10 +1228,8 @@ void openSettings() {
     top += rowHeight;
     label(L"A值（步长 0.5）", top);
     g_settingsAValueEdit = editText(top, formatAValueW(g_aValue));
-    top += rowHeight + scale(6);
-    label(L"空格：开始 / 停止 / 超限后继续搜索", top);
 
-    const int buttonTop = height - scale(58);
+    const int buttonTop = height - scale(52);
     HWND ok = CreateWindowExW(0, L"BUTTON", L"确定",
                               WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, scale(196),
                               buttonTop, scale(72), scale(28), g_settingsWnd,
@@ -1286,9 +1239,12 @@ void openSettings() {
                                   scale(274), buttonTop, scale(72), scale(28), g_settingsWnd,
                                   reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_SETTINGS_CANCEL)),
                                   g_instance, nullptr);
-    for (HWND child : {ok, cancel}) SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(g_fontUi), TRUE);
-    for (HWND child : {g_settingsAnalysisEdit, g_settingsPlayEdit, g_settingsAValueEdit})
+    for (HWND child : {ok, cancel}) {
+        SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(g_fontUi), TRUE);
+    }
+    for (HWND child : {g_settingsAnalysisEdit, g_settingsPlayEdit, g_settingsAValueEdit}) {
         SendMessageW(child, EM_SETSEL, 0, -1);
+    }
 
     EnableWindow(g_hwnd, FALSE);
     ShowWindow(g_settingsWnd, SW_SHOW);
@@ -1327,7 +1283,6 @@ void pickEngineProgram() {
     if (!checkProtocol(probe, chosen)) return;
     g_enginePath = chosen;
     saveSettings();
-    g_engineMessage = L"引擎已指定：" + std::wstring(chosen);
     if (g_engineChoice != EngineChoice::Off) {
         const EngineChoice keep = g_engineChoice;
         g_engineChoice = EngineChoice::Off;
@@ -1340,7 +1295,6 @@ void pickEngineProgram() {
 void useAutoEngine() {
     g_enginePath.clear();
     saveSettings();
-    g_engineMessage = L"引擎路径已清空，改为自动探测";
     if (g_engineChoice != EngineChoice::Off) {
         const EngineChoice keep = g_engineChoice;
         g_engineChoice = EngineChoice::Off;
@@ -1364,7 +1318,6 @@ void showEngineInfo() {
     }
     text += L"\n\n模型：" + (g_nnModelPath.empty() ? std::wstring(L"（未设置）")
                                                     : fileNameOf(g_nnModelPath));
-    text += L"\n每步时间：650 ms";
     MessageBoxW(g_hwnd, text.c_str(), L"引擎信息", MB_OK | MB_ICONINFORMATION);
 }
 
@@ -1400,23 +1353,21 @@ void handleEngineLine(const std::string& raw) {
         }
     }
     if (line.rfind("info ", 0) == 0) {
-        if (g_analysisOn || g_enginePending) applyEngineAnalysis(line.substr(5));
+        if ((g_analysisOn || g_enginePending) && g_analysisNode >= 0) {
+            applyEngineAnalysis(g_analysisNode, line.substr(5));
+        }
         return;
     }
     if (line.rfind("= done", 0) == 0) {
         // The analysis ran out of budget on its own.  The numbers stay on screen
-        // and the tree stays in the engine, so Space can extend it without a
-        // limit.
+        // and the tree stays in the engine, so Space can extend it.
         g_analysisOn = false;
         g_analysisFinished = true;
-        g_engineMessage = L"已达访问上限（空格继续，不再限量）";
+        g_engineMessage = L"已达访问上限";
         refresh();
         return;
     }
-    if (line.rfind("= stopped", 0) == 0) {
-        // We asked for this; the last snapshot is still the best information.
-        return;
-    }
+    if (line.rfind("= stopped", 0) == 0) return;
     if (!line.empty() && line[0] == '?') {
         const bool wasPending = g_enginePending;
         g_engineMessage = L"引擎错误：" + widen(line.substr(1));
@@ -1434,12 +1385,11 @@ void handleEngineLine(const std::string& raw) {
     if (payload.empty()) return;
     if (!g_pendingReplyId.empty() && commandId != g_pendingReplyId) return;
     if (payload == "pass") {
-        // The engine found no placement: let the rules settle the forced pass
-        // and keep the engine in step.
         g_enginePending = false;
         g_pendingReplyId.clear();
-        g_engineMessage = L"引擎过手（无合法落点）";
-        settleForcedPasses();
+        g_engineMessage = L"引擎过手";
+        g_thinking = false;
+        recordMove(Move(kPassCell, kPassNumber), g_position.sideToMove());
         refresh();
         return;
     }
@@ -1465,19 +1415,9 @@ void handleEngineLine(const std::string& raw) {
     }
     g_enginePending = false;
     g_pendingReplyId.clear();
-    const Player mover = g_position.sideToMove();
-    g_position.play(move);
-    sendEngine("play " + std::string(mover == Player::Red ? "red" : "black") + " " +
-               squareName(move.cell) + " " + std::to_string(number));
     g_thinking = false;
-    if (humanToMove()) g_selected = firstAvailable(g_position.sideToMove());
+    recordMove(move, g_position.sideToMove());
     g_engineMessage = L"引擎已落子";
-    settleForcedPasses();
-    if (g_position.gameOver()) {
-        g_analysisOn = false;
-        clearEngineAnalysis();
-    }
-    if (g_analysisOn && !g_position.gameOver()) startEngineAnalysis();
     refresh();
     if (aiToMove()) maybeAiMove();
 }
@@ -1485,8 +1425,6 @@ void handleEngineLine(const std::string& raw) {
 void drainEngineLines() {
     for (const std::string& line : g_engineClient.drain()) handleEngineLine(line);
 }
-
-// (the Space handler `toggleAnalysis` is defined next to startEngineAnalysis)
 
 void syncRulesetChecks() {
     if (!g_rulesetMenu) return;
@@ -1507,16 +1445,14 @@ bool setRuleset(Ruleset ruleset) {
         return false;
     }
     g_ruleset = ruleset;
-    g_position.setRuleset(ruleset);
+    rebuildPosition();
     if (g_engineChoice != EngineChoice::Off) {
-        // Restart the engine process so it picks up the new rule set.
         g_analysisOn = false;
         stopEngineProcess();
         if (!startEngineProcess()) {
             MessageBoxW(g_hwnd, g_engineMessage.c_str(), L"引擎", MB_OK | MB_ICONWARNING);
         }
     }
-    clearEngineAnalysis();
     syncRulesetChecks();
     refresh(true);
     return true;
@@ -1525,13 +1461,12 @@ bool setRuleset(Ruleset ruleset) {
 void syncEngineChecks() {
     if (!g_engineMenu) return;
     int id = ID_ENGINE_OFF;
-    if (g_engineChoice == EngineChoice::Pruning) id = ID_ENGINE_PRUNING;
-    else if (g_engineChoice == EngineChoice::Mcts) id = ID_ENGINE_MCTS;
+    if (g_engineChoice == EngineChoice::Mcts) id = ID_ENGINE_MCTS;
     CheckMenuRadioItem(g_engineMenu, ID_ENGINE_OFF, ID_ENGINE_MCTS, id, MF_BYCOMMAND);
-    // The model submenu is its own group: it only means something for MCTS+NN.
     if (g_modelMenuPosition >= 0) {
         CheckMenuItem(g_engineMenu, static_cast<UINT>(g_modelMenuPosition),
-                      MF_BYPOSITION | (g_engineChoice == EngineChoice::MctsNn ? MF_CHECKED : MF_UNCHECKED));
+                      MF_BYPOSITION |
+                          (g_engineChoice == EngineChoice::MctsNn ? MF_CHECKED : MF_UNCHECKED));
     }
     syncModelChecks();
 }
@@ -1541,112 +1476,149 @@ void syncEngineChecks() {
 // ---------------------------------------------------------------------------
 struct Layout {
     RECT client{};
+    RECT actions{};  // new / save / load, top left
+    RECT left{};     // the analysis panel
     RECT board{};
-    RECT panel{};
+    RECT right{};  // the record tree
+    RECT bottom{}; // A value and the pieces in hand
     int cell = 60;
-};
-
-struct PanelRects {
-    RECT turn{};
-    RECT stats{};
-    RECT chips[2][9]{};
-    RECT mode{};
-    RECT analysis{};
-    RECT newButton{};
-    RECT undoButton{};
-    RECT aMinus{};
-    RECT aPlus{};
 };
 
 Layout computeLayout(HWND hwnd) {
     Layout result;
     GetClientRect(hwnd, &result.client);
-    const int width = result.client.right;
-    const int height = result.client.bottom;
-    const int margin = scale(22);
-    const int coord = scale(30);
-    const int statusHeight = scale(34);
-    const int panelWidth = scale(318);
-    const int gap = scale(24);
+    const int margin = scale(16);
+    const int gap = scale(14);
+    const int leftWidth = scale(292);
+    const int rightWidth = scale(246);
+    const int barHeight = scale(64);
+    const int coord = scale(24);
 
-    int availableW = width - 2 * margin - 2 * coord - gap - panelWidth;
-    int availableH = height - 2 * margin - statusHeight - 2 * coord;
-    int cell = std::min(availableW / 9, availableH / 9);
-    cell = std::max(scale(36), std::min(cell, scale(74)));
+    result.actions = {margin, margin, margin + leftWidth, margin + scale(26)};
+    result.left = {margin, result.actions.bottom + scale(10), margin + leftWidth,
+                   result.client.bottom - barHeight - scale(8)};
+    result.bottom = {0, result.client.bottom - barHeight, result.client.right, result.client.bottom};
+    result.right = {result.client.right - margin - rightWidth, result.left.top,
+                    result.client.right - margin, result.left.bottom};
+
+    const int slotLeft = result.left.right + gap;
+    const int slotWidth = result.right.left - gap - slotLeft;
+    const int slotHeight = result.left.bottom - result.left.top;
+    int cell = std::min((slotWidth - 2 * coord) / 9, (slotHeight - 2 * coord) / 9);
+    cell = std::max(scale(26), std::min(cell, scale(72)));
+    const int size = cell * 9;
+    const int boardLeft = slotLeft + (slotWidth - size) / 2;
+    const int boardTop = result.left.top + (slotHeight - size) / 2;
+    result.board = {boardLeft, boardTop, boardLeft + size, boardTop + size};
     result.cell = cell;
-    const int boardSize = cell * 9;
-    result.board = {margin + coord, margin + coord, margin + coord + boardSize,
-                    margin + coord + boardSize};
-    result.panel = {result.board.right + gap, margin, width - margin, height - margin - statusHeight};
     return result;
 }
 
-PanelRects computePanelRects(const Layout& layout) {
-    PanelRects r;
-    const int x = layout.panel.left;
-    const int y = layout.panel.top;
-    const int w = layout.panel.right - layout.panel.left;
-    const int pad = scale(16);
-    int cursor = y + scale(92);
+struct Chrome {
+    RECT newGame{};
+    RECT save{};
+    RECT load{};
+    RECT aMinus{};
+    RECT aPlus{};
+    RECT chips[2][9];  // [red, black][1..9]
+};
 
-    r.turn = {x + pad, cursor, x + w - pad, cursor + scale(54)};
-    cursor += scale(68);
-    r.stats = {x + pad, cursor, x + w - pad, cursor + scale(94)};
-    cursor += scale(132);
+Chrome computeChrome(const Layout& layout) {
+    Chrome chrome;
+    const int buttonWidth = scale(58);
+    const int buttonGap = scale(6);
+    int x = layout.actions.left;
+    const int top = layout.actions.top;
+    const int height = layout.actions.bottom - layout.actions.top;
+    chrome.newGame = {x, top, x + buttonWidth, top + height};
+    x += buttonWidth + buttonGap;
+    chrome.save = {x, top, x + buttonWidth, top + height};
+    x += buttonWidth + buttonGap;
+    chrome.load = {x, top, x + buttonWidth, top + height};
 
-    const int labelX = x + pad + scale(42);
-    const int chipWidth = (x + w - pad - labelX) / 9;
-    const int chipHeight = scale(46);
-    const int rowGap = scale(8);
+    // Bottom bar: A value on the left, then the two rows of pieces.
+    const int barTop = layout.bottom.top;
+    const int aRow = barTop + scale(21);
+    chrome.aMinus = {scale(96), aRow, scale(118), aRow + scale(21)};
+    chrome.aPlus = {scale(122), aRow, scale(144), aRow + scale(21)};
+    int cursor = scale(168);
+    const int labelWidth = scale(20);
+    const int chipWidth = scale(30);
+    const int chipGap = scale(2);
+    const int rowTop = barTop + scale(11);
     for (int side = 0; side < 2; ++side) {
+        const int row = rowTop + side * scale(24);
+        const int first = cursor + labelWidth;
         for (int n = 0; n < 9; ++n) {
-            r.chips[side][n] = {labelX + n * chipWidth, cursor + side * (chipHeight + rowGap),
-                                labelX + (n + 1) * chipWidth - scale(2),
-                                cursor + side * (chipHeight + rowGap) + chipHeight};
+            chrome.chips[side][n] = {first + n * (chipWidth + chipGap), row,
+                                     first + n * (chipWidth + chipGap) + chipWidth,
+                                     row + scale(21)};
         }
     }
-    cursor += 2 * chipHeight + rowGap + scale(22);
-    r.mode = {x + pad, cursor, x + w - pad, cursor + scale(24)};
-    const int buttonY = layout.panel.bottom - scale(54);
-    r.analysis = {x + pad, r.mode.bottom + scale(10), x + w - pad, buttonY - scale(12)};
-    const int buttonGap = scale(10);
-    const int buttonW = (w - 2 * pad - buttonGap) / 2;
-    r.newButton = {x + pad, buttonY, x + pad + buttonW, buttonY + scale(40)};
-    r.undoButton = {r.newButton.right + buttonGap, buttonY, x + w - pad, buttonY + scale(40)};
-
-    r.aMinus = {r.stats.right - scale(58), r.stats.top + scale(38),
-                r.stats.right - scale(34), r.stats.top + scale(62)};
-    r.aPlus = {r.stats.right - scale(28), r.stats.top + scale(38),
-               r.stats.right - scale(4), r.stats.top + scale(62)};
-    return r;
-}
-
-RECT overlayRect(const Layout& layout) {
-    const int boardSize = layout.board.right - layout.board.left;
-    const int w = std::min(scale(430), boardSize - scale(36));
-    const int h = scale(184);
-    const int cx = layout.board.left + boardSize / 2;
-    const int cy = layout.board.top + boardSize / 2;
-    return {cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2};
-}
-
-RECT overlayButton(const Layout& layout) {
-    RECT box = overlayRect(layout);
-    const int w = scale(132);
-    const int h = scale(38);
-    const int top = box.bottom - scale(50);
-    return {(box.left + box.right - w) / 2, top, (box.left + box.right + w) / 2, top + h};
+    return chrome;
 }
 
 bool contains(const RECT& rect, POINT point) {
-    return point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom;
+    return point.x >= rect.left && point.x < rect.right && point.y >= rect.top &&
+           point.y < rect.bottom;
+}
+
+// The record tree's geometry, shared by the drawing and the hit test.  One row
+// per node in pre-order: the trunk runs down the left column and every variation
+// starts a new row below the branch it belongs to.
+struct TreeCell {
+    int node = 0;
+    RECT box{};
+};
+struct TreeLayout {
+    std::vector<TreeCell> cells;
+    int rowHeight = 19;
+    int contentHeight = 0;
+};
+
+TreeLayout computeTreeLayout(const Layout& layout, int scroll) {
+    TreeLayout tree;
+    tree.rowHeight = scale(19);
+    const int columnWidth = scale(46);
+    const int left = layout.right.left + scale(10);
+    const int top = layout.right.top + scale(34);
+    int row = 0;
+    const std::function<void(int, int)> walk = [&](int id, int depth) {
+        TreeCell cell;
+        cell.node = id;
+        const int x = left + depth * columnWidth;
+        const int y = top + row * tree.rowHeight - scroll;
+        cell.box = {x, y, x + columnWidth - scale(4), y + tree.rowHeight - scale(3)};
+        tree.cells.push_back(cell);
+        ++row;
+        for (int child : g_record.childrenOf(id)) walk(child, depth + 1);
+    };
+    walk(g_record.root(), 0);
+    tree.contentHeight = row * tree.rowHeight;
+    return tree;
+}
+
+// Where the tree has to be scrolled so `id` is visible.
+int treeScrollFor(int id) {
+    Layout layout = computeLayout(g_hwnd);
+    const TreeLayout tree = computeTreeLayout(layout, 0);
+    const int visibleTop = layout.right.top + scale(34);
+    const int visibleHeight = layout.right.bottom - visibleTop;
+    for (const TreeCell& cell : tree.cells) {
+        if (cell.node != id) continue;
+        const int nodeTop = cell.box.top - layout.right.top - scale(34);
+        if (nodeTop < g_treeScroll) return nodeTop;
+        if (nodeTop + tree.rowHeight > g_treeScroll + visibleHeight - tree.rowHeight) {
+            return std::max(0, nodeTop - visibleHeight + 3 * tree.rowHeight);
+        }
+        return g_treeScroll;
+    }
+    return g_treeScroll;
 }
 
 // ---------------------------------------------------------------------------
-// Drawing
+// Board drawing
 // ---------------------------------------------------------------------------
-// Pieces are square: the board is a grid of claims, not a shape-sorting game, and
-// a square footprint lets the analysis marks reuse exactly the same geometry.
 void drawStone(HDC dc, int cx, int cy, int radius, bool red, int number, bool ghost = false) {
     COLORREF fill = red ? kRed : kBlack;
     COLORREF border = red ? RGB(122, 24, 26) : RGB(8, 9, 12);
@@ -1663,51 +1635,42 @@ void drawStone(HDC dc, int cx, int cy, int radius, bool red, int number, bool gh
                g_fontPiece, text);
 }
 
-
-// ------------------------------------------------------------------ marks ---
-//
-// One mark per analysed move, drawn with the same square footprint as a piece:
-// a thin outline, a translucent-looking fill (mixed against the board colour, so
-// there is no alpha channel to worry about) and three rows of text.
+// One mark per analysed move, drawn with the same square footprint as a piece.
 //
 //   row 1  win rate
 //   row 2  visits, abbreviated to at most four characters
 //   row 3  expected terminal score
 //
-// Colour is relative to the best move, not absolute: the best is light blue,
-// everything else runs red (far behind) -> green (close).  Marks more than 20
-// points of win rate behind, or with under 5% of the best move's visits, are not
-// drawn at all -- they are noise on a 9x9 board.
-constexpr double kMarkWinRateWindow = 0.20;
-constexpr double kMarkVisitFloor = 0.05;
-// Also draw at least this many of the best marks even when one move collected
-// nearly all visits.  Without it a converged search leaves a single mark on the
-// board, which reads as "the engine proved a unique answer" -- it did not.
-constexpr int kMarkAlwaysShow = 8;
+// Colour is relative to the best move, not absolute.  Marks more than 20 points
+// behind, or with under 5% of the best move's visits, are not drawn at all --
+// except a solved one, which is a fact and is always drawn.
+// On a converged opening search every one of the ~40 legal placements comes back
+// at ~40%, and drawing all of them turns the board into a wall of numbers.  Six
+// marks always, then only moves that are close to the best and were really
+// searched: the board should answer "what are the candidates", not "what did the
+// engine touch".
+constexpr double kMarkWinRateWindow = 0.10;
+constexpr double kMarkVisitFloor = 0.20;
+constexpr int kMarkAlwaysShow = 6;
 
 COLORREF markColor(double relative, bool best) {
-    if (best) return RGB(126, 196, 255); // light blue
+    if (best) return RGB(126, 196, 255);  // light blue
     const double t = std::clamp(1.0 + relative / kMarkWinRateWindow, 0.0, 1.0);
-    const COLORREF red = RGB(214, 92, 82);
-    const COLORREF green = RGB(96, 186, 118);
-    return mixColor(red, green, t);
+    return mixColor(RGB(214, 92, 82), RGB(96, 186, 118), t);
 }
 
 void drawAnalysisMarks(HDC dc, const Layout& layout, const std::vector<int>& rankedCells) {
-    const auto& analysis = g_engineAnalysis;
+    const auto& analysis = currentAnalysis();
     if (rankedCells.empty()) return;
     const double bestRate = displayWinRate(analysis.cells[rankedCells.front()]);
     const int cell = layout.cell;
     const RECT& board = layout.board;
 
     int mostVisits = 0;
-    for (int index : rankedCells) {
-        mostVisits = std::max(mostVisits, analysis.cells[index].visits);
-    }
+    for (int index : rankedCells) mostVisits = std::max(mostVisits, analysis.cells[index].visits);
 
     const int radius = static_cast<int>(cell * 0.40);
     const int corner = std::max(2, radius / 4);
-    // Three text rows share the mark's height.
     const int rowHeight = std::max(8, (radius * 2) / 3);
     const int textTop = -radius;
     for (std::size_t rank = 0; rank < rankedCells.size(); ++rank) {
@@ -1716,12 +1679,8 @@ void drawAnalysisMarks(HDC dc, const Layout& layout, const std::vector<int>& ran
         const bool topMark = rank < kMarkAlwaysShow;
         const double rate = displayWinRate(info);
         const double relative = rate - bestRate;
-        // A solved cell is a fact, not a sample: draw it even when its win rate is
-        // far below the best, because the number it carries is the margin.  The
-        // window exists to keep estimates from crowding the board.
         if (!topMark && !info.proven && relative < -kMarkWinRateWindow) continue;
-        if (!topMark && !info.proven &&
-            info.visits < static_cast<int>(mostVisits * kMarkVisitFloor)) {
+        if (!topMark && !info.proven && info.visits < static_cast<int>(mostVisits * kMarkVisitFloor)) {
             continue;
         }
         const COLORREF colour = markColor(relative, rank == 0);
@@ -1730,19 +1689,14 @@ void drawAnalysisMarks(HDC dc, const Layout& layout, const std::vector<int>& ran
         const RECT mark{cx - radius, cy - radius, cx + radius, cy + radius};
         roundRect(dc, mark, corner, mixColor(kBoard, colour, 0.62), colour, std::max(1, scale(1)));
         int y = cy + textTop;
-        drawTextAt(dc, formatWinRate(rate), cx - radius, y, radius * 2, rowHeight,
-                   g_fontSmall, RGB(28, 32, 38));
+        drawTextAt(dc, formatWinRate(rate), cx - radius, y, radius * 2, rowHeight, g_fontSmall,
+                   RGB(28, 32, 38));
         y += rowHeight;
-        // Row 2 is the visit count, and a solved cell has none: the answer did not
-        // come from sampling, so "0" would read as an empty search.  The row stays
-        // reserved so the margin sits on the same line on every cell.
         if (info.visits > 0) {
             drawTextAt(dc, formatVisits(info.visits), cx - radius, y, radius * 2, rowHeight,
                        g_fontSmall, RGB(28, 32, 38));
         }
         y += rowHeight;
-        // Row 3 is the margin: exact (whole points) when solved, an average from a
-        // score head otherwise, and "--" when no visit carried a real score.
         std::wstring scoreText = L"--";
         if (info.hasScore) {
             scoreText = info.proven ? formatPoints(info.averageScore)
@@ -1758,16 +1712,12 @@ void drawBoard(HDC dc, const Layout& layout, const std::vector<int>& rankedCells
     const RECT& board = layout.board;
 
     fillRectColor(dc, board, kBoard);
-    // Subtle vignette-like border.
     for (int i = 0; i < scale(5); ++i) {
         RECT edge{board.left + i, board.top + i, board.right - i, board.bottom - i};
         HBRUSH brush = CreateSolidBrush(i == 0 ? kBoardLine : kBoard);
         FrameRect(dc, &edge, brush);
         DeleteObject(brush);
     }
-
-    // The analysis overlay is drawn after the grid so the marks sit on top of the
-    // lines, exactly like a piece would.
     for (int i = 0; i <= 9; ++i) {
         const int x = board.left + i * cell;
         const int y = board.top + i * cell;
@@ -1784,19 +1734,18 @@ void drawBoard(HDC dc, const Layout& layout, const std::vector<int>& rankedCells
         filledCircle(dc, cx, cy, std::max(2, scale(3)), kBoardLine);
     }
 
-    // Coordinates.
     for (int i = 0; i < 9; ++i) {
         const std::wstring letter(1, static_cast<wchar_t>(L'a' + i));
         const std::wstring number = std::to_wstring(9 - i);
         const int cx = board.left + i * cell + cell / 2;
-        drawTextAt(dc, letter, cx - cell / 2, board.top - scale(28), cell, scale(22), g_fontCoord,
+        drawTextAt(dc, letter, cx - cell / 2, board.top - scale(24), cell, scale(20), g_fontCoord,
                    kMuted);
-        drawTextAt(dc, letter, cx - cell / 2, board.bottom + scale(6), cell, scale(22), g_fontCoord,
+        drawTextAt(dc, letter, cx - cell / 2, board.bottom + scale(4), cell, scale(20), g_fontCoord,
                    kMuted);
         const int cy = board.top + i * cell + cell / 2;
-        drawTextAt(dc, number, board.left - scale(30), cy - cell / 2, scale(22), cell, g_fontCoord,
+        drawTextAt(dc, number, board.left - scale(24), cy - cell / 2, scale(20), cell, g_fontCoord,
                    kMuted);
-        drawTextAt(dc, number, board.right + scale(8), cy - cell / 2, scale(22), cell, g_fontCoord,
+        drawTextAt(dc, number, board.right + scale(4), cy - cell / 2, scale(20), cell, g_fontCoord,
                    kMuted);
     }
 
@@ -1810,6 +1759,9 @@ void drawBoard(HDC dc, const Layout& layout, const std::vector<int>& rankedCells
                   g_selected, true);
     }
 
+    // The move that reached this node: a wide, heavy ring, because the thin one
+    // read as part of the piece.
+    const Move last = g_record.current() > 0 ? g_position.lastMove() : Move{};
     for (int y = 0; y < 9; ++y) {
         for (int x = 0; x < 9; ++x) {
             const int cellIndex = index(x, y);
@@ -1819,313 +1771,417 @@ void drawBoard(HDC dc, const Layout& layout, const std::vector<int>& rankedCells
             const int cy = board.top + (8 - y) * cell + cell / 2;
             const int radius = static_cast<int>(cell * 0.37);
             drawStone(dc, cx, cy, radius, stone > 0, stone > 0 ? stone : -stone);
-            if (!g_position.history().empty() && g_position.lastMove().cell == cellIndex) {
-                const int grow = scale(3);
+            if (!isPass(last) && last.valid() && last.cell == cellIndex) {
+                const int grow = scale(6);
                 const RECT ring{cx - radius - grow, cy - radius - grow, cx + radius + grow,
                                 cy + radius + grow};
-                HPEN pen = CreatePen(PS_SOLID, std::max(2, scale(2)), kGold);
+                HPEN pen = CreatePen(PS_SOLID, std::max(scale(3), scale(4)), kGold);
                 HGDIOBJ old = SelectObject(dc, pen);
                 HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-                RoundRect(dc, ring.left, ring.top, ring.right, ring.bottom, std::max(3, radius / 3),
-                          std::max(3, radius / 3));
+                RoundRect(dc, ring.left, ring.top, ring.right, ring.bottom, std::max(4, radius / 2),
+                          std::max(4, radius / 2));
                 SelectObject(dc, oldBrush);
                 SelectObject(dc, old);
                 DeleteObject(pen);
             }
         }
     }
-
-    // The best move is highlighted by its mark (light blue), so no extra ring: two
-    // overlapping highlights on a 9x9 board read as noise.
 }
 
-void drawEngineAnalysis(HDC dc, const PanelRects& rects, const std::vector<int>& rankedCells) {
-    const RECT& box = rects.analysis;
-    if (box.bottom - box.top < scale(54)) return;
-    roundRect(dc, box, scale(9), kPanelDeep, RGB(56, 64, 78));
-    const int left = box.left + scale(12);
-    const int width = box.right - box.left - scale(24);
-    int y = box.top + scale(7);
-
-    std::wstring title = L"引擎分析 · ";
-    title += engineChoiceLabel(g_engineChoice);
-    if (!g_engineAnalysis.nn.empty() && g_engineAnalysis.nn != "none") {
-        title += L" · ";
-        title += widen(g_engineAnalysis.nn);
-    }
-    drawTextAt(dc, title, left, y, width, scale(22), g_fontSmall, kCyan,
-               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    y += scale(23);
-
-    if (g_engineChoice == EngineChoice::Off) {
-        drawTextAt(dc, L"在“引擎”菜单选择搜索器", left, y, width, scale(20), g_fontSmall, kMuted,
-                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        return;
-    }
-    if (g_enginePending) {
-        drawTextAt(dc, L"搜索中… 10Hz 刷新", left, y, width, scale(20), g_fontSmall, kGold,
-                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        return;
-    }
-    if (!g_engineAnalysis.valid) {
-        drawTextAt(dc, g_analysisOn ? L"等待分析数据…" : L"按空格开始分析",
-                   left, y, width, scale(20), g_fontSmall, kMuted,
-                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        return;
-    }
-
-    const auto& analysis = g_engineAnalysis;
-    const bool isMcts = analysis.kind.rfind("mcts", 0) == 0;
-    const CellAnalysisView* bestCell = rankedCells.empty() ? nullptr
-                                                         : &analysis.cells[rankedCells.front()];
-    const Move bestMove = isMcts && bestCell ? bestCell->move : analysis.best;
-    const std::wstring best = L"最佳 " + widen(squareName(bestMove.cell)) + L"-" +
-                              std::to_wstring(static_cast<int>(bestMove.number));
-    drawTextAt(dc, best, left, y, width, scale(22), g_fontUi, kCyan,
-               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    y += scale(23);
-    std::wstring metric;
-    if (isMcts) {
-        const bool proven = bestCell ? bestCell->proven : analysis.proven;
-        const long long visits = bestCell ? bestCell->visits : analysis.visits;
-        const double shown = bestCell ? displayWinRate(*bestCell)
-                                      : (proven ? analysis.winrate
-                                                : winRateLowerBound(analysis.winrate, visits));
-        const bool hasScore = bestCell ? bestCell->hasScore : analysis.hasScore;
-        const double score = bestCell ? bestCell->averageScore : analysis.averageScore;
-        // An exact solve reports no visits: printing "0/0" would read as a search
-        // that did nothing, when in fact it needs no search at all.
-        const bool solvedExactly = analysis.visits == 0 && proven;
-        metric = solvedExactly ? L"精确解算"
-                               : L"访问 " + std::to_wstring(visits) + L"/" +
-                                     std::to_wstring(analysis.visits);
-        metric += L" · 胜率 " + formatWinRate(shown);
-        metric += hasScore ? (proven ? L" · 目差 " : L" · 均分 ") : L" · 均分 --";
-        if (hasScore) metric += signedDecimal(score);
-        // A solved move stops searching on purpose: say so instead of looking
-        // like a search that ran out of budget.
-        if (proven && !solvedExactly) metric += L" · 已解算";
-    } else {
-        metric = L"深度 " + std::to_wstring(analysis.depth) + L" · 节点 " +
-                 std::to_wstring(analysis.nodes) + L" · 评分 " +
-                 signedText(analysis.score);
-        if (analysis.window > 0 || analysis.pvsResearches > 0) {
-            metric += L" · 窗±" + std::to_wstring(analysis.window) + L"/" +
-                      std::to_wstring(analysis.windowResearches) + L" PVS " +
-                      std::to_wstring(analysis.pvsResearches);
-        }
-    }
-    drawTextAt(dc, metric, left, y, width, scale(20), g_fontSmall, kMuted,
-               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    y += scale(21);
-    // Say why the search is idle: the numbers stay on screen after Space stops it,
-    // so the panel has to explain what the next Space will do.
-    if (!g_analysisOn) {
-        const wchar_t* hint = g_analysisFinished ? L"已达访问上限 · 空格继续（不限量，树保留）"
-                                                 : L"已暂停 · 空格继续（树保留）";
-        drawTextAt(dc, hint, left, y, width, scale(20), g_fontSmall,
-                   g_analysisFinished ? kGold : kMuted,
-                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        y += scale(20);
-    }
-
-    if (isMcts && !rankedCells.empty()) {
-        // One row per move: rotations of the same placement would otherwise take
-        // every slot on a symmetric board.
-        const std::vector<int> rows = distinctSymmetricCells(rankedCells, analysis, g_position);
-        const int count = std::min<int>(4, static_cast<int>(rows.size()));
-        for (int i = 0; i < count; ++i) {
-            const auto& candidate = analysis.cells[rows[i]];
-            const double rate = std::clamp(displayWinRate(candidate), 0.0, 1.0);
-            const int barTop = y + i * scale(20);
-            RECT bar{left + scale(58), barTop + scale(6), box.right - scale(16), barTop + scale(17)};
-            roundRect(dc, bar, scale(3), RGB(55, 62, 75));
-            RECT fill = bar;
-            fill.right = fill.left + static_cast<int>((bar.right - bar.left) * rate);
-            roundRect(dc, fill, scale(3), i == 0 ? kCyan : RGB(76, 140, 176));
-            const std::wstring label = widen(squareName(candidate.move.cell)) + L"-" +
-                                       std::to_wstring(static_cast<int>(candidate.move.number));
-            drawTextAt(dc, label, left, barTop, scale(54), scale(20), g_fontSmall,
-                       i == 0 ? kText : kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        }
-    } else {
-        std::wstring pv = L"PV " + widen(analysis.pv);
-        if (pv.size() > 42) pv = pv.substr(0, 41) + L"…";
-        drawTextAt(dc, pv, left, y, width, scale(20), g_fontSmall, kMuted,
-                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    }
+// ---------------------------------------------------------------------------
+// Left panel: everything the analysis produced
+// ---------------------------------------------------------------------------
+// The chart is always Red's view: the engine reports from the side to move, and a
+// curve that flips perspective every ply is unreadable.
+double redWinRate(const EngineAnalysisView& view, int depth) {
+    return (depth % 2 == 0) ? view.winrate : 1.0 - view.winrate;
 }
 
-void drawPanel(HDC dc, const Layout& layout, const std::vector<int>& rankedCells) {
-    PanelRects rects = computePanelRects(layout);
-    const int x = layout.panel.left;
-    const int y = layout.panel.top;
-    const int w = layout.panel.right - layout.panel.left;
-    const int h = layout.panel.bottom - layout.panel.top;
-    roundRect(dc, {x, y, x + w, y + h}, scale(14), kPanel, RGB(58, 64, 76), 1);
+double redScore(const EngineAnalysisView& view, int depth) {
+    return (depth % 2 == 0) ? view.averageScore : -view.averageScore;
+}
 
-    drawTextAt(dc, L"数弈", x + scale(18), y + scale(14), w - scale(36), scale(46), g_fontTitle,
-               kText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    drawTextAt(dc, L"SHUYI · 数字落子棋", x + scale(20), y + scale(56), w - scale(40), scale(24),
-               g_fontSubtitle, kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    line(dc, x + scale(16), y + scale(86), x + w - scale(16), y + scale(86), RGB(58, 64, 76));
+void drawChart(HDC dc, const RECT& box) {
+    if (box.bottom - box.top < scale(60)) return;
+    const int node = g_record.current();
+    const std::vector<int> path = g_record.line(node);
+    const int width = box.right - box.left;
+    roundRect(dc, box, scale(8), kPanelDeep);
 
-    const Player side = g_position.sideToMove();
-    roundRect(dc, rects.turn, scale(9), kPanelSoft);
-    COLORREF sideColor = side == Player::Red ? kRed : kBlack;
-    if (side == Player::Black) sideColor = RGB(15, 17, 22);
-    filledCircle(dc, rects.turn.left + scale(24), (rects.turn.top + rects.turn.bottom) / 2,
-                 scale(9), sideColor, side == Player::Black ? kBlackSoft : RGB(244, 164, 150), 1);
-    drawTextAt(dc, turnLabel(), rects.turn.left + scale(42), rects.turn.top,
-               rects.turn.right - rects.turn.left - scale(50), rects.turn.bottom - rects.turn.top,
-               g_fontTurn, kText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    int analysed = 0;
+    for (int id : path) {
+        if (g_record.node(id).analysis.valid) ++analysed;
+    }
+    if (analysed == 0) {
+        const wchar_t* message = path.empty() ? L"走势：还没有着法" : L"走势：这条线还没有分析";
+        drawTextAt(dc, message, box.left + scale(8), box.top, width - scale(16),
+                   box.bottom - box.top, g_fontSmall, kMuted);
+        return;
+    }
 
-    roundRect(dc, rects.stats, scale(9), kPanelDeep);
-    const int raw = g_position.rawScore();
-    const double total = raw + g_aValue;
-    const int sx = rects.stats.left + scale(12);
-    const int sw = rects.stats.right - rects.stats.left - scale(24);
-    drawTextAt(dc, L"当前格子分", sx, rects.stats.top + scale(5), sw - scale(70), scale(24),
-               g_fontSmall, kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    drawTextAt(dc, signedText(raw), sx + sw - scale(76), rects.stats.top + scale(5), scale(76),
-               scale(24), g_fontBig, raw > 0 ? kRedSoft : (raw < 0 ? RGB(164, 172, 188) : kText),
-               DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-    drawTextAt(dc, L"A值", sx, rects.stats.top + scale(35), sw - scale(100), scale(24), g_fontSmall,
-               kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    drawTextAt(dc, signedValue(g_aValue), sx + sw - scale(96), rects.stats.top + scale(35), scale(36),
-               scale(24), g_fontUi, kGold, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-    roundRect(dc, rects.aMinus, scale(5), kPanelSoft, RGB(68, 75, 88));
-    roundRect(dc, rects.aPlus, scale(5), kPanelSoft, RGB(68, 75, 88));
-    drawTextAt(dc, L"−", rects.aMinus.left, rects.aMinus.top, rects.aMinus.right - rects.aMinus.left,
-               rects.aMinus.bottom - rects.aMinus.top, g_fontUi, kText);
-    drawTextAt(dc, L"+", rects.aPlus.left, rects.aPlus.top, rects.aPlus.right - rects.aPlus.left,
-               rects.aPlus.bottom - rects.aPlus.top, g_fontUi, kText);
-    drawTextAt(dc, L"若现在终局", sx, rects.stats.top + scale(65), sw - scale(80), scale(24),
-               g_fontSmall, kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    drawTextAt(dc, signedValue(total), sx + sw - scale(76), rects.stats.top + scale(63), scale(76),
-               scale(26), g_fontUi, total > 0 ? kRedSoft : (total < 0 ? RGB(174, 181, 195) : kGreen),
-               DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    const int padLeft = scale(8);
+    const int padRight = scale(8);
+    const int plotTop = box.top + scale(14);
+    const int plotBottom = box.bottom - scale(16);
+    const int plotLeft = box.left + padLeft;
+    const int plotRight = box.right - padRight;
+    if (plotBottom - plotTop < scale(20)) return;
+    const int columns = static_cast<int>(path.size());
+    const double stepX = columns > 1 ? static_cast<double>(plotRight - plotLeft) / (columns - 1) : 0.0;
+    const auto xAt = [&](int index) {
+        return plotLeft + static_cast<int>(std::lround(index * stepX));
+    };
+    const auto yWin = [&](double rate) {
+        return plotBottom - static_cast<int>(std::lround((plotBottom - plotTop) * std::clamp(rate, 0.0, 1.0)));
+    };
 
-    drawTextAt(dc, L"剩余棋子", x + scale(16), rects.chips[0][0].top - scale(28), w - scale(32),
-               scale(22), g_fontSmall, kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    for (int sideIndex = 0; sideIndex < 2; ++sideIndex) {
-        const Player player = sideIndex == 0 ? Player::Red : Player::Black;
-        const bool rowActive = g_position.sideToMove() == player && !g_position.gameOver();
-        drawTextAt(dc, sideIndex == 0 ? L"红" : L"黑", x + scale(16), rects.chips[sideIndex][0].top,
-                   scale(34), rects.chips[sideIndex][0].bottom - rects.chips[sideIndex][0].top,
-                   g_fontUi, sideIndex == 0 ? kRedSoft : kMuted,
-                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        for (int n = 1; n <= 9; ++n) {
-            RECT chip = rects.chips[sideIndex][n - 1];
-            const int remain = g_position.remaining(player, n);
-            const bool selected = rowActive && humanToMove() && n == g_selected;
-            roundRect(dc, chip, scale(6), remain > 0 ? kPanelSoft : kPanelDeep,
-                      selected ? kGold : RGB(58, 64, 76), selected ? 2 : 1);
-            drawTextAt(dc, std::to_wstring(n), chip.left, chip.top + scale(1),
-                       chip.right - chip.left, scale(25), g_fontUi,
-                       remain > 0 ? (sideIndex == 0 ? RGB(240, 179, 163) : RGB(215, 220, 230))
-                                  : RGB(94, 99, 109));
-            for (int dot = 0; dot < 3; ++dot) {
-                const int cx = chip.left + (chip.right - chip.left) / 2 + (dot - 1) * scale(8);
-                const int cy = chip.bottom - scale(9);
-                filledCircle(dc, cx, cy, scale(3), dot < remain ? (sideIndex == 0 ? kRed : kMuted)
-                                                               : RGB(63, 69, 80));
+    // Score curve: its own scale, symmetric around 0.
+    double maxScore = 2.0;
+    for (int id : path) {
+        const auto& view = g_record.node(id).analysis;
+        if (!view.valid || !view.hasScore) continue;
+        maxScore = std::max(maxScore, std::fabs(redScore(view, g_record.depth(id))));
+    }
+    const auto yScore = [&](double score) {
+        const double t = std::clamp(score / maxScore, -1.0, 1.0);
+        return plotBottom - static_cast<int>(std::lround((plotBottom - plotTop) * (t + 1.0) / 2.0));
+    };
+
+    line(dc, plotLeft, yWin(0.5), plotRight, yWin(0.5), RGB(58, 66, 80));
+    line(dc, plotLeft, yScore(0.0), plotRight, yScore(0.0), RGB(48, 54, 66));
+
+    // A segment is drawn only between two *analysed* points: a gap is the honest
+    // rendering of "the engine never looked at this position".
+    int previous = -1;
+    for (int i = 0; i < columns; ++i) {
+        const auto& view = g_record.node(path[i]).analysis;
+        if (!view.valid) {
+            previous = -1;
+            continue;
+        }
+        if (previous >= 0) {
+            const auto& before = g_record.node(path[previous]).analysis;
+            line(dc, xAt(previous), yWin(redWinRate(before, g_record.depth(path[previous]))),
+                 xAt(i), yWin(redWinRate(view, g_record.depth(path[i]))), kCyan, 2);
+            if (before.hasScore && view.hasScore) {
+                line(dc, xAt(previous), yScore(redScore(before, g_record.depth(path[previous]))),
+                     xAt(i), yScore(redScore(view, g_record.depth(path[i]))), kGold, 2);
             }
         }
+        previous = i;
+    }
+    for (int i = 0; i < columns; ++i) {
+        const auto& view = g_record.node(path[i]).analysis;
+        if (!view.valid) continue;
+        const bool current = path[i] == node;
+        const int cx = xAt(i);
+        filledCircle(dc, cx, yWin(redWinRate(view, g_record.depth(path[i]))),
+                     current ? scale(4) : scale(3), kCyan);
+        if (view.hasScore) {
+            filledCircle(dc, cx, yScore(redScore(view, g_record.depth(path[i]))),
+                         current ? scale(4) : scale(3), kGold);
+        }
     }
 
-    const Player humanTurn = g_position.sideToMove();
-    const int selectedRemain = g_position.remaining(humanTurn, g_selected);
-    std::wstring selection = L"当前选择：";
-    selection += std::to_wstring(g_selected);
-    selection += L"（剩 ";
-    selection += std::to_wstring(selectedRemain);
-    selection += L" 枚）";
-    drawTextAt(dc, selection, x + scale(16), rects.mode.top - scale(30), w - scale(32), scale(24),
-               g_fontSmall, kGold, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    drawTextAt(dc, modeLabel(), rects.mode.left, rects.mode.top, rects.mode.right - rects.mode.left,
-               rects.mode.bottom - rects.mode.top, g_fontSmall, kMuted,
-               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    drawEngineAnalysis(dc, rects, rankedCells);
-
-    roundRect(dc, rects.newButton, scale(8), RGB(98, 77, 42), kGold);
-    drawTextAt(dc, L"新局  F2", rects.newButton.left, rects.newButton.top,
-               rects.newButton.right - rects.newButton.left,
-               rects.newButton.bottom - rects.newButton.top, g_fontUi, kText);
-    roundRect(dc, rects.undoButton, scale(8), kPanelSoft, RGB(68, 75, 88));
-    drawTextAt(dc, L"悔棋  Ctrl+Z", rects.undoButton.left, rects.undoButton.top,
-               rects.undoButton.right - rects.undoButton.left,
-               rects.undoButton.bottom - rects.undoButton.top, g_fontUi, kText);
+    // Axis labels, minimal: 100% / 0% for the win rate, the score range on the
+    // right.  Anything more is noise in a 200 px box.
+    drawTextAt(dc, L"100%", box.left + scale(4), plotTop - scale(12), scale(34), scale(14),
+               g_fontSmall, kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    drawTextAt(dc, L"0%", box.left + scale(4), plotBottom, scale(30), scale(14), g_fontSmall,
+               kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    if (maxScore > 0.0) {
+        drawTextAt(dc, signedDecimal(maxScore), box.right - scale(44), plotTop - scale(12),
+                   scale(40), scale(14), g_fontSmall, RGB(150, 126, 70),
+                   DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
 }
 
-void drawStatus(HDC dc, const Layout& layout) {
-    const int y = layout.client.bottom - scale(34);
-    line(dc, 0, y, layout.client.right, y, RGB(48, 54, 65));
-    std::wstring left = L"数字键 1–9 选子 · 点击棋盘落子 · F2 新局 · Ctrl+Z 悔棋";
-    if (!g_position.gameOver() && g_hoverCell >= 0 && g_engineAnalysis.valid &&
-        g_engineAnalysis.hasCell[g_hoverCell]) {
-        const auto& info = g_engineAnalysis.cells[g_hoverCell];
-        left = L"格 " + widen(squareName(g_hoverCell)) + L" · 数字 " +
-               std::to_wstring(static_cast<int>(info.move.number)) + L" · 胜率 " +
-               formatWinRate(displayWinRate(info));
-        // A solved cell has no sample to count: the exact endgame solver answers
-        // without running a simulation, so "访问 0" would read as an empty search.
-        if (info.visits > 0) left += L" · 访问 " + std::to_wstring(info.visits);
-        if (info.hasScore) {
-            // A solved cell's number is the exact margin; anything else is an
-            // average over the visits that carried a score.
-            left += info.proven ? L" · 目差 " : L" · 均分 ";
-            left += signedDecimal(info.averageScore);
+void drawLeftPanel(HDC dc, const Layout& layout, const std::vector<int>& rankedCells) {
+    const RECT& box = layout.left;
+    roundRect(dc, box, scale(12), kPanel);
+    const int x = box.left + scale(14);
+    const int width = (box.right - box.left) - scale(28);
+    int y = box.top + scale(10);
+    const auto& analysis = currentAnalysis();
+
+    // 行棋方
+    const Player side = g_position.sideToMove();
+    const COLORREF sideColour = side == Player::Red ? kRed : RGB(15, 17, 22);
+    filledCircle(dc, x + scale(8), y + scale(11), scale(6), sideColour,
+                 side == Player::Red ? RGB(244, 164, 150) : kBlackSoft, 1);
+    std::wstring turn = side == Player::Red ? L"红方行棋" : L"黑方行棋";
+    if (g_position.gameOver()) turn = std::wstring(L"终局 · ") + outcomeText(g_position.outcome(g_aValue));
+    else if (g_thinking) turn = L"电脑思考中…";
+    drawTextAt(dc, turn, x + scale(22), y, width - scale(22), scale(24), g_fontTurn, kText,
+               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    y += scale(26);
+
+    // The headline of the best line, then the bar that splits the board between
+    // the two sides.
+    double rate = 0.5;
+    bool hasRate = false;
+    std::wstring scoreText = L"--";
+    if (analysis.valid) {
+        // The engine's own choice, in its own terms: a solved move carries its
+        // exact rate, an estimated one the confidence bound it is ranked by.
+        const int bestCell = analysis.best.cell;
+        if (analysis.hasCell[bestCell]) {
+            const auto& info = analysis.cells[bestCell];
+            rate = displayWinRate(info);
         } else {
-            left += L" · 均分 --";
+            rate = analysis.proven ? analysis.winrate
+                                   : winRateLowerBound(analysis.winrate, analysis.visits);
         }
-        if (info.proven) left += L"（已解算）";
-    } else if (g_thinking) {
-        left = L"电脑思考中，请稍候…";
-    } else if (g_position.gameOver()) {
-        const Outcome outcome = g_position.outcome(g_aValue);
-        left = std::wstring(L"终局：") + outcomeText(outcome) + L" · 比分 " +
-               signedText(g_position.rawScore()) + L" + A(" + signedValue(g_aValue) + L") = " +
-               signedValue(g_position.finalScore(g_aValue));
+        hasRate = true;
+        if (analysis.hasScore) scoreText = signedDecimal(analysis.averageScore);
     }
-    drawTextAt(dc, left, scale(24), y, layout.client.right - scale(180), scale(33), g_fontSmall,
-               g_position.gameOver() ? kGold : kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    const std::wstring right = L"第 " + std::to_wstring(g_position.ply()) + L" / 54 手";
-    drawTextAt(dc, right, layout.client.right - scale(160), y, scale(136), scale(33), g_fontSmall,
-               kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    const double redRate = (side == Player::Red || g_position.gameOver()) ? rate : 1.0 - rate;
+    drawTextAt(dc, hasRate ? L"胜率 " + formatWinRate(redRate) : L"胜率 --", x, y,
+               width / 2, scale(20), g_fontUi, hasRate ? kText : kMuted,
+               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    drawTextAt(dc, L"目差 " + scoreText, x + width / 2, y, width / 2, scale(20), g_fontUi,
+               analysis.hasScore ? kText : kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    y += scale(22);
+
+    RECT bar{x, y, x + width, y + scale(14)};
+    roundRect(dc, bar, scale(7), RGB(20, 22, 27));  // black side
+    RECT redPart = bar;
+    redPart.right = bar.left + static_cast<int>(std::lround((bar.right - bar.left) * std::clamp(redRate, 0.0, 1.0)));
+    if (redPart.right > redPart.left) roundRect(dc, redPart, scale(7), kRed);
+    y += scale(14) + scale(10);
+
+    // AI 评估: what the engine is and how much it searched.
+    drawTextAt(dc, L"AI评估", x, y, scale(56), scale(18), g_fontSmall, kMuted,
+               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    std::wstring engineLine = engineChoiceLabel(g_engineChoice);
+    if (analysis.valid) {
+        engineLine += L" · 访问 " + std::to_wstring(analysis.visits);
+        if (analysis.visits == 0 && analysis.proven) engineLine = L"精确解算 · " + engineLine;
+        else if (analysis.proven) engineLine += L" · 已解算";
+    } else if (g_engineChoice != EngineChoice::Off) {
+        engineLine += g_analysisOn ? L" · 搜索中…" : L" · 空格开始分析";
+    }
+    drawTextAt(dc, engineLine, x + scale(56), y, width - scale(56), scale(18), g_fontSmall,
+               g_engineChoice == EngineChoice::Off ? kMuted : kCyan,
+               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    y += scale(20);
+    if (g_engineChoice != EngineChoice::Off) {
+        drawTextAt(dc, g_engineMessage, x + scale(56), y, width - scale(56), scale(16), g_fontSmall,
+                   kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        y += scale(18);
+    }
+    y += scale(4);
+    line(dc, x, y, x + width, y, RGB(58, 66, 80));
+    y += scale(8);
+
+    // 选点: one row per distinct move.  A solved move is a fact, so it is marked
+    // and never hidden by the visit floor.
+    drawTextAt(dc, L"选点", x, y, scale(56), scale(18), g_fontSmall, kMuted,
+               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += scale(20);
+    if (analysis.valid && !rankedCells.empty()) {
+        const std::vector<int> rows = distinctSymmetricCells(rankedCells, analysis, g_position);
+        const int count = std::min<int>(5, static_cast<int>(rows.size()));
+        const double topRate = displayWinRate(analysis.cells[rows.front()]);
+        for (int i = 0; i < count; ++i) {
+            const auto& info = analysis.cells[rows[i]];
+            const double value = displayWinRate(info);
+            const int rowY = y + i * scale(23);
+            const std::wstring label = moveLabel(info.move);
+            drawTextAt(dc, label, x, rowY, scale(46), scale(20), g_fontUi,
+                       i == 0 ? kText : kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            if (info.proven) {
+                drawTextAt(dc, L"解", x + scale(42), rowY, scale(16), scale(20), g_fontSmall, kGold,
+                           DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            }
+            RECT track{x + scale(60), rowY + scale(7), x + width - scale(88), rowY + scale(15)};
+            roundRect(dc, track, scale(3), RGB(55, 62, 75));
+            RECT fill = track;
+            fill.right = fill.left + static_cast<int>(std::lround((track.right - track.left) *
+                                                                std::clamp(value, 0.0, 1.0)));
+            if (fill.right > fill.left) {
+                roundRect(dc, fill, scale(3), i == 0 ? kCyan : RGB(76, 140, 176));
+            }
+            drawTextAt(dc, formatWinRate(value), x + width - scale(86), rowY, scale(40), scale(20),
+                       g_fontSmall, i == 0 ? kText : kMuted,
+                       DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            std::wstring score = L"--";
+            if (info.hasScore) score = signedDecimal(info.averageScore);
+            if (info.proven && info.hasScore) score = formatPoints(info.averageScore);
+            drawTextAt(dc, score, x + width - scale(44), rowY, scale(44), scale(20), g_fontSmall,
+                       info.proven ? kGold : kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        }
+        (void)topRate;
+        y += count * scale(23);
+    } else {
+        drawTextAt(dc, L"还没有分析", x + scale(56), y, width - scale(56), scale(20), g_fontSmall,
+                   kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        y += scale(23);
+    }
+    y += scale(4);
+    line(dc, x, y, x + width, y, RGB(58, 66, 80));
+    y += scale(6);
+
+    // 当前分值: what the board is worth if the game ended now.
+    drawTextAt(dc, L"当前分值", x, y, scale(76), scale(22), g_fontSmall, kMuted,
+               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    const double total = g_position.finalScore(g_aValue);
+    drawTextAt(dc, signedDecimal(total), x + scale(76), y, width - scale(76), scale(22), g_fontBig,
+               total > 0.0 ? kRedSoft : (total < 0.0 ? RGB(174, 181, 195) : kGreen),
+               DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    y += scale(26);
+
+    const RECT chart{x, y, x + width, box.bottom - scale(12)};
+    drawChart(dc, chart);
+}
+
+// ---------------------------------------------------------------------------
+// Right panel: the record tree
+// ---------------------------------------------------------------------------
+void drawRecordTree(HDC dc, const Layout& layout) {
+    const RECT& box = layout.right;
+    roundRect(dc, box, scale(12), kPanel);
+    drawTextAt(dc, L"棋谱", box.left + scale(12), box.top + scale(8), scale(60), scale(20),
+               g_fontSmall, kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    const std::wstring count = std::to_wstring(g_record.depth(g_record.current())) + L" / " +
+                               std::to_wstring(g_record.count() - 1);
+    drawTextAt(dc, count, box.right - scale(60), box.top + scale(8), scale(48), scale(20),
+               g_fontSmall, kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+    const TreeLayout tree = computeTreeLayout(layout, g_treeScroll);
+    // Clip: a long game must not paint over the panel's border.
+    HRGN clip = CreateRectRgn(box.left + 1, box.top + scale(30), box.right - 1, box.bottom - 1);
+    SelectClipRgn(dc, clip);
+
+    const std::vector<int> path = g_record.line(g_record.current());
+    const auto onPath = [&](int id) { return std::find(path.begin(), path.end(), id) != path.end(); };
+    for (const TreeCell& cell : tree.cells) {
+        const RecordNode& node = g_record.node(cell.node);
+        // Colour: how the played move did against what the previous position's
+        // analysis predicted, on the same red/green scale as the board marks.
+        COLORREF fill = kPanelSoft;
+        double delta = 0.0;
+        if (node.parent >= 0 && moveDelta(g_record.node(node.parent), node, &delta)) {
+            fill = mixColor(kPanel, markColor(delta, false), std::clamp(std::fabs(delta) / 0.2, 0.25, 0.9));
+        }
+        const bool selected = cell.node == g_record.current();
+        const bool trunk = onPath(cell.node);
+        roundRect(dc, cell.box, scale(4), fill,
+                  selected ? kGold : (trunk ? RGB(96, 106, 124) : CLR_INVALID),
+                  selected ? 2 : 1);
+        std::wstring label = cell.node == g_record.root() ? std::wstring(L"起") : moveLabel(node.move);
+        drawTextAt(dc, label, cell.box.left + scale(2), cell.box.top, cell.box.right - cell.box.left - scale(4),
+                   cell.box.bottom - cell.box.top, g_fontSmall,
+                   selected ? kText : (trunk ? RGB(226, 231, 240) : kMuted),
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        if (node.analysis.valid && node.analysis.proven) {
+            filledCircle(dc, cell.box.right - scale(4), cell.box.top + scale(4), scale(2), kGold);
+        }
+        if (node.children.size() > 1) {
+            // A branch point: the alternatives start below it.
+            line(dc, cell.box.right, cell.box.top + (cell.box.bottom - cell.box.top) / 2,
+                 cell.box.right + scale(3), cell.box.top + (cell.box.bottom - cell.box.top) / 2,
+                 RGB(96, 106, 124));
+        }
+    }
+    SelectClipRgn(dc, nullptr);
+    DeleteObject(clip);
+}
+
+// ---------------------------------------------------------------------------
+// Bottom bar
+// ---------------------------------------------------------------------------
+void drawBottomBar(HDC dc, const Layout& layout, const Chrome& chrome) {
+    fillRectColor(dc, layout.bottom, kPanel);
+    line(dc, 0, layout.bottom.top, layout.bottom.right, layout.bottom.top, RGB(48, 54, 65));
+
+    const int barTop = layout.bottom.top;
+    // A value with its two buttons.  It is a number the game is scored by, so it
+    // stays visible, but it is not a headline.
+    const int aRow = barTop + scale(21);
+    drawTextAt(dc, L"A值", scale(16), aRow, scale(34), scale(21), g_fontSmall, kMuted,
+               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    drawTextAt(dc, signedValue(g_aValue), scale(50), aRow, scale(44), scale(21), g_fontUi, kGold,
+               DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    roundRect(dc, chrome.aMinus, scale(4), kPanelSoft, RGB(68, 75, 88));
+    roundRect(dc, chrome.aPlus, scale(4), kPanelSoft, RGB(68, 75, 88));
+    drawTextAt(dc, L"−", chrome.aMinus.left, chrome.aMinus.top,
+               chrome.aMinus.right - chrome.aMinus.left, chrome.aMinus.bottom - chrome.aMinus.top,
+               g_fontUi, kText);
+    drawTextAt(dc, L"+", chrome.aPlus.left, chrome.aPlus.top, chrome.aPlus.right - chrome.aPlus.left,
+               chrome.aPlus.bottom - chrome.aPlus.top, g_fontUi, kText);
+
+    for (int side = 0; side < 2; ++side) {
+        const Player player = side == 0 ? Player::Red : Player::Black;
+        const int rowY = chrome.chips[side][0].top;
+        drawTextAt(dc, side == 0 ? L"红" : L"黑", scale(168), rowY, scale(18), scale(21),
+                   g_fontSmall, side == 0 ? kRedSoft : kMuted,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        const bool active = g_position.sideToMove() == player && humanToMove();
+        for (int n = 1; n <= 9; ++n) {
+            RECT chip = chrome.chips[side][n - 1];
+            const int remain = g_position.remaining(player, n);
+            const bool selected = active && n == g_selected;
+            roundRect(dc, chip, scale(4), remain > 0 ? kPanelSoft : kPanelDeep,
+                      selected ? kGold : RGB(58, 64, 76), selected ? 2 : 1);
+            drawTextAt(dc, std::to_wstring(n), chip.left, chip.top, chip.right - chip.left,
+                       chip.bottom - chip.top, g_fontSmall,
+                       remain > 0 ? (side == 0 ? RGB(240, 179, 163) : RGB(215, 220, 230))
+                                  : RGB(94, 99, 109));
+        }
+    }
+
+    const std::wstring ply = L"第 " + std::to_wstring(g_position.ply()) + L" 手";
+    drawTextAt(dc, ply, layout.bottom.right - scale(120), barTop + scale(11), scale(100), scale(20),
+               g_fontSmall, kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+}
+
+void drawActions(HDC dc, const Chrome& chrome) {
+    const auto button = [&](const RECT& rect, const wchar_t* text, bool primary) {
+        roundRect(dc, rect, scale(6), primary ? RGB(98, 77, 42) : kPanelSoft,
+                  primary ? kGold : RGB(68, 75, 88));
+        drawTextAt(dc, text, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+                   g_fontSmall, kText);
+    };
+    button(chrome.newGame, L"新局", true);
+    button(chrome.save, L"保存", false);
+    button(chrome.load, L"载入", false);
 }
 
 void drawOverlay(HDC dc, const Layout& layout) {
     if (!g_position.gameOver()) return;
-    RECT box = overlayRect(layout);
-    roundRect(dc, box, scale(16), RGB(31, 36, 45), kGold, scale(2));
+    const int boardSize = layout.board.right - layout.board.left;
+    const int width = std::min(scale(360), boardSize - scale(30));
+    const int height = scale(96);
+    const int cx = layout.board.left + boardSize / 2;
+    const int cy = layout.board.top + boardSize / 2;
+    const RECT box{cx - width / 2, cy - height / 2, cx + width / 2, cy + height / 2};
+    roundRect(dc, box, scale(14), RGB(31, 36, 45), kGold, scale(2));
     const Outcome outcome = g_position.outcome(g_aValue);
-    const COLORREF color = outcome == Outcome::RedWin ? RGB(240, 137, 122)
-                          : outcome == Outcome::BlackWin ? RGB(196, 202, 214)
-                                                         : kGreen;
-    drawTextAt(dc, outcomeText(outcome), box.left + scale(20), box.top + scale(16),
-               box.right - box.left - scale(40), scale(58), g_fontTitle, color);
-    const std::wstring detail = L"局面分 " + signedText(g_position.rawScore()) + L"   +   A值 " +
-                                signedValue(g_aValue) + L"   =   " +
-                                signedValue(g_position.finalScore(g_aValue));
-    drawTextAt(dc, detail, box.left + scale(16), box.top + scale(76), box.right - box.left - scale(32),
-               scale(28), g_fontUi, kText);
-    RECT button = overlayButton(layout);
-    roundRect(dc, button, scale(8), RGB(98, 77, 42), kGold);
-    drawTextAt(dc, L"再来一局  F2", button.left, button.top, button.right - button.left,
-               button.bottom - button.top, g_fontUi, kText);
+    const COLORREF colour = outcome == Outcome::RedWin ? RGB(240, 137, 122)
+                             : outcome == Outcome::BlackWin ? RGB(196, 202, 214)
+                                                           : kGreen;
+    drawTextAt(dc, outcomeText(outcome), box.left + scale(16), box.top + scale(12),
+               width - scale(32), scale(46), g_fontTitle, colour);
+    const std::wstring detail = L"局面分 " + signedText(g_position.rawScore()) + L"　+　A值 " +
+                                signedValue(g_aValue) + L"　=　" + signedDecimal(g_position.finalScore(g_aValue));
+    drawTextAt(dc, detail, box.left + scale(12), box.top + scale(58), width - scale(24), scale(24),
+               g_fontSmall, kText);
 }
 
 void paintAll(HDC dc, const RECT& client) {
     fillRectColor(dc, client, kBackground);
     Layout layout = computeLayout(g_hwnd);
-    const bool showAnalysis = g_engineAnalysis.valid && g_engineChoice != EngineChoice::Off;
-    const auto rankedCells = showAnalysis ? rankAnalysisCells(g_engineAnalysis, g_position)
+    const Chrome chrome = computeChrome(layout);
+    const auto& analysis = currentAnalysis();
+    const bool showAnalysis = analysis.valid && g_engineChoice != EngineChoice::Off;
+    const auto rankedCells = showAnalysis ? rankAnalysisCells(analysis, g_position)
                                           : std::vector<int>{};
     drawBoard(dc, layout, rankedCells);
-    drawPanel(dc, layout, rankedCells);
-    drawStatus(dc, layout);
+    drawLeftPanel(dc, layout, rankedCells);
+    drawRecordTree(dc, layout);
+    drawBottomBar(dc, layout, chrome);
+    drawActions(dc, chrome);
     drawOverlay(dc, layout);
 }
 
@@ -2145,16 +2201,15 @@ void syncModeChecks() {
     CheckMenuRadioItem(g_modeMenu, ID_MODE_PVP, ID_MODE_HUMAN_BLACK, id, MF_BYCOMMAND);
 }
 
-void maybeAiMove();
-
 void resetGame() {
-    g_position.reset();
-    g_position.setRuleset(g_ruleset);
+    g_record = GameRecord();
+    clearAnalysisState();
+    g_treeScroll = 0;
     g_selected = 1;
     g_hoverCell = -1;
     g_thinking = false;
     g_enginePending = false;
-    clearEngineAnalysis();
+    rebuildPosition();
     syncModeChecks();
     if (g_engineChoice != EngineChoice::Off && g_engineReady) syncEnginePosition();
     if (aiToMove()) maybeAiMove();
@@ -2179,16 +2234,6 @@ void setAValue(double value) {
     refresh();
 }
 
-void undoMove() {
-    if (g_position.history().empty()) return;
-    const int plies = g_mode == Mode::Pvp ? 1 : 2;
-    for (int i = 0; i < plies && !g_position.history().empty(); ++i) g_position.undo();
-    g_selected = firstAvailable(g_position.sideToMove());
-    if (g_engineChoice != EngineChoice::Off && g_engineReady) syncEnginePosition();
-    if (aiToMove()) maybeAiMove();
-    else refresh(true);
-}
-
 void selectNumber(int number) {
     if (!humanToMove() || g_thinking) return;
     if (number < 1 || number > 9) return;
@@ -2197,8 +2242,6 @@ void selectNumber(int number) {
     refresh();
 }
 
-// The window contains no search.  When it is the engine's turn and none is
-// running, say so once instead of playing a move nobody asked for.
 void needEngine(const wchar_t* detail) {
     g_thinking = false;
     g_engineMessage = detail ? detail : L"没有可用的引擎：引擎菜单 → 选择引擎程序…";
@@ -2209,8 +2252,12 @@ void maybeAiMove() {
     if (!aiToMove() || g_thinking || g_enginePending) return;
     if (g_engineChoice != EngineChoice::Off && g_engineReady && g_engineClient.running()) {
         g_enginePending = true;
+        g_thinking = true;
+        // The genmove reply streams its own `info` lines, and they are the analysis
+        // of this very position: keep them on this node.  `g_analysisOn` is left
+        // alone so an analysis that was running resumes after the move.
+        g_analysisNode = g_record.current();
         g_engineMessage = L"引擎思考中…";
-        clearEngineAnalysis();
         sendEngine("stop");
         g_pendingReplyId = std::to_string(++g_commandId);
         sendEngine(g_pendingReplyId + " genmove " +
@@ -2233,69 +2280,64 @@ void handleBoardClick(int cell) {
     }
     const Move move(cell, g_selected);
     const Player mover = g_position.sideToMove();
-    if (!g_position.play(move)) {
+    if (!g_position.isLegal(move)) {
         MessageBeep(MB_ICONWARNING);
         return;
     }
-    notifyEnginePlay(move, mover);
-    settleForcedPasses();
-    if (humanToMove()) g_selected = firstAvailable(g_position.sideToMove());
-    refresh(true);
+    recordMove(move, mover);
     if (aiToMove()) maybeAiMove();
 }
 
 void handleClick(POINT point) {
     Layout layout = computeLayout(g_hwnd);
-    PanelRects panel = computePanelRects(layout);
+    Chrome chrome = computeChrome(layout);
 
-    if (g_position.gameOver()) {
-        RECT button = overlayButton(layout);
-        if (contains(button, point)) resetGame();
-        return;
-    }
-
-    if (contains(panel.newButton, point)) {
+    if (contains(chrome.newGame, point)) {
         resetGame();
         return;
     }
-    if (contains(panel.undoButton, point)) {
-        undoMove();
+    if (contains(chrome.save, point)) {
+        SendMessageW(g_hwnd, WM_COMMAND, ID_SAVE_RECORD, 0);
         return;
     }
-    if (contains(panel.aMinus, point)) {
+    if (contains(chrome.load, point)) {
+        SendMessageW(g_hwnd, WM_COMMAND, ID_LOAD_RECORD, 0);
+        return;
+    }
+    if (contains(chrome.aMinus, point)) {
         setAValue(g_aValue - kAValueStep);
         return;
     }
-    if (contains(panel.aPlus, point)) {
+    if (contains(chrome.aPlus, point)) {
         setAValue(g_aValue + kAValueStep);
         return;
     }
-    if (contains(panel.mode, point)) {
-        if (g_mode == Mode::Pvp) setMode(Mode::HumanRed);
-        else if (g_mode == Mode::HumanRed) setMode(Mode::HumanBlack);
-        else setMode(Mode::Pvp);
-        return;
-    }
-    if (contains(panel.analysis, point)) {
-        toggleAnalysis();
-        return;
-    }
+    // The pieces in hand: clicking one selects that number.  It is the primary
+    // way to pick one, so it stays on the board's controls, not in a panel.
     for (int side = 0; side < 2; ++side) {
         if (side != static_cast<int>(g_position.sideToMove())) continue;
         for (int n = 0; n < 9; ++n) {
-            if (contains(panel.chips[side][n], point)) {
+            if (contains(chrome.chips[side][n], point)) {
                 selectNumber(n + 1);
                 return;
             }
         }
     }
-
+    // The tree: click a node to go back (or forward) to it.
+    if (contains(layout.right, point)) {
+        const TreeLayout tree = computeTreeLayout(layout, g_treeScroll);
+        for (const TreeCell& cell : tree.cells) {
+            if (contains(cell.box, point)) {
+                goToNode(cell.node);
+                return;
+            }
+        }
+        return;
+    }
     if (contains(layout.board, point)) {
         const int x = (point.x - layout.board.left) / layout.cell;
         const int row = (point.y - layout.board.top) / layout.cell;
-        if (x >= 0 && x < 9 && row >= 0 && row < 9) {
-            handleBoardClick(index(x, 8 - row));
-        }
+        if (x >= 0 && x < 9 && row >= 0 && row < 9) handleBoardClick(index(x, 8 - row));
     }
 }
 
@@ -2314,6 +2356,162 @@ void updateHover(POINT point) {
 }
 
 // ---------------------------------------------------------------------------
+// Record files
+// ---------------------------------------------------------------------------
+bool saveRecordToFile() {
+    wchar_t file[MAX_PATH] = L"shuyi-record.syp";
+    std::wstring filter;
+    filter += L"数弈棋谱 (*.syp)";
+    filter.push_back(0);
+    filter += L"*.syp";
+    filter.push_back(0);
+    filter += L"所有文件 (*.*)";
+    filter.push_back(0);
+    filter += L"*.*";
+    filter.push_back(0);
+    filter.push_back(0);
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = g_hwnd;
+    dialog.lpstrFilter = filter.c_str();
+    dialog.lpstrFile = file;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.lpstrDefExt = L"syp";
+    dialog.lpstrTitle = L"保存棋谱";
+    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetSaveFileNameW(&dialog)) return false;
+
+    const std::string text = g_record.save(g_ruleset);
+    std::FILE* handle = shuyi::fopenUtf8(narrowUtf8(file), "wb");
+    if (!handle) {
+        MessageBoxW(g_hwnd, L"无法写入这个文件。", L"保存棋谱", MB_OK | MB_ICONERROR);
+        return false;
+    }
+    std::fwrite(text.data(), 1, text.size(), handle);
+    std::fclose(handle);
+    g_engineMessage = L"棋谱已保存";
+    refresh();
+    return true;
+}
+
+// Reads a record file into the window.  Shared by the dialog and `--open`, so a
+// .syp file can be opened by double-clicking it.
+bool loadRecordFromPath(const std::wstring& path) {
+    std::FILE* handle = shuyi::fopenUtf8(narrowUtf8(path), "rb");
+    if (!handle) {
+        MessageBoxW(g_hwnd, (L"无法打开这个文件： " + path).c_str(), L"载入棋谱",
+                    MB_OK | MB_ICONERROR);
+        return false;
+    }
+    std::string text;
+    char buffer[4096];
+    for (std::size_t got = std::fread(buffer, 1, sizeof(buffer), handle); got > 0;
+         got = std::fread(buffer, 1, sizeof(buffer), handle)) {
+        text.append(buffer, got);
+    }
+    std::fclose(handle);
+    return loadRecordFromText(text);
+}
+
+bool loadRecordFromFile() {
+    wchar_t file[MAX_PATH] = L"";
+    std::wstring filter;
+    filter += L"数弈棋谱 (*.syp)";
+    filter.push_back(0);
+    filter += L"*.syp";
+    filter.push_back(0);
+    filter += L"所有文件 (*.*)";
+    filter.push_back(0);
+    filter += L"*.*";
+    filter.push_back(0);
+    filter.push_back(0);
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = g_hwnd;
+    dialog.lpstrFilter = filter.c_str();
+    dialog.lpstrFile = file;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.lpstrDefExt = L"syp";
+    dialog.lpstrTitle = L"载入棋谱";
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameW(&dialog)) return false;
+
+    return loadRecordFromPath(file);
+}
+
+bool loadRecordFromText(const std::string& text) {
+    GameRecord loaded;
+    Ruleset ruleset = g_ruleset;
+    std::string error;
+    if (!loaded.load(text, &ruleset, &error)) {
+        MessageBoxW(g_hwnd, (L"这个文件不是数弈棋谱：\n" + widen(error)).c_str(), L"载入棋谱",
+                    MB_OK | MB_ICONERROR);
+        return false;
+    }
+    g_record = std::move(loaded);
+    g_ruleset = ruleset;
+    clearAnalysisState();
+    g_engineMessage = L"棋谱已载入";
+    rebuildPosition();
+    syncRulesetChecks();
+    saveSettings();
+    if (g_engineChoice != EngineChoice::Off && g_engineReady) {
+        // The rule set may have changed with the record: the engine has to be
+        // restarted, not just replayed.
+        const EngineChoice keep = g_engineChoice;
+        stopEngineProcess();
+        g_engineChoice = keep;
+        startEngineProcess();
+    }
+    g_treeScroll = 0;
+    refresh(true);
+    if (aiToMove()) maybeAiMove();
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Help
+// ---------------------------------------------------------------------------
+void openProjectPage() {
+    ShellExecuteW(g_hwnd, L"open", kProjectUrl, nullptr, nullptr, SW_SHOWNORMAL);
+}
+
+void showGuide() {
+    std::wstring text;
+    text += L"数弈 · 规则\n\n";
+    text += L"1. 9×9 棋盘，横坐标 a–i，纵坐标 1–9。\n";
+    text += L"2. 红黑双方，红先，轮流在空格落子；棋子落下后不可移动、不可移除。\n";
+    text += L"3. 每方有数字 1–9 各三枚，共 27 枚。同数字棋子彼此完全相同。\n";
+    text += L"4. 双方 54 枚棋子全部落完后终局。\n\n";
+    text += L"计分：单格分 = sgn(附近红子最大数字 − 附近黑子最大数字)，"
+            L"“附近”指曼哈顿距离 ≤1 的格子（含该格自身）。\n";
+    text += L"局面分 = 81 个格子分之和 + A值。局面分 >0 红胜，<0 黑胜，=0 平局。\n\n";
+    text += L"操作\n\n";
+    text += L"· 数字键 1–9：选择落子的数字（也可以点下方棋子）。\n";
+    text += L"· 点击棋盘：落子。\n";
+    text += L"· 空格：开始 / 暂停分析；分析到上限后再按一次会继续，不再限量。\n";
+    text += L"· ↑ / ↓：在棋谱里上一步 / 下一步（↓ 走主干）。\n";
+    text += L"· Delete：删除当前着法及其后续，连同它们的分析。\n";
+    text += L"· 左侧面板是分析的产物，右侧是一棵棋谱树：每一着都在树上，换个走法会开新枝，"
+            L"回到旧枝时原来的分析还在。\n";
+    text += L"· 左下角 A值 可以按 ± 调整（也可在 引擎 → 设置 里改）。\n\n";
+    text += L"项目主页（规则、引擎、模型的发布都在这里）：\n";
+    text += kProjectUrl;
+    MessageBoxW(g_hwnd, text.c_str(), L"使用指南", MB_OK | MB_ICONINFORMATION);
+}
+
+void showAbout() {
+    std::wstring text;
+    text += L"数弈 1.0\n\n";
+    text += L"一个 9×9 的数字落子棋。原生 Win32/GDI 界面，非 Web 实现。\n";
+    text += L"界面只负责规则、局面和显示；搜索与计算全部在这个窗口之外的引擎进程里，"
+            L"两者只通过行协议对话。\n\n";
+    text += L"引擎模型与源码的发布：\n";
+    text += kProjectUrl;
+    MessageBoxW(g_hwnd, text.c_str(), L"关于数弈", MB_OK | MB_ICONINFORMATION);
+}
+
+// ---------------------------------------------------------------------------
 // Fonts / menus / window
 // ---------------------------------------------------------------------------
 HFONT makeFont(int points, bool bold, const wchar_t* face = L"Microsoft YaHei UI") {
@@ -2327,14 +2525,14 @@ HFONT makeFont(int points, bool bold, const wchar_t* face = L"Microsoft YaHei UI
 }
 
 void createFonts() {
-    g_fontTitle = makeFont(30, true);
+    g_fontTitle = makeFont(24, true);
     g_fontSubtitle = makeFont(10, false);
-    g_fontTurn = makeFont(16, true);
-    g_fontBig = makeFont(20, true);
-    g_fontPiece = makeFont(20, true);
-    g_fontUi = makeFont(13, false);
-    g_fontSmall = makeFont(11, false);
-    g_fontCoord = makeFont(11, false);
+    g_fontTurn = makeFont(15, true);
+    g_fontBig = makeFont(17, true);
+    g_fontPiece = makeFont(19, true);
+    g_fontUi = makeFont(12, false);
+    g_fontSmall = makeFont(10, false);
+    g_fontCoord = makeFont(10, false);
 }
 
 void destroyFonts() {
@@ -2347,19 +2545,11 @@ void destroyFonts() {
 
 void createMenuBar(HWND hwnd) {
     HMENU menu = CreateMenu();
-    HMENU game = CreatePopupMenu();
     HMENU mode = CreatePopupMenu();
     HMENU engine = CreatePopupMenu();
     HMENU rulesetMenu = CreatePopupMenu();
-    HMENU aValue = CreatePopupMenu();
     HMENU help = CreatePopupMenu();
-
     HMENU model = CreatePopupMenu();
-
-    AppendMenuW(game, MF_STRING, ID_NEW, L"新局\tF2");
-    AppendMenuW(game, MF_STRING, ID_UNDO, L"悔棋\tCtrl+Z");
-    AppendMenuW(game, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(game, MF_STRING, ID_EXIT, L"退出");
 
     AppendMenuW(rulesetMenu, MF_STRING, ID_RULESET_NOPASS,
                 L"无过手（阻挡规则；一方无子可落立刻终局）");
@@ -2373,7 +2563,6 @@ void createMenuBar(HWND hwnd) {
 
     AppendMenuW(engine, MF_STRING, ID_ENGINE_OFF, L"不使用外部引擎");
     AppendMenuW(engine, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(engine, MF_STRING, ID_ENGINE_PRUNING, L"剪枝（Alpha-Beta）");
     AppendMenuW(engine, MF_STRING, ID_ENGINE_MCTS, L"MCTS（无网络）");
     // One entry per discovered model, filled in by populateModelMenu().
     AppendMenuW(engine, MF_POPUP | MF_STRING, reinterpret_cast<UINT_PTR>(model), L"MCTS + 网络(&N)");
@@ -2383,27 +2572,16 @@ void createMenuBar(HWND hwnd) {
     AppendMenuW(engine, MF_STRING, ID_ENGINE_AUTO, L"自动探测引擎");
     AppendMenuW(engine, MF_STRING, ID_ENGINE_INFO, L"引擎信息…");
     AppendMenuW(engine, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(engine, MF_STRING, ID_ANALYZE, L"分析当前局面（空格）\tF3");
-    AppendMenuW(engine, MF_STRING, ID_ENGINE_STOP, L"停止引擎搜索");
-    AppendMenuW(engine, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(engine, MF_STRING, ID_SETTINGS, L"设置（搜索量 / A值）…");
 
-    AppendMenuW(aValue, MF_STRING, ID_A_PLUS, L"A值 +0.5\t]");
-    AppendMenuW(aValue, MF_STRING, ID_A_MINUS, L"A值 −0.5\t[");
-    AppendMenuW(aValue, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(aValue, MF_STRING, ID_A_ZERO, L"设为 0");
-    AppendMenuW(aValue, MF_STRING, ID_A_DEFAULT, L"设为 +0.5（默认）");
-    AppendMenuW(aValue, MF_STRING, ID_A_ONE, L"设为 +1");
-    AppendMenuW(aValue, MF_STRING, ID_A_TWO, L"设为 +2");
-
-    AppendMenuW(help, MF_STRING, ID_RULES, L"规则说明");
+    AppendMenuW(help, MF_STRING, ID_GUIDE, L"使用指南");
+    AppendMenuW(help, MF_STRING, ID_PROJECT_PAGE, L"打开项目主页");
+    AppendMenuW(help, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(help, MF_STRING, ID_ABOUT, L"关于数弈");
 
-    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(game), L"游戏(&G)");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(mode), L"模式(&M)");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(rulesetMenu), L"规则(&R)");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(engine), L"引擎(&E)");
-    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(aValue), L"A值(&A)");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"帮助(&H)");
     SetMenu(hwnd, menu);
     g_menu = menu;
@@ -2418,34 +2596,6 @@ void createMenuBar(HWND hwnd) {
     syncRulesetChecks();
 }
 
-void showRules() {
-    const wchar_t* text =
-        L"数弈 · 规则\n\n"
-        L"1. 9×9 棋盘，横坐标 a–i，纵坐标 1–9。计算距离时 a–i 按 1–9 计。\n"
-        L"2. 红黑双方，红先，轮流在空格落子；棋子落下后不可移动、不可移除。\n"
-        L"3. 每方有数字 1–9 各三枚，共 27 枚。同数字棋子彼此完全相同。\n"
-        L"4. 双方 54 枚棋子全部落完后终局。\n\n"
-        L"计分：\n"
-        L"· 单格分 = sgn(附近红子最大数字 − 附近黑子最大数字)。\n"
-        L"· “附近”指曼哈顿距离 ≤1 的格子，包含该格自身；棋盘边界不回绕。\n"
-        L"· 没有某种颜色的棋子时，该颜色部分按 0 计。\n"
-        L"· 局面分 = 81 个格子分之和 + A值。\n"
-        L"· 局面分 >0 红胜，<0 黑胜，=0 平局。默认 A值 = +0.5。\n\n"
-        L"操作：数字键 1–9 选择数字；点击棋盘落子；F2 新局；Ctrl+Z 悔棋；\n"
-        L"A值菜单或 [ / ] 可调节 A值。";
-    MessageBoxW(g_hwnd, text, L"数弈规则", MB_OK | MB_ICONINFORMATION);
-}
-
-void showAbout() {
-    const wchar_t* text =
-        L"数弈 1.0\n\n"
-        L"一个 9×9 的数字落子棋，原生 Win32/GDI 界面，非 Web 实现。\n"
-        L"C++17 引擎进程：剪枝、MCTS、MCTS+NN；GTP-like 异步协议。\n\n"
-        L"无过手规则默认 A值 = +0.5。\n"
-        L"ELO 与 A值分析见 docs/。";
-    MessageBoxW(g_hwnd, text, L"关于数弈", MB_OK | MB_ICONINFORMATION);
-}
-
 LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_CREATE:
@@ -2458,21 +2608,24 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 
     case WM_APP_RESET:
         resetGame();
+        if (!g_pendingOpen.empty()) {
+            const std::wstring path = g_pendingOpen;
+            g_pendingOpen.clear();
+            loadRecordFromPath(path);
+        }
         return 0;
 
     case WM_TIMER:
         if (wParam == 1) {
             drainEngineLines();
-            if (g_engineChoice != EngineChoice::Off && (g_analysisOn || g_enginePending)) {
-                refresh();
-            }
+            if (g_engineChoice != EngineChoice::Off && (g_analysisOn || g_enginePending)) refresh();
         }
         return 0;
 
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
         info->ptMinTrackSize.x = scale(940);
-        info->ptMinTrackSize.y = scale(700);
+        info->ptMinTrackSize.y = scale(680);
         return 0;
     }
 
@@ -2518,21 +2671,59 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         return 0;
 
-    case WM_KEYDOWN: {
-        const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-        if (wParam == VK_F2) {
-            resetGame();
-            return 0;
+    case WM_MOUSEWHEEL: {
+        // Wheel messages carry screen coordinates, unlike the mouse messages above.
+        POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        ScreenToClient(hwnd, &point);
+        Layout layout = computeLayout(hwnd);
+        if (contains(layout.right, point)) {
+            const TreeLayout tree = computeTreeLayout(layout, 0);
+            const int visible = layout.right.bottom - (layout.right.top + scale(34));
+            const int maximum = std::max(0, tree.contentHeight - visible + scale(20));
+            const int delta = GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA * scale(38);
+            g_treeScroll = std::clamp(g_treeScroll - delta, 0, maximum);
+            refresh();
         }
-        // Space is the analysis switch: start, stop (keeping the numbers) and
-        // continue past the visit limit.  F3 stays as an alias.
-        if (wParam == VK_SPACE || wParam == VK_F3) {
+        return 0;
+    }
+
+    case WM_KEYDOWN: {
+        switch (wParam) {
+        case VK_SPACE:
             toggleAnalysis();
             return 0;
-        }
-        if (control && (wParam == 'Z' || wParam == 'z')) {
-            undoMove();
+        case VK_UP: {
+            const int id = g_record.parentOf(g_record.current());
+            if (id >= 0) {
+                goToNode(id);
+                g_treeScroll = treeScrollFor(g_record.current());
+            }
             return 0;
+        }
+        case VK_DOWN: {
+            const auto& children = g_record.childrenOf(g_record.current());
+            if (!children.empty()) {
+                goToNode(children.front());
+                g_treeScroll = treeScrollFor(g_record.current());
+            }
+            return 0;
+        }
+        case VK_DELETE:
+            if (g_record.current() != g_record.root()) {
+                // Erasing remaps every node id, so nothing may hold one across it:
+                // stop the analysis and forget which node it belonged to first.
+                sendEngineStopIfRunning();
+                clearAnalysisState();
+                g_record.erase(g_record.current());
+                rebuildPosition();
+                g_treeScroll = treeScrollFor(g_record.current());
+                if (g_engineChoice != EngineChoice::Off && g_engineReady) syncEnginePosition();
+                refresh(true);
+                if (aiToMove()) maybeAiMove();
+            }
+            return 0;
+        default:
+            break;
         }
         if (wParam >= '1' && wParam <= '9') {
             selectNumber(static_cast<int>(wParam - '0'));
@@ -2540,14 +2731,6 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         if (wParam >= VK_NUMPAD1 && wParam <= VK_NUMPAD9) {
             selectNumber(static_cast<int>(wParam - VK_NUMPAD0));
-            return 0;
-        }
-        if (wParam == VK_OEM_4) {
-            setAValue(g_aValue - kAValueStep);
-            return 0;
-        }
-        if (wParam == VK_OEM_6) {
-            setAValue(g_aValue + kAValueStep);
             return 0;
         }
         return 0;
@@ -2560,9 +2743,9 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
         switch (LOWORD(wParam)) {
-        case ID_NEW: resetGame(); return 0;
-        case ID_UNDO: undoMove(); return 0;
-        case ID_EXIT: DestroyWindow(hwnd); return 0;
+        case ID_NEW_GAME: resetGame(); return 0;
+        case ID_SAVE_RECORD: saveRecordToFile(); return 0;
+        case ID_LOAD_RECORD: loadRecordFromFile(); return 0;
         case ID_MODE_PVP: setMode(Mode::Pvp); return 0;
         case ID_MODE_HUMAN_RED: setMode(Mode::HumanRed); return 0;
         case ID_MODE_HUMAN_BLACK: setMode(Mode::HumanBlack); return 0;
@@ -2570,7 +2753,6 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         case ID_RULESET_BLOCKING: setRuleset(Ruleset::Blocking); return 0;
         case ID_RULESET_NOPASS: setRuleset(Ruleset::NoPass); return 0;
         case ID_ENGINE_OFF: setEngineChoice(EngineChoice::Off); return 0;
-        case ID_ENGINE_PRUNING: setEngineChoice(EngineChoice::Pruning); return 0;
         case ID_ENGINE_MCTS: setEngineChoice(EngineChoice::Mcts); return 0;
         case ID_ENGINE_MCTS_NN: setEngineChoice(EngineChoice::MctsNn); return 0;
         case ID_ENGINE_PICK: pickEngineProgram(); return 0;
@@ -2579,34 +2761,17 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         case ID_MODEL_RESCAN: {
             scanModels();
             const int index = modelIndexFor(g_nnModelPath);
-            g_nnModelPath = index >= 0 ? g_nnModelPath : std::string();
+            if (index < 0) g_nnModelPath.clear();
             populateModelMenu();
             syncModelChecks();
             refresh();
             return 0;
         }
-        case ID_ANALYZE: toggleAnalysis(); return 0;
         case ID_SETTINGS: openSettings(); return 0;
-        case ID_ENGINE_STOP: {
-            const bool wasPending = g_enginePending;
-            g_enginePending = false;
-            g_pendingReplyId.clear();
-            g_analysisOn = false;
-            if (g_engineClient.running()) sendEngine("stop");
-            clearEngineAnalysis();
-            g_engineMessage = wasPending ? L"已停止思考：轮到的这手需要重新让引擎走（引擎菜单）"
-                                         : L"引擎已停止";
-            g_thinking = false;
-            refresh();
-            return 0;
-        }
         case ID_A_PLUS: setAValue(g_aValue + kAValueStep); return 0;
         case ID_A_MINUS: setAValue(g_aValue - kAValueStep); return 0;
-        case ID_A_ZERO: setAValue(0); return 0;
-        case ID_A_DEFAULT: setAValue(kDefaultAValue); return 0;
-        case ID_A_ONE: setAValue(1); return 0;
-        case ID_A_TWO: setAValue(2); return 0;
-        case ID_RULES: showRules(); return 0;
+        case ID_GUIDE: showGuide(); return 0;
+        case ID_PROJECT_PAGE: openProjectPage(); return 0;
         case ID_ABOUT: showAbout(); return 0;
         default: break;
         }
@@ -2634,7 +2799,6 @@ bool dumpEngineChoice(const std::string& path) {
     loadSettings();
     std::FILE* file = fopenUtf8(path, "w");
     if (!file) return false;
-    // Diagnostics first: the raw exe directory, then the resolved candidates.
     char dirUtf8[MAX_PATH * 2] = "";
     WideCharToMultiByte(CP_UTF8, 0, engineClientDirectory().c_str(), -1, dirUtf8, sizeof(dirUtf8),
                         nullptr, nullptr);
@@ -2722,28 +2886,31 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
         const std::wstring flag = L"--dump-engine";
         const std::size_t at = argument.find(flag);
         std::wstring tail = argument.substr(at + flag.size());
-        while (!tail.empty() && (tail.front() == L' ' || tail.front() == L'	')) tail.erase(0, 1);
+        while (!tail.empty() && (tail.front() == L' ' || tail.front() == L'\t')) tail.erase(0, 1);
         std::string out = "engine_choice.txt";
         if (!tail.empty()) {
-            const int needed = WideCharToMultiByte(CP_UTF8, 0, tail.c_str(), -1, nullptr, 0, nullptr, nullptr);
+            const int needed =
+                WideCharToMultiByte(CP_UTF8, 0, tail.c_str(), -1, nullptr, 0, nullptr, nullptr);
             if (needed > 1) {
                 out.assign(static_cast<std::size_t>(needed - 1), '\0');
-                WideCharToMultiByte(CP_UTF8, 0, tail.c_str(), -1, out.data(), needed, nullptr, nullptr);
+                WideCharToMultiByte(CP_UTF8, 0, tail.c_str(), -1, out.data(), needed, nullptr,
+                                    nullptr);
             }
         }
         return dumpEngineChoice(out) ? 0 : 1;
     }
     if (commandLine && std::wstring(commandLine).find(L"--dump-models") != std::wstring::npos) {
         std::wstring argument = commandLine;
-        const std::size_t flag = argument.find(L"--dump-models");
-        std::wstring tail = argument.substr(flag + std::wstring(L"--dump-models").size());
+        const std::wstring flag = L"--dump-models";
+        const std::size_t at = argument.find(flag);
+        std::wstring tail = argument.substr(at + flag.size());
         while (!tail.empty() && (tail.front() == L' ' || tail.front() == L'\t')) tail.erase(0, 1);
         // The command line is UTF-16; the path may contain Chinese characters, so
         // convert it properly instead of narrowing code unit by code unit.
         std::string dumpPath = "ui_models.txt";
         if (!tail.empty()) {
-            const int needed = WideCharToMultiByte(CP_UTF8, 0, tail.c_str(), -1, nullptr, 0,
-                                                   nullptr, nullptr);
+            const int needed =
+                WideCharToMultiByte(CP_UTF8, 0, tail.c_str(), -1, nullptr, 0, nullptr, nullptr);
             if (needed > 1) {
                 dumpPath.assign(static_cast<std::size_t>(needed - 1), '\0');
                 WideCharToMultiByte(CP_UTF8, 0, tail.c_str(), -1, dumpPath.data(), needed, nullptr,
@@ -2752,6 +2919,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
         }
         const bool ok = dumpModelMenu(dumpPath);
         return ok ? 0 : 1;
+    }
+
+    // `shuyi.exe --open game.syp` loads a record; a .syp file association uses it.
+    std::wstring openPath;
+    if (commandLine) {
+        const std::wstring argument(commandLine);
+        const std::wstring flag = L"--open";
+        const std::size_t at = argument.find(flag);
+        if (at != std::wstring::npos) {
+            std::wstring tail = argument.substr(at + flag.size());
+            while (!tail.empty() && (tail.front() == L' ' || tail.front() == L'	')) tail.erase(0, 1);
+            if (tail.size() > 1 && tail.front() == L'"' && tail.back() == L'"') {
+                tail = tail.substr(1, tail.size() - 2);
+            }
+            openPath = tail;
+        }
     }
 
     WNDCLASSEXW windowClass{};
@@ -2774,7 +2957,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
     settingsClass.lpszClassName = kSettingsClass;
     if (!RegisterClassExW(&settingsClass)) return 1;
 
-    RECT windowRect{0, 0, scale(1120), scale(820)};
+    RECT windowRect{0, 0, scale(1120), scale(800)};
     AdjustWindowRectEx(&windowRect, WS_OVERLAPPEDWINDOW, TRUE, 0);
     const int width = windowRect.right - windowRect.left;
     const int height = windowRect.bottom - windowRect.top;
@@ -2791,10 +2974,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
     ShowWindow(g_hwnd, showCommand);
     UpdateWindow(g_hwnd);
     PostMessageW(g_hwnd, WM_APP_RESET, 0, 0);
+    g_pendingOpen = openPath;
 
     // If an engine is discoverable next to the window, load it now so analysis is
-    // one keypress away.  If there is none, the window still starts: the 引擎 menu
-    // is where an engine gets chosen, and nothing pretends to compute.
+    // one keypress away.  If there is none, the window still starts.
     if (!chooseEnginePath().empty()) {
         g_engineChoice = EngineChoice::MctsNn;
         if (!startEngineProcess()) {

@@ -3,7 +3,7 @@
 
 The two halves of the picture need different harnesses:
 
-* which *line* is stronger (random / pruning / plain MCTS / MCTS+NN / GPU nets)
+* which *line* is stronger (random / plain MCTS / MCTS+NN / GPU nets)
   needs heterogeneous players, so it goes through `training/arena.py`;
 * how the *generations* compare needs many games between networks, which is only
   affordable batched, so it goes through `training/elo.py --models`.
@@ -94,7 +94,7 @@ def main(argv=None):
 
     if not args.skip_lines:
         players = args.lines_players or [
-            "random", "pruning", "mcts",
+            "random", "mcts",
             f"mcts_nn:{models[-1]}",
             f"gpu:{models[0]}", f"gpu:{models[-1]}",
         ]

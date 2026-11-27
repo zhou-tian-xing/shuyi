@@ -59,24 +59,20 @@ core/src/position.cpp  落子/撤销/合法着法/计分/哈希/对称变换
 ```
 engine/include/shuyi/
 ├── engine.h         Engine 基类、EngineOptions、SearchRequest（visits/reportIntervalMs）、Analysis
-├── ai.h             剪枝引擎：SearchOptions（nodeLimit）、SearchProgress、searchAlphaBeta
-├── ai_policy.h      "评估 + 排序"策略接口；规则特异的实现挂这里
+├── endgame.h        终盘精确求解：节点预算 + 墙钟
 ├── mcts.h           （无独立头）MCTS 在 src/mcts.cpp，接口即 Engine
 ├── nn.h             策略价值网络：SHUYINN3/V4 格式、特征平面、CPU 前向、NnOutput
 ├── nn_cuda.h        CUDA 批量前向接口（nn_cuda.cu 实现）
-├── tt.h             置换表
 └── protocol.h       行协议会话（命令解析、位置状态、单搜索线程）
 ```
 
 ```
 engine/src/
-├── ai.cpp           迭代加深 + aspiration + PVS（nodeLimit 在这里生效）
-├── ai_blocking.cpp  阻挡规则的评估与排序——规则特异代码只放这里
+├── endgame.cpp      终盘 negamax（play/undo），节点预算 + 墙钟
 ├── mcts.cpp         PUCT 树搜索（强制过手、证明回传、对称轨道、访问预算）
-├── engine.cpp       四种 Engine 实现（random/pruning/mcts/mcts_nn）的适配层
+├── engine.cpp       三种 Engine 实现（random/mcts/mcts_nn）的适配层
 ├── nn.cpp           网络加载与前向
 ├── nn_cuda.cu       CUDA 批量前向
-├── tt.cpp           置换表
 ├── protocol.cpp     命令集、错误处理、启动握手、bench/selfplay
 ├── protocol_json.cpp  Analysis → JSON（协议第 4 节的唯一实现）
 └── main.cpp         stdin 循环
@@ -97,12 +93,14 @@ engine/src/
 
 ```
 ui/include/
+├── game_record.h    棋谱树：节点、变着、每个局面缓存的分析、保存/加载
 ├── engine_client.h  子进程 + 管道 + 读线程 + `command()` 同步握手
 ├── engine_view.h    分析视图结构 + `parseAnalysis()`（JSON → 视图）
 ├── json.h           极简 JSON 解析器
 └── discovery.h      引擎候选路径与 `capabilities` 探测
 ui/src/
-├── ui_win32.cpp     窗口、菜单、绘制、规则状态、分析状态机
+├── ui_win32.cpp     窗口、菜单、布局、绘制、按键与鼠标
+├── game_record.cpp  棋谱树、PGN 式文本、与上一手预测的差值
 ├── engine_client.cpp 进程/管道/读线程
 ├── engine_protocol.cpp  解析 info JSON、着法 token
 ├── json.cpp         JSON 解析
@@ -168,7 +166,7 @@ CUDA 构建在中文路径下要先建 junction（`C:\shuyi_src` → 本仓库�
 |---|---|
 | 规则（合法着法、计分、终局） | `core/src/position.cpp`、`engine/tests/test_rules.cpp` |
 | 搜索行为（PUCT、预算、证明、对称） | `engine/src/mcts.cpp` |
-| α-β 搜索引擎 | `engine/src/ai.cpp`、`engine/src/ai_blocking.cpp` |
+| 终盘精确求解 | `engine/src/endgame.cpp`、`engine/include/shuyi/endgame.h` |
 | 网络格式/特征 | `engine/src/nn.cpp`、`training/train_resnet.py`（必须同步） |
 | 协议命令或字段 | `engine/src/protocol.cpp`、`engine/src/protocol_json.cpp`、`protocol/ENGINE_PROTOCOL.md` |
 | 界面绘制/交互 | `ui/src/ui_win32.cpp` |

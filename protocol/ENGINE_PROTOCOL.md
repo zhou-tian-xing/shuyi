@@ -71,14 +71,12 @@ can pipeline: replies that arrive out of order stay attributable. A late
 | `genmove <red\|black> [visits]` | `a1 5` or `pass` | `visits` is that command's budget |
 | `analyze <red\|black> [visits] [interval <ms>]` | `done …` / `stopped` | streams `info`; `visits 0` = no limit |
 | `stop` | `stopped` | ends a running search; the tree is kept |
-| `set_engine <random\|pruning\|mcts\|mcts_nn>` | the name | rebuilds the search, keeps the position |
+| `set_engine <random\|mcts\|mcts_nn>` | the name | rebuilds the search, keeps the position |
 | `set_backend <cpu\|cuda\|auto>` | the backend actually used | `cuda` fails on a CPU build |
 | `set_model <path>` | the path, plus `(no A input: v3 model)` when the file predates A conditioning | validated and rule-set checked before use |
 | `set_visits <n>` | `n` or `off` | default budget only; does not touch the tree |
 | `set_time <ms>` | `ms` | clock budget, used only when no visit budget applies |
 | `set_a <value>` | the value | score offset added to Red's raw score. With a v4 model it is an input to the network; with a v3 model it only shifts the terminal result (`a_input=0`) |
-| `set_window <points>` | the value | aspiration window (alpha-beta) |
-| `set_pvs <on\|off>` | `on`/`off` | principal-variation search (alpha-beta) |
 | `bench [visits]` | `visits=… time_ms=… visits_per_second=…` | throughput probe |
 | `selfplay <games> [visits]` | `games=… red=… black=… draw=…` | sanity check of a model |
 | `quit` | empty, then exit | |
@@ -144,7 +142,7 @@ rebuild it because the search itself changed.
 
 | Field | Meaning |
 |---|---|
-| `engine` | `random`, `pruning`, `mcts` or `mcts_nn` |
+| `engine` | `random`, `mcts` or `mcts_nn` |
 | `turn` | side to move for this analysis (`red`/`black`); all values are from its point of view |
 | `backend` | which forward actually ran: `cpu` or `cuda` |
 | `nn` | network name, empty without one |

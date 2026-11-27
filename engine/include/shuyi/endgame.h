@@ -9,6 +9,12 @@
 // So once few stones remain the engine does not search, it solves.  The result is
 // exact, deterministic (the same position always gives the same number) and
 // complete (every legal move gets its own margin).
+//
+// Both limits are needed.  The node budget bounds the work; the time limit bounds
+// the *wait*, because nodes and milliseconds are not proportional across
+// positions (measured with tools/research/endgame_cost.cpp: a 7-ply position
+// ranged from 15 k nodes to 1.8 M).  A solver that blows its time limit returns
+// "not solved" and costs nothing but the wait.
 #pragma once
 
 #include <vector>
@@ -35,9 +41,11 @@ struct EndgameSolution {
 // plies (a pass would, which is why the solver also stops on gameOver()).
 int pliesRemaining(const Position& position);
 
-// Solve `position` exactly.  Returns solved=false when the node budget runs out
-// (too many plies left), so the caller can fall back to a search.
+// Solve `position` exactly.  Returns solved=false when either limit runs out (too
+// many plies left), so the caller can fall back to a search.  `timeLimitMs == 0`
+// means no clock, which is what the tests use: a fixed answer must not depend on
+// how fast the machine happened to be.
 EndgameSolution solveEndgame(const Position& position, double aValue,
-                             long long nodeBudget = 250000);
+                             long long nodeBudget = 250000, int timeLimitMs = 0);
 
 } // namespace shuyi

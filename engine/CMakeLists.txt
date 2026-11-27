@@ -44,13 +44,10 @@ if(SHUYI_NATIVE_SIMD)
 endif()
 
 add_library(shuyi_search STATIC
-    src/ai.cpp
-    src/ai_blocking.cpp
     src/nn.cpp
     src/mcts.cpp
     src/endgame.cpp
     src/engine.cpp
-    src/tt.cpp
 )
 target_link_libraries(shuyi_search PUBLIC shuyi_core)
 target_include_directories(shuyi_search PUBLIC ${SHUYI_ENGINE_INCLUDE})

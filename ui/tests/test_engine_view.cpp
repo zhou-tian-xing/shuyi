@@ -125,11 +125,25 @@ void testRankAnalysisCells() {
     check(!solvedOrder.empty() && solvedOrder.front() == sq("d1"),
           "a proven win with zero visits uses its exact win rate");
 
+    // A proof outranks a guess even when the proof is a loss: the panel must show
+    // the fact, not hide it behind a sampled estimate.  Within the solved cells the
+    // ordering is still by rate and then by margin.
     view.cells[sq("b1")].proven = true;
     view.cells[sq("b1")].winrate = 0.0;
     const auto losingOrder = rankAnalysisCells(view, position);
-    check(!losingOrder.empty() && losingOrder.back() == sq("b1"),
-          "a proven loss ranks below a promising estimate");
+    check(losingOrder.size() >= 2 && losingOrder[0] == sq("d1") && losingOrder[1] == sq("b1"),
+          "a proven loss ranks above every estimate, below a proven win");
+
+    // A solved cell with no visits and no hasData flag is still a row: the endgame
+    // solver answers without simulating anything.
+    view.hasCell[sq("i9")] = true;
+    view.cells[sq("i9")] = CellAnalysisView{};
+    view.cells[sq("i9")].move = Move(sq("i9"), 1);
+    view.cells[sq("i9")].proven = true;
+    view.cells[sq("i9")].winrate = 1.0;
+    const auto noDataOrder = rankAnalysisCells(view, position);
+    check(noDataOrder.size() == losingOrder.size() + 1 && noDataOrder[1] == sq("i9"),
+          "a proven cell without visits is still shown, and ranks with the solved moves");
 }
 
 void testRankTiedAnalysisCells() {

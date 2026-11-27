@@ -34,7 +34,7 @@ struct Options {
     int visits = 0;
     int openingPlies = 2;
     std::uint64_t seed = 20261121;
-    std::vector<EngineKind> engines{EngineKind::Random, EngineKind::Pruning, EngineKind::Mcts,
+    std::vector<EngineKind> engines{EngineKind::Random, EngineKind::Mcts,
                                     EngineKind::MctsNn};
     std::string nnModel;
     std::string outPath = "docs/ELO_REPORT.md";
@@ -63,7 +63,7 @@ void usage() {
         << "  --time MS       time per move in ms (default 30)\n"
         << "  --opening N     random opening plies (default 2)\n"
         << "  --seed N        deterministic tournament seed\n"
-        << "  --engines LIST  random,pruning,mcts,mcts_nn\n"
+        << "  --engines LIST  random,mcts,mcts_nn\n"
         << "  --nn PATH       model for mcts_nn\n"
         << "  --out PATH      markdown report path\n"
         << "  --csv PATH      csv path\n";
@@ -137,8 +137,6 @@ std::unique_ptr<Engine> create(EngineKind kind, const Options& options, std::uin
     engineOptions.seed = seed;
     engineOptions.timeLimitMs = options.visits > 0 ? 0 : options.timeMs;
     engineOptions.visits = options.visits;
-    engineOptions.maxDepth = 10;
-    engineOptions.ttSizeMb = 16;
     engineOptions.mctsMaxChildren = 32;
     engineOptions.nnModelPath = options.nnModel;
     return makeEngine(kind, engineOptions);

@@ -90,11 +90,6 @@ std::string analysisJson(const Analysis& analysis, const std::string& backend,
         }
         out << ']';
     }
-    if (analysis.kind == EngineKind::Pruning) {
-        out << ",\"window\":" << analysis.window;
-        out << ",\"window_researches\":" << analysis.windowResearches;
-        out << ",\"pvs_researches\":" << analysis.pvsResearches;
-    }
 
     out << ",\"moves\":[";
     for (std::size_t i = 0; i < analysis.candidates.size(); ++i) {

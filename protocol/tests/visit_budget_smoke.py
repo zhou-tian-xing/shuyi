@@ -56,14 +56,6 @@ def main(argv):
             problems.append(f"{kind}: not deterministic ({first[2]} vs {second[2]})")
         print(f"  {kind:<8} visits={first[0]:<5} move={first[2]}  (deterministic: {first[2] == second[2]})")
 
-    first = run("pruning", binary, None)[0]
-    second = run("pruning", binary, None)[0]
-    if not (BUDGET <= first[1] <= BUDGET * 4):
-        problems.append(f"pruning: {first[1]} nodes for a {BUDGET}-node budget")
-    if first[1] != second[1] or first[2] != second[2]:
-        problems.append(f"pruning: not deterministic ({first[1]}/{first[2]} vs {second[1]}/{second[2]})")
-    print(f"  pruning  nodes={first[1]:<5} move={first[2]}  (deterministic: {first[2] == second[2]})")
-
     # A front end that sets the default budget and then asks for an analysis
     # without repeating it must get that default, not an unbounded search.
     with EngineProcess(binary, cwd=str(REPO)) as engine:

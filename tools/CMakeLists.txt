@@ -54,11 +54,11 @@ enable_testing()
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     add_test(NAME shuyi_match_smoke
-        COMMAND shuyi_match --a-engine random --b-engine pruning --games 2 --time 2
+        COMMAND shuyi_match --a-engine random --b-engine mcts --games 2 --time 2
                 --opening 0 --seed 7 --out test_match.json --csv test_match.csv)
     add_test(NAME shuyi_tournament_smoke
         COMMAND shuyi_tournament --games 2 --time 2 --seed 7
-                --engines random,pruning
+                --engines random,mcts_nn
                 --out test_elo.md --csv test_elo.csv)
     add_test(NAME shuyi_selfplay_smoke
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/selfplay_smoke.py

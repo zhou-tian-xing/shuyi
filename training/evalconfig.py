@@ -12,7 +12,6 @@ What one visit means, per player type (this is the whole contract):
     gpu:<model>        one tree simulation = one batched CUDA network evaluation
     mcts_nn:<model>    one tree simulation = one CPU network evaluation
     mcts               one tree simulation = one rollout playout
-    pruning            one node        = one static evaluation of a leaf
 
 So a table is only meaningful if every player in it used the same number.  The
 number is ``EVAL_VISITS`` below; change it here, not at the call site, or the
@@ -31,7 +30,6 @@ Measured cost of one move at 512 (blocking rule, b4c32, ~52 plies, this laptop's
 MX350 plus a desktop CPU; a 3080 is several times faster per visit):
 
     gpu          512 visits/move ~= 0.19 s/move ~= 10 s/game
-    pruning      512 nodes/move  ~= 2 ms/move   ~= 0.1 s/game
     mcts         512 rollouts    ~= 15 ms/move  ~= 0.8 s/game
     mcts_nn      512 sims        ~= 2 s/move    ~= 107 s/game  (CPU forward)
 """

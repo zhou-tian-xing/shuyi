@@ -43,31 +43,24 @@
 
 不把 MCTS 的树节点和状态混在一起。树节点只存“从父节点走到这里的着法”和统计量；模拟时用可撤销的 `Position` 走路径。
 
-## 3. 剪枝引擎与置换表
+## 3. 终盘精确求解
 
-- 算法：迭代加深 Alpha-Beta；根节点保留最佳着法与 PV，并通过进度回调输出
-  `depth/nodes/score/best`。叶节点在“黑方走完”的红方回合评估，评估纳入稳定格、
-  边界格和双方剩余手牌。
-- 深度只按“完整回合”递增：红方根搜索 2/4/6… 层，黑方根搜索 1/3/5… 层，
-  避免在红方刚下完的奇数层评估。
-- 由于每层约 700 个合法着法，纯全宽深搜在 650 ms 内只能到 2 层左右。
-  当前使用选择性束搜索：根最多 32 个、深层最多 16 个候选（按 TT/PV/静态分排序），
-  在 650 ms 下可到 4 层；`rootBranching/maxBranching=0` 可切回全宽。这是有意的
-  强度/深度折中，不是“忘记加深”。
-- 置换表 `TranspositionTable` 是独立类：
-  - 固定大小、2 的幂、直接索引；
-  - entry 保存 `key / depth / bound(EXACT/LOWER/UPPER) / value / best move / age`；
-  - 每次新搜索递增 generation，深搜优先替换浅层旧项；
-  - 值统一为“轮到走棋的一方”的视角。
-- 根节点使用 **aspiration window（渴望窗口）**：第一次完整迭代后在上一轮分数
-  周围开 ±24 分的窗口；若 fail-low/fail-high，则把窗口翻倍并把当前最佳着法
-  钉到根着法序列首位重搜。只有窗口内精确完成的一轮才会替换上一轮结果，
-  超时/中断不会把半轮搜索写回结果。
-- 根和内部节点都使用 **PVS 零窗口**：第一个着法用完整窗口，后续着法先用
-  `[alpha, alpha+1]` 侦察；只有超过 alpha 才用完整窗口重搜。`window/wres/pvs`
-  会随 `info` 输出，便于确认窗口搜索实际生效。
-- TT 由 `AlphaBetaEngine` 跨手持有；`think()` 临时搜索使用临时 TT。
-- 大架构约束：TT 不放进 `Position`，也不把 PV 存在 TT 之外的单例里；搜索函数接收 `TranspositionTable&`。
+最后几手不是采样问题，是有限博弈。石头快到 0 时，引擎不再搜索，直接求解：
+
+- `engine/src/endgame.cpp`：negamax + alpha-beta，**play/undo** 而不是每个节点拷贝
+  `Position`（拷贝会连历史 vector 一起分配，实测慢 1.3 倍）。根节点对每个合法着法
+  用全窗口求一次，因为棋盘上每个格子都要显示自己的精确目差。
+- 两道闸门：节点预算决定工作量，墙钟决定最坏等待。实测 7 手局面在 15k–1.8M 节点之间
+  （14 ms–2.5 s），所以只给节点数是控制不住的；超时即返回“未解算”，由搜索的结果顶上。
+- 三个调用点：
+  1. 搜索前，剩余 ≤ `exactEndgamePlies`（6）手：整盘解出来，每个格子都是精确值；
+  2. 搜索后，剩 7 手：在 `exactEndgameAfterTimeMs`（400 ms）内再试一次整盘求解，
+     便宜的局面会成功，贵的直接放弃，不会把 info 流卡住；
+  3. 搜索过程中，`proveBestMoves` 对被访问最多的几手各花一小段预算去解**下一手**
+     （`proofTopMoves/topNodes/proofTimeMs`），解出来的那一格立刻按精确值显示。
+- 证明值只从这一套机器里出来：一个节点只有在“某一手对方的子树被完全解出且必败”
+  或“所有应手都解出”时才标记为已解算，目差同理（`scoreExact`）。所以“已解算”
+  永远是可复现的精确值，不是高访问数带来的自信。
 
 ## 4. MCTS：SoA 与树复用
 
@@ -134,7 +127,7 @@ version
 list_commands
 boardsize 9
 clear_board
-set_engine random|pruning|mcts|mcts_nn
+set_engine random|mcts|mcts_nn
 set_time 650
 set_a 1
 play red e5 5
@@ -147,11 +140,10 @@ quit
 `info` 行示例：
 
 ```
-info engine=pruning depth=4 nodes=12000 window=24 wres=0 pvs=9 score=+5 winrate=0.68 best=e5:7 pv=e5:7,c4:3
 info engine=mcts visits=20000 winrate=0.57 best=e5:7 moves=e5:7:0.57:9000,c4:3:0.21:3000
 ```
 
-- `score` 是当前行棋方视角的分数（含 A值），用于剪枝展示。
+- `score` 是当前行棋方视角的分数（含 A值），只在引擎确实有分数时出现。
 - `winrate` 是当前行棋方的期望得分（胜 1、平 0.5、负 0）。
 - `moves` 只带根节点前若干个候选，供 UI 画胜率分布。
 - `genmove` 结束输出 `= e5 7`；`analyze` 持续输出 `info`，直到 `stop`。
@@ -171,7 +163,7 @@ info engine=mcts visits=20000 winrate=0.57 best=e5:7 moves=e5:7:0.57:9000,c4:3:0
 ## 8. 实施顺序
 
 1. `Position` bitboard + Zobrist，保持现有规则测试全绿。
-2. `TranspositionTable`、剪枝引擎接口和 GTP 进程骨架。
+2. 终盘精确求解与 GTP 进程骨架。
 3. MCTS SoA + 树复用 + 分析快照。
 4. NN 接口、模型加载、MCTS-NN 路径。
 5. UI 引擎进程管理、10Hz 分析面板。
@@ -180,7 +172,7 @@ info engine=mcts visits=20000 winrate=0.57 best=e5:7 moves=e5:7:0.57:9000,c4:3:0
 ## 9. 当前实现状态
 
 - `Position` 已有 81 位双字 bitboard、Zobrist 增量键、增量计分和 `validate()` 自检。
-- `TranspositionTable` 是独立类，剪枝引擎跨手持有；`think()` 使用临时表。
+- 终盘 ≤6 手用 negamax 精确求解，节点预算与墙钟双限。
 - `shuyi_engine.exe` 已实现命令循环、搜索工作线程、`stop` 取消、`info` 100ms 节流。
 - UI 通过 `CreateProcessW` + 匿名管道启动引擎；reader 线程入队，100ms Timer 消费并重绘。
 - MCTS 节点/边使用 SoA；`onPlay()` 尝试把根推进到对应子节点，失败则重置。
@@ -198,8 +190,6 @@ info engine=mcts visits=20000 winrate=0.57 best=e5:7 moves=e5:7:0.57:9000,c4:3:0
 - 当前默认融合为 `0.5 * policy + 0.5 * uniform`、纯 value head
   （`nnValueBlend=1.0`）；MCTS-NN 根宽度按 `max(32, visits/16)` 自动开
   （512 visits 为 32），内部节点 `mctsMaxChildren=48`，最后 6 手不剪宽。
-- 剪枝叶节点在“黑方刚走完、轮到红方”的位置评估；评估函数区分已稳定格和边界格，
-  并把双方手牌中的高数字潜力纳入 `handWeight` 项，避免只在红方刚落子后做静态判断。
 - ELO 工具已实现随机基准、先后手交替、随机开局、Bradley-Terry 拟合和 200 次 bootstrap CI。
 
 ### 异步协议的一个细节
