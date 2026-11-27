@@ -2,6 +2,13 @@
 
 维护者先看 [MAINTAINERS.zh-CN.md](MAINTAINERS.zh-CN.md)（文件地图：每个文件在哪、干什么）。
 
+## 两个产品
+
+| 文档 | 内容 |
+|---|---|
+| [../ui/README.md](../ui/README.md) | 界面：窗口布局、操作、棋谱树与棋谱文件格式 |
+| [../engine/README.md](../engine/README.md) | 引擎：目录与职责、三条硬规矩、协议入口 |
+
 ## 规则与数学
 
 | 文档 | 内容 |

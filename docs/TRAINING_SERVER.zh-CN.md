@@ -143,7 +143,7 @@ python training/pipeline.py \
 ### 阶段性 ELO
 
 `--elo-every N`（默认 5）会在第 0、N、2N… 代以及最后一代，用
-`shuyi_tournament` 自动跑一次 `random / pruning / mcts / mcts_nn` 的小型
+`shuyi_tournament` 自动跑一次 `random / mcts / mcts_nn` 的小型
 循环赛，随机基准仍固定 ELO 0：
 
 ```bash

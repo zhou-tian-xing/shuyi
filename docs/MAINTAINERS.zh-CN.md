@@ -17,7 +17,7 @@
 ├── training/        Python 训练流水线。不随发布
 ├── release/         打包脚本（alpha 包由这里生成）
 ├── data/            共享测试夹具（终局见证等）
-├── models/          随包发布的模型 + 测试夹具（shuyi_resnet_v1/v2）
+├── models/          少量权重与测试夹具（shuyi_resnet_v1/v2、b4c32 系列）；发布包不带权重
 ├── runs/            训练与评测输出（不入库；布局与命名见 runs/README.md）
 ├── docs/            规则、架构、评测方法、计划、历次运行报告
 ├── build/           CPU 构建目录（MinGW）
@@ -131,8 +131,8 @@ tools/selfplay/               自对弈、锦标赛、对局工具
 training/                     训练流水线（pipeline.py 是入口）、评测（arena/elo）、文档
 ```
 
-`tools/` 与 `training/` 永远不进发布包；`release/make_alpha.py` 只拷 `ui/`、`engine/`、
-`models/`、`protocol/` 的产物。
+`tools/` 与 `training/` 永远不进发布包；`release/build_packages.py` 只拷 `ui/`、`engine/`、
+`protocol/` 的产物（`--model` 才会把一份权重塞进 UI 包，默认不带）。
 
 ---
 
@@ -151,10 +151,12 @@ cmake -S ui     -B build-ui
 cmake -S .    -B build -DSHUYI_BUILD_TOOLS=ON
 cmake -S tools -B build-tools
 
-# alpha 发布包
-python release/make_alpha.py --engine build-cuda/shuyi_engine.exe \
-    --ui build-cuda/shuyi.exe --model models/b4c32-s34760-d470705.bin
+# 发布包（四个包 + 源码包，默认不带权重）
+python release/build_packages.py --version 1.1 --tag v1.1
 ```
+
+`release/make_alpha.py` 与 `release/build_release.py` 是 1.0 之前那两代打包脚本，已被
+`build_packages.py` 取代；留着只是因为历史运行日志里引用了它们的命令行。
 
 CUDA 构建走 `tools\build_cuda.bat`：nvcc 不接受中文路径，所以源码经一个 ASCII 镜像目录进去，
 构建树也放在仓库外（默认 `F:\projects\shuyi_cuda\{src,build}`，`SHUYI_CUDA_ROOT` 可改）。
@@ -172,6 +174,7 @@ CUDA 构建走 `tools\build_cuda.bat`：nvcc 不接受中文路径，所以源�
 | 网络格式/特征 | `engine/src/nn.cpp`、`training/train_resnet.py`（必须同步） |
 | 协议命令或字段 | `engine/src/protocol.cpp`、`engine/src/protocol_json.cpp`、`protocol/ENGINE_PROTOCOL.md` |
 | 界面绘制/交互 | `ui/src/ui_win32.cpp` |
+| 棋谱树、棋谱文件、行颜色 | `ui/src/game_record.cpp`、`ui/tests/test_game_record.cpp` |
 | 界面如何解析分析 | `ui/src/engine_protocol.cpp`、`protocol/tests/protocol_smoke.py` |
 | 引擎发现/启动 | `ui/src/discovery.cpp`、`startEngineProcess()` |
-| 发布包内容 | `release/make_alpha.py` |
+| 发布包内容 | `release/build_packages.py`、`release/NOTES-*.md` |
