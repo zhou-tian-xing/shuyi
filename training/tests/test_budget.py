@@ -49,10 +49,13 @@ def test_sizing():
     check(slow["total_positions"] < p["total_positions"], "a slow box buys less data")
     check(slow["generations"] <= p["generations"], "a slow box cannot have more generations")
 
-    # Bigger model, more gradient steps per generation.
-    big = budget.plan(0.58, 10.0, 3.0, 1024)
-    check(big["optimizer_steps_per_generation"] > p["optimizer_steps_per_generation"],
-          "a bigger network needs more gradient descent")
+    # Passes are a constant.  The arms measured 8/28/60 passes over identical data
+    # and only the middle one helped, so a bigger network gets the same passes over
+    # more data -- never more passes over the same data.  (This check used to ask
+    # for the opposite, which is the rule that took b10c128 from +29 to -32.)
+    big = budget.plan(0.58, 30.0, 3.0, 1024)
+    check(big["epochs"] == p["epochs"] == budget.EPOCHS_PER_GENERATION,
+          "a bigger network gets the same passes, not more")
 
     # A window that cannot buy one honest generation must fail, not fudge.
     try:
