@@ -88,16 +88,16 @@ def main() -> int:
         if not path.is_file():
             raise SystemExit(f"missing asset: {path}")
         size = path.stat().st_size
-        if have.get(path.name) == size:
+        if have.get(path.name) == size and not args.replace:
             print(f"  {path.name:34s} already uploaded")
             continue
         if args.replace and path.name in have:
             for asset in existing:
                 if asset["name"] != path.name:
                     continue
+                # The asset endpoint is not nested under the release.
                 status, _ = call("DELETE",
-                                 f"{API}/repos/{args.repo}/releases/{release['id']}/assets/{asset['id']}",
-                                 auth)
+                                 f"{API}/repos/{args.repo}/releases/assets/{asset['id']}", auth)
                 if status not in (200, 204):
                     raise SystemExit(f"could not replace {path.name} ({status})")
                 print(f"  {path.name:34s} old copy removed")
