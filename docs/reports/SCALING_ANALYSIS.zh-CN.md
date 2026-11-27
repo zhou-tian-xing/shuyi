@@ -35,14 +35,20 @@
 
 ## 图
 
-![棋力随训练数据量增长](figures/elo_vs_data.png)
+![棋力随训练数据量增长（64 visits）](figures/elo_vs_data.png)
 
-- 一个圆点一份本地权重（58 份，其中 45 份在 64 visits 榜上有分）。横轴是文件名里的累计局面数
-  （对数），纵轴是同一张榜拟合出的 Elo（`random = 0`）。
-- 同架构同色，实线是每种架构各拟合一条逻辑斯蒂：b6c96 33 点（4 万 → 323 万，+472 → +2710，
-  RMSE **51**），b4c32 12 点（8 万 → 60 万，+551 → +1941，RMSE **36**）。
-- 把 45 点混成一条曲线，RMSE 升到 **113–124**——不同架构的数据经济不同，所以分色分线。
+![棋力随训练数据量增长（512 visits）](figures/elo_vs_data_512.png)
+
+- 一个圆点一份本地权重（63 份，其中 50 份在 64 visits 榜上有分、38 份在 512 visits 榜上有分）。
+  横轴是文件名里的累计局面数（对数），纵轴是同一张榜拟合出的 Elo（`random = 0`）。
+- 同架构同色，实线是每种架构各拟合一条逻辑斯蒂：b6c96 38 点（4 万 → 368 万，+472 → +2719，
+  RMSE **48**），b4c32 12 点（8 万 → 60 万，+551 → +1940，RMSE **36**）。
+- 把 50 点混成一条曲线，RMSE 升到 **113–124**——不同架构的数据经济不同，所以分色分线。
 - 渐近线是**假定**的（该架构最好点 +400），它决定末段多平，只用来读"离拐点还有多远"。
+- 512 那张表是 2026-11-27 新梯子的产物（38 个模型、24,800 局、单一连通块、中位精度 ±26），
+  它的每一条边都在同一批条件下重测，所以只有一根尺子，不需要"复测"标记。
+- 两图的纵轴不可直接相减：零点都是 `random = 0`，而搜索帮模型、不帮随机，所以零点本身随预算移动。
+  逐模型对照见下一节。
 
 ## 三处已修的缺陷（都不需要服务器就能验证）
 
@@ -181,6 +187,7 @@ arm_1024 vs arm_4096，300 局 64 visits 打成 **143-157（arm_4096 得 52.3%�
 
 ```bash
 python training/plot_elo_scaling.py          # 写 docs/figures/elo_vs_data.{png,svg}
+python training/plot_elo_scaling.py --board runs/leaderboard/matches_512.csv
 python training/probe_teacher_gap.py --shard runs/analysis/teacher_gap/shard1024.bin
 python training/analyze_teacher_budget.py --corpora shard_1024.bin shard_4096.bin
 ```

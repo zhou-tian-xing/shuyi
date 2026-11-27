@@ -53,14 +53,14 @@ def inventory():
             yield path.relative_to(REPO), path.stem, arch, int(match[3]) if match else None
 
 
-def match_sets(board):
+def match_sets(board, visits):
     """(whole table, the subset whose sources carry a verified scope)."""
     _, results = read_table(board)
     whole = {key: value for key, value in results.items() if key[0] < key[1]}
     ledger = json.loads(board.with_suffix(board.suffix + ".sources.json").read_text(encoding="utf-8"))
     tagged = defaultdict(lambda: (0, 0, 0))
     for path, report in ledger["sources"].items():
-        if match_config(report) != ("nopass", 0.5, 64):
+        if match_config(report) != ("nopass", 0.5, visits):
             raise ValueError(f"unexpected scope in {path}")
         for a, b, wins, draws, losses in report["pairs"]:
             if b < a:
@@ -88,7 +88,7 @@ def anchored_fit(cells, anchor):
     return dict(zip(group, (v - zero for v in values))), sum(sum(p[2:5]) for p in pairs)
 
 
-def draw(rows, games, out):
+def draw(rows, games, out, visits, emphasis):
     available = {f.name for f in font_manager.fontManager.ttflist}
     font = next((n for n in ("Microsoft YaHei", "DengXian", "Noto Sans CJK SC", "SimHei")
                  if n in available), None)
@@ -104,7 +104,9 @@ def draw(rows, games, out):
     for row in rows:
         palette.setdefault(row[2], "#26313d")
     rated = [row for row in rows if row[3] and row[4] is not None]
-    newest = {row[1] for row in rows if row[5] is not None}
+    # `emphasis` marks the board where only part of the cells were re-measured
+    # under a verified scope; a board measured end to end gets one marker style.
+    newest = {row[1] for row in rows if row[5] is not None} if emphasis else set()
 
     ax.set_xscale("log")
     ax.set_xlim(2.6e4, 4.1e6)
@@ -117,7 +119,7 @@ def draw(rows, games, out):
     ax.spines[["left", "bottom"]].set_color("#b3bfd0")
 
     for x, y, arch, name in [(r[3], r[4], r[2], r[1]) for r in rated]:
-        if name in newest:      # re-measured under the documented scope
+        if not emphasis or name in newest:      # re-measured under the documented scope
             ax.scatter(x, y, s=58, color=palette[arch], edgecolor="white",
                        linewidth=.9, zorder=3)
         else:
@@ -156,57 +158,77 @@ def draw(rows, games, out):
 
     handles = [Line2D([], [], marker="o", ls="none", ms=8, color=palette[a], label=a)
                for a in palette if any(r[2] == a for r in rated)]
-    handles.append(Line2D([], [], marker="o", ls="none", ms=5.5,
-                          markerfacecolor="#8894a6", markeredgecolor="none",
-                          alpha=.45, label="较早一代（同一拟合）"))
-    handles.append(Line2D([], [], marker="o", ls="none", ms=7.5, markerfacecolor="#8894a6",
-                          markeredgecolor="white", label="2026-11-26 复测（同条件）"))
+    if emphasis:
+        handles.append(Line2D([], [], marker="o", ls="none", ms=5.5,
+                              markerfacecolor="#8894a6", markeredgecolor="none",
+                              alpha=.45, label="只有旧榜证据（范围未核验）"))
+        handles.append(Line2D([], [], marker="o", ls="none", ms=7.5, markerfacecolor="#8894a6",
+                              markeredgecolor="white", label="2026-11-26 同条件复测"))
     ax.legend(handles=handles, loc="lower right", frameon=False, fontsize=8.5,
-              title="架构 / 证据", title_fontsize=9)
+              title="架构 / 证据" if emphasis else "架构", title_fontsize=9)
 
     ax.set_xlabel("累计自对弈局面数（对数刻度）", fontsize=10.5, labelpad=8)
-    ax.set_ylabel("ELO（64 visits，random = 0）", fontsize=10.5, labelpad=8)
-    ax.set_title("棋力随训练数据量增长", loc="left", fontsize=19, weight="bold", pad=30)
+    ax.set_ylabel(f"ELO（{visits} visits，random = 0）", fontsize=10.5, labelpad=8)
+    ax.set_title(f"棋力随训练数据量增长（{visits} visits）", loc="left",
+                 fontsize=19, weight="bold", pad=30)
     ax.text(0, 1.02, f"{len(rated)} 份可评分权重 · {games:,} 局能读出分差 · "
                      "曲线是每种架构各拟合一条逻辑斯蒂，渐近线按最优点 +400 假定",
             transform=ax.transAxes, fontsize=9.5, color="#4d5c70")
-    fig.text(.125, .018, "旧榜里有一部分对局来自未标记来源，其规则与 A 值未逐条核验；"
-                         "折线只表示趋势，横轴点位按文件名中的累计局面数。",
+    fig.text(.125, .018, ("这张表的每条边都在同一批条件下重测（nopass、A=+0.5、"
+                          f"{visits} visits），所有点在同一个零点上；"
+                          if not emphasis else
+                          "旧榜里有一部分对局来自未标记来源，其规则与 A 值未逐条核验；"
+                          "淡色点没有同条件复测，低数据端的点因此不作强结论；")
+                         + "折线只表示趋势，横轴点位按文件名中的累计局面数。",
              fontsize=8.5, color="#5d6b7e")
     fig.subplots_adjust(left=.085, right=.975, top=.845, bottom=.135)
+    stem = "elo_vs_data" if visits == 64 else f"elo_vs_data_{visits}"
     for suffix in ("png", "svg"):
-        fig.savefig(out / f"elo_vs_data.{suffix}", dpi=170, facecolor=fig.get_facecolor())
+        fig.savefig(out / f"{stem}.{suffix}", dpi=170, facecolor=fig.get_facecolor())
     plt.close(fig)
+    return stem
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--board", type=Path, default=REPO / "runs/leaderboard/matches_64.csv")
+    parser.add_argument("--visits", type=int, default=None,
+                        help="board scope; default is the number in the file name")
     parser.add_argument("--out", type=Path, default=REPO / "runs/analysis/scaling")
     parser.add_argument("--figures", type=Path, default=REPO / "docs/figures",
                         help="where the PNG/SVG go; the CSV stays in --out")
     args = parser.parse_args()
+    visits = args.visits or int(re.search(r"matches_(\d+)", args.board.name)[1])
     args.out.mkdir(parents=True, exist_ok=True)
     args.figures.mkdir(parents=True, exist_ok=True)
-    whole, tagged = match_sets(args.board)
+    whole, tagged = match_sets(args.board, visits)
     history, games = anchored_fit(whole, "random")
-    verified, verified_games = anchored_fit(tagged, REF)
+    # A board measured end to end needs no second ruler; the 64-visit table is
+    # the only one where part of the cells predate the verified scope.
+    emphasis = set(tagged) != set(whole)
+    if emphasis:
+        verified, verified_games = anchored_fit(tagged, REF)
+    else:
+        verified, verified_games = {}, games
+        print(f"{args.board.name}: every cell carries a verified scope, one ruler")
     rows = [(p.as_posix(), n, a, d, history.get(n), verified.get(n))
             for p, n, a, d in inventory()]
-    with (args.out / "elo_vs_data.csv").open("w", encoding="utf-8-sig", newline="") as handle:
-        handle.write("# historical_elo: 64-visit board fit, random = 0, "
+    stem = "elo_vs_data" if visits == 64 else f"elo_vs_data_{visits}"
+    with (args.out / f"{stem}.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        handle.write(f"# historical_elo: {visits}-visit board fit, random = 0, "
                      f"{games} decisive games\n")
-        handle.write("# verified_elo: same-fit subset anchored at "
-                     f"{REF} = 0, {verified_games} decisive games\n")
+        handle.write("# verified_elo: " + ("same-fit subset anchored at "
+                     f"{REF} = 0, {verified_games} decisive games\n" if emphasis else
+                     "identical to historical_elo, no unverified cells remain\n"))
         writer = csv.writer(handle)
         writer.writerow(("file", "model", "architecture", "cumulative_positions",
                          "historical_elo", "verified_elo"))
         writer.writerows(rows)
-    draw(rows, games, args.figures)
+    draw(rows, games, args.figures, visits, emphasis)
     rated = sum(1 for r in rows if r[3] and r[4] is not None)
     print(f"{len(rows)} files, {len({r[1] for r in rows})} names, {rated} rated, "
           f"{sum(r[5] is not None for r in rows)} verified")
-    print(args.figures / "elo_vs_data.png")
+    print(args.figures / f"{stem}.png")
 
 
 if __name__ == "__main__":
