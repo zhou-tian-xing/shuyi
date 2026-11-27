@@ -68,12 +68,17 @@ cmake --build build -j 8
 ctest --test-dir build --output-on-failure
 ```
 
-CUDA 引擎加 `-DSHUYI_CUDA=ON`；Windows 上 nvcc 要求源码路径为 ASCII：
+CUDA 引擎加 `-DSHUYI_CUDA=ON`。Windows 上 nvcc 不接受中文路径，所以构建要走一个 ASCII 镜像目录，
+并且这个目录放在仓库外面——不要放进 `C:\`：
 
 ```bat
-cmake -S C:/shuyi_src -B C:/shuyi_cuda_build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSHUYI_CUDA=ON -DSHUYI_BUILD_UI=ON
-cmake --build C:/shuyi_cuda_build --config Release
+mklink /J F:\projects\shuyi_cuda\src <本仓库路径>
+tools\build_cuda.bat
 ```
+
+`tools\build_cuda.bat` 负责 vcvars、配置和编译，产物在 `F:\projects\shuyi_cuda\build\shuyi_engine.exe`
+（`SHUYI_CUDA_ROOT` 可改这个位置）。仓库里的 `build-cuda` 是指向该构建树的 junction，
+所以 `../build-cuda` 那套引擎发现和打包脚本照旧。
 
 出安装包（四个包 + 源码包）：
 

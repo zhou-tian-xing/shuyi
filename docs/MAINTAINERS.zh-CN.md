@@ -21,7 +21,7 @@
 ├── runs/            训练与评测输出（不入库；布局与命名见 runs/README.md）
 ├── docs/            规则、架构、评测方法、计划、历次运行报告
 ├── build/           CPU 构建目录（MinGW）
-└── build-cuda/      CUDA 构建目录（MSVC + nvcc）
+└── build-cuda/      junction → 仓库外的 CUDA 构建树（MSVC + nvcc）
 ```
 
 依赖关系是硬的，别混：
@@ -156,7 +156,9 @@ python release/make_alpha.py --engine build-cuda/shuyi_engine.exe \
     --ui build-cuda/shuyi.exe --model models/b4c32-s34760-d470705.bin
 ```
 
-CUDA 构建在中文路径下要先建 junction（`C:\shuyi_src` → 本仓库），nvcc 不接受中文路径。
+CUDA 构建走 `tools\build_cuda.bat`：nvcc 不接受中文路径，所以源码经一个 ASCII 镜像目录进去，
+构建树也放在仓库外（默认 `F:\projects\shuyi_cuda\{src,build}`，`SHUYI_CUDA_ROOT` 可改）。
+仓库里的 `build-cuda` 是指向构建树的 junction，不要把它当真目录提交。
 
 ---
 

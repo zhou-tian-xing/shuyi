@@ -135,9 +135,25 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def find_cuda_engine() -> Path | None:
+    """Where the CUDA engine is, or None.
+
+    The CUDA build tree has to live outside the repository: nvcc cannot read the
+    project's non-ASCII directory name, so it is built through an ASCII mirror.
+    `build-cuda` in the repository is a junction to that tree, which is what the
+    first candidate follows; the second is the tree itself, for a checkout whose
+    junction was never made.
+    """
+    for candidate in (REPO / "build-cuda" / "shuyi_engine.exe",
+                      REPO.parent / "shuyi_cuda" / "build" / "shuyi_engine.exe"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def variant_spec() -> dict:
     cpu = REPO / "build" / "shuyi_engine.exe"
-    cuda = REPO / "build-cuda" / "shuyi_engine.exe"
+    cuda = find_cuda_engine()
     ui = REPO / "build" / "shuyi.exe"
     return {
         "engine-cpu": {"engine": cpu, "ui": None},
@@ -260,6 +276,9 @@ def main() -> int:
         if not model.is_file():
             raise SystemExit(f"model not found: {model}")
     specs = variant_spec()
+    if specs["engine-cuda"]["engine"] is None:
+        raise SystemExit("CUDA engine not built: run tools\\build_cuda.bat "
+                         "(it needs an ASCII mirror of this repository; see the README)")
     for name, spec in specs.items():
         for key in ("engine", "ui"):
             if spec[key] is not None and not spec[key].is_file():

@@ -1,7 +1,8 @@
 # Build trees and packaged output
 build/
+# The CUDA build tree lives outside the repository (nvcc needs an ASCII path and
+# the project directory is not ASCII); build-cuda is a junction to it.
 /build-cuda/*
-!/build-cuda/build_cuda.bat
 build-tools/
 build_ui_only/
 build_engine_only/
