@@ -73,10 +73,12 @@ Move parseMoveToken(const std::string& text);
 // Parses the JSON object of an `info` line (without the `info ` prefix).
 bool parseAnalysis(const std::string& json, EngineAnalysisView& out, std::string* error);
 
-// Whether a fresh snapshot may replace the one cached for the position.  The
-// window keeps what the engine said about a position after the user moves on, so
-// a snapshot that searched less must not overwrite it: re-opening a record that
-// carries numbers, or restarting the engine, begins again from a few visits.
-bool analysisOutranks(const EngineAnalysisView& fresh, const EngineAnalysisView& cached);
+// Whether a fresh snapshot may replace the one cached for a position.  Visits are
+// only comparable inside one analysis run: a run is one search tree, and the tree
+// is gone once the board is rebuilt, so the next run begins again from zero.  A
+// snapshot that searched less is therefore stale only when it comes from the same
+// run; across runs the newer numbers are the ones the search actually has.
+bool analysisReplaces(const EngineAnalysisView& fresh, int freshRun,
+                      const EngineAnalysisView& cached, int cachedRun);
 
 } // namespace shuyi

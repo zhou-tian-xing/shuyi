@@ -174,6 +174,7 @@ bool GameRecord::erase(int id) {
         target.parent = newParent;
         target.move = nodes_[static_cast<std::size_t>(old)].move;
         target.analysis = nodes_[static_cast<std::size_t>(old)].analysis;
+        target.run = nodes_[static_cast<std::size_t>(old)].run;
         for (int child : nodes_[static_cast<std::size_t>(old)].children) {
             if (child == id) continue;
             const int copied = copy(child, created);
@@ -194,9 +195,11 @@ bool GameRecord::erase(int id) {
     return true;
 }
 
-void GameRecord::setAnalysis(int id, EngineAnalysisView analysis) {
+void GameRecord::setAnalysis(int id, EngineAnalysisView analysis, int run) {
     if (!contains(id)) return;
-    nodes_[static_cast<std::size_t>(id)].analysis = std::move(analysis);
+    RecordNode& node = nodes_[static_cast<std::size_t>(id)];
+    node.analysis = std::move(analysis);
+    node.run = run;
 }
 
 void GameRecord::writeLineText(std::string& out, int node) const {

@@ -36,6 +36,11 @@ struct RecordNode {
     // What the engine said about *this* position, in the side-to-move
     // perspective it was sent in.  Invalid until an analysis arrived.
     EngineAnalysisView analysis;
+    // Which analysis run produced `analysis` (-1: not from a run of this session,
+    // i.e. nothing known yet or loaded from a file).  Numbers from two runs are
+    // not comparable: a run that starts after the search tree was rebuilt begins
+    // again from zero visits.
+    int run = -1;
 };
 
 // The move as the record and the window spell it: "a4-2", "pass".
@@ -77,7 +82,7 @@ public:
     // deleted.  Returns false when nothing was removed.
     bool erase(int id);
 
-    void setAnalysis(int id, EngineAnalysisView analysis);
+    void setAnalysis(int id, EngineAnalysisView analysis, int run = -1);
 
     // PGN-like text: a header line, the rule set, then the moves.  Variations are
     // written inline in parentheses, right after the move they replace.  The rule

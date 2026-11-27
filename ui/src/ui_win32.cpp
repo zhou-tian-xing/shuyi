@@ -124,6 +124,11 @@ Position g_position;
 // Which record node the running analysis belongs to (-1: none).  The analysis is
 // cached *on that node*, so navigating away and back shows the same numbers.
 int g_analysisNode = -1;
+// Which analysis run `g_analysisNode` belongs to.  One run is one search tree:
+// it starts when the tree does and lives until the engine's board is rebuilt
+// (`clear_board`, a new position, a new process).  Visits are only comparable
+// inside a run, so nothing may be refused across two of them.
+int g_analysisRun = 0;
 
 constexpr double kDefaultAValue = 0.5;
 constexpr double kAValueStep = 0.5;
@@ -204,6 +209,7 @@ void openSettings();
 void goToNode(int id);
 int treeScrollFor(int id);
 void sendEngineStopIfRunning();
+bool sendEngine(const std::string& line);
 void startEngineAnalysis();
 bool loadRecordFromPath(const std::wstring& path);
 bool loadRecordFromText(const std::string& text);
@@ -388,25 +394,49 @@ void noteComputerToMove() {
     }
 }
 
-// Navigation: the same position, another node.  The engine follows by replaying
-// the line, and the panel shows that node's cached analysis instead of whatever
-// happened to be on screen before.
+// The move in the engine's own spelling ("a4 2"), the form `play` takes.
+std::string playCommand(Player side, Move move) {
+    std::string line = std::string("play ") + (side == Player::Red ? "red" : "black") + " ";
+    if (isPass(move)) return line + "pass";
+    return line + squareName(move.cell) + " " + std::to_string(static_cast<int>(move.number));
+}
+
+// Navigation: the same record, another node.  The panel shows that node's cached
+// analysis instead of whatever happened to be on screen before.
+//
+// Stepping forward is a *move* for the engine, not a new position: `play` lets it
+// carry the subtree it just searched into the child, so an analysis started there
+// continues from the visits the parent's search already spent on it.  Going up (or
+// jumping across the tree) has to rebuild the board from the root, which throws
+// the tree away -- the numbers then start again and the panel says so.
 void goToNode(int id) {
     if (!g_record.contains(id)) return;
     if (id == g_record.current()) {
         refresh();
         return;
     }
-    if (g_engineClient.running()) {
-        sendEngineStopIfRunning();
-    }
+    const int from = g_record.current();
+    sendEngineStopIfRunning();
+    // The move is spelled before the record moves: the side to move at the child
+    // is the opponent's, so depth is what says whose move it was.
+    const int ply = g_record.depth(id) - 1;
+    const Player mover = (ply % 2 == 0) ? Player::Red : Player::Black;
+    const Move move = g_record.node(id).move;
+    const bool forward = g_engineClient.running() && g_record.parentOf(id) == from;
     clearAnalysisState();
     g_record.select(id);
     rebuildPosition();
     g_enginePending = false;
     g_pendingReplyId.clear();
     g_thinking = false;
-    if (g_engineChoice != EngineChoice::Off && g_engineReady) syncEnginePosition();
+    if (g_engineChoice != EngineChoice::Off && g_engineReady) {
+        if (forward) {
+            sendEngine(playCommand(mover, move));
+            ++g_analysisRun;
+        } else {
+            syncEnginePosition();
+        }
+    }
     noteComputerToMove();
     refresh(true);
 }
@@ -419,11 +449,17 @@ void sendEngineStopIfRunning() {
 // position is rebuilt from it, then the engine is told -- one order everywhere,
 // so the three can never drift apart.
 void recordMove(Move move, Player mover) {
-    // Analysis is a mode, not a one-off: after a move it continues on the new
-    // position unless the user had stopped it.
-    const bool wasAnalyzing = g_analysisOn;
+    // Analysis is a mode, not a one-off: it continues on the new position unless
+    // the user had stopped it.  A run that reached the visit cap is not a stop --
+    // the new position has its own budget, and has not spent a visit of it.
+    const bool wasAnalyzing = g_analysisOn || g_analysisFinished;
     const int from = g_record.current();
     int id = g_record.play(from, move);
+    // `play` may carry the subtree of this move over into the new position, in
+    // which case the analysis continues where the parent's search left it.  It may
+    // also rebuild the tree.  Either way the numbers from here on belong to a new
+    // run, and are compared with that run's own figures, not with the old ones.
+    ++g_analysisRun;
     if (g_engineClient.running()) {
         g_engineClient.send("stop");
         g_enginePending = false;
@@ -502,11 +538,10 @@ void applyEngineAnalysis(int node, const std::string& payload) {
         return;
     }
     g_engineMessage = g_enginePending ? L"引擎思考中…" : L"分析中…";
-    // Analysis is additive: a snapshot replaces the cached one only when it
-    // searched at least as long.  Otherwise a restart (or a freshly loaded record)
-    // would blank the numbers the user just opened.
-    if (!g_record.contains(node) || !analysisOutranks(view, g_record.node(node).analysis)) return;
-    g_record.setAnalysis(node, std::move(view));
+    if (!g_record.contains(node)) return;
+    RecordNode& target = g_record.node(node);
+    if (!analysisReplaces(view, g_analysisRun, target.analysis, target.run)) return;
+    g_record.setAnalysis(node, std::move(view), g_analysisRun);
 }
 
 void startEngineAnalysis(int visits) {
@@ -553,6 +588,9 @@ void syncEnginePosition() {
     g_analysisFinished = false;
     sendEngine("stop");
     sendEngine("clear_board");
+    // The engine forgets its tree here, so every number it sends from now on
+    // belongs to a new run.
+    ++g_analysisRun;
     for (int id : g_record.line(g_record.current())) {
         const Move move = g_record.node(id).move;
         // The side alternates from Red at the root; a pass is a move too.
@@ -1732,6 +1770,16 @@ void drawAnalysisMarks(HDC dc, const Layout& layout, const std::vector<int>& ran
         const int cy = board.top + (8 - yOf(cellIndex)) * cell + cell / 2;
         const RECT mark{cx - radius, cy - radius, cx + radius, cy + radius};
         roundRect(dc, mark, corner, mixColor(kBoard, colour, 0.62), colour, std::max(1, scale(1)));
+        // Which piece to play is half of the move: the same cell takes nine
+        // numbers, and a mark that says "42%" says nothing about which of them.
+        // The number sits on the top-right corner, raised, the way the count sits
+        // on the chips: a superscript, not a fourth line.
+        const int dot = std::max(scale(6), radius / 3);
+        const int dotX = cx + radius - dot / 2;
+        const int dotY = cy - radius + dot / 2;
+        filledCircle(dc, dotX, dotY, dot, RGB(28, 32, 38));
+        drawTextAt(dc, std::to_wstring(info.move.number), dotX - dot, dotY - dot, dot * 2, dot * 2,
+                   g_fontTiny, RGB(255, 245, 232));
         int y = cy + textTop;
         drawTextAt(dc, formatWinRate(rate), cx - radius, y, radius * 2, rowHeight, g_fontSmall,
                    RGB(28, 32, 38));
@@ -2561,13 +2609,16 @@ void showGuide() {
     text += L"操作\n\n";
     text += L"· 数字键 1–9：选择落子的数字（也可以点下方棋子）。\n";
     text += L"· 点击棋盘：落子。\n";
-    text += L"· 空格：开始 / 暂停分析；分析到上限后再按一次会继续，不再限量。\n";
+    text += L"· 空格：开始 / 暂停分析；分析到上限后再按一次会继续，不再限量。开着分析落子，"
+            L"会在新局面自动接着算（到过上限也一样）。\n";
     text += L"· ↑ / ↓：在棋谱里上一步 / 下一步（↓ 走主干）。翻棋谱不会让电脑落子，"
             L"要它走一步用 引擎 → 让电脑走一步。\n";
     text += L"· Delete：删除当前着法及其后续，连同它们的分析。\n";
     text += L"· Ctrl+S：保存棋谱（等同 文件 → 保存棋谱…）。\n";
     text += L"· 左侧面板是分析的产物，右侧是棋谱：每一着一行，换个走法会在那一手后面缩进出一段"
             L"变着，回到旧行时原来的分析还在。\n";
+    text += L"· 棋盘上每个分析标记：胜率 / 访问数 / 预期终局分，右上角的上标是要落的那颗子的数字"
+            L"（同一个格子能下九个数字）。\n";
     text += L"· 棋谱每行左边的小色块是这一步相对上一步的评估：蓝 = 比之前明显更好，"
             L"绿 = 不差，红 = 变差。\n";
     text += L"· 分析会一起存进棋谱；载入棋谱时，每个局面的分析跟着回来。\n";

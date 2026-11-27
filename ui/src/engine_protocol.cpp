@@ -219,10 +219,15 @@ bool parseAnalysis(const std::string& json, EngineAnalysisView& out, std::string
     return true;
 }
 
-bool analysisOutranks(const EngineAnalysisView& fresh, const EngineAnalysisView& cached) {
+bool analysisReplaces(const EngineAnalysisView& fresh, int freshRun,
+                      const EngineAnalysisView& cached, int cachedRun) {
     if (!fresh.valid) return false;
     if (!cached.valid) return true;
-    // A solved line is exact whatever it cost; a larger sample beats a smaller one.
+    // Another run: the search tree behind the cached numbers was rebuilt, so the
+    // two are not comparable and the newer ones are the truth.
+    if (freshRun != cachedRun) return true;
+    // Same run: the tree only grows, so a smaller snapshot is an older one -- a
+    // proof excepted, which is exact however little it cost.
     if (fresh.proven != cached.proven) return fresh.proven;
     return fresh.visits >= cached.visits;
 }

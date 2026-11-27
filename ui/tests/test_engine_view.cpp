@@ -191,26 +191,29 @@ void testDistinctSymmetricCells() {
           "an asymmetric position keeps every cell");
 }
 
-// The window keeps what the engine said about a position, so a snapshot has to
-// earn the right to replace it: re-opening a record or restarting the engine
-// begins again from a handful of visits.
-void testAnalysisOutranks() {
+// Visits are only comparable inside one analysis run: a run is one search tree, and
+// a run that starts after the board was rebuilt begins again from zero.  Refusing a
+// smaller snapshot across runs froze the panel on 14,000 visits while the engine
+// was at 300.
+void testAnalysisReplaces() {
     EngineAnalysisView cached;
     check(parseAnalysis(kAnalysis, cached, nullptr), "fixture parses");
     EngineAnalysisView richer = cached;
     richer.visits = 4096;
-    check(analysisOutranks(richer, cached), "more visits replaces fewer");
-    check(analysisOutranks(cached, cached), "the same effort replaces itself");
+    check(analysisReplaces(richer, 7, cached, 7), "more visits in the same run replaces fewer");
+    check(analysisReplaces(cached, 7, cached, 7), "the same snapshot replaces itself");
     EngineAnalysisView restart = cached;
     restart.visits = 12;
-    check(!analysisOutranks(restart, cached), "a restart does not blank a richer analysis");
-    check(!analysisOutranks(EngineAnalysisView{}, cached), "an empty snapshot replaces nothing");
+    check(!analysisReplaces(restart, 7, cached, 7), "a smaller snapshot in the same run is stale");
+    check(analysisReplaces(restart, 8, cached, 7), "a new run replaces the old numbers whatever they were");
+    check(analysisReplaces(restart, 8, cached, -1), "numbers from a file belong to no run");
+    check(!analysisReplaces(EngineAnalysisView{}, 8, cached, 7), "an empty snapshot replaces nothing");
     EngineAnalysisView solved = restart;
     solved.proven = true;
-    check(analysisOutranks(solved, cached), "a proof beats a larger sample");
+    check(analysisReplaces(solved, 7, cached, 7), "a proof beats a larger sample in the same run");
     EngineAnalysisView provedCached = cached;
     provedCached.proven = true;
-    check(!analysisOutranks(solved, provedCached), "a proof does not replace a larger proof");
+    check(!analysisReplaces(solved, 7, provedCached, 7), "a proof does not replace a larger proof");
 }
 
 void testBrokenInput() {
@@ -239,7 +242,7 @@ int main() {
     testRankAnalysisCells();
     testRankTiedAnalysisCells();
     testDistinctSymmetricCells();
-    testAnalysisOutranks();
+    testAnalysisReplaces();
     testBrokenInput();
     testMoveTokens();
     if (failures == 0) std::printf("engine view tests passed\n");
