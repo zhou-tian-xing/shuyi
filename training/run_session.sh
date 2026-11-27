@@ -30,6 +30,11 @@ LR="${LR:-2e-4}"
 REPLAY_GENS="${REPLAY_GENS:-2}"
 SCORE_WEIGHT="${SCORE_WEIGHT:-0.5}"
 ARENA_GAMES="${ARENA_GAMES:-100}"
+# 0 = the arena uses the self-play budget.  Measuring the per-generation
+# increment at the ladder's budget (512) instead of the training budget is what
+# makes the result appendable to runs/leaderboard/matches_512.csv: a table holds
+# one visit count, and mixing a 1024-visit game into it is not allowed.
+ARENA_VISITS="${ARENA_VISITS:-0}"
 ARENA_REFERENCE="${ARENA_REFERENCE:-$MODEL}"
 # The probe must use the batch the run uses: probing at 8 measured 0.25 games/s
 # where the run actually does 0.45, which sizes the whole session for a box half
@@ -145,6 +150,7 @@ exec "$PYTHON" "$REPO/training/pipeline.py" \
     --replay-gens "$REPLAY_GENS" \
     --lr "$LR" --epochs "$EPOCHS" \
     --arena-games "$ARENA_GAMES" --arena-reference "$ARENA_REFERENCE" \
+    --arena-visits "$ARENA_VISITS" \
     --seed "$SEED" \
     --oneply-gens 0 \
     --elo-every 0 \
