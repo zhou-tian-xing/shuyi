@@ -23,6 +23,7 @@ public class Drive {
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
 }
 "@
 $proc = Get-Process -Name $ProcessName -ErrorAction Stop | Select-Object -First 1
@@ -70,6 +71,17 @@ foreach ($action in $Actions.Split(';')) {
             if ($null -eq $vk) { throw "unknown key $($parts[1])" }
             [void][Drive]::SendMessageW($h, 0x0100, [IntPtr]$vk, [IntPtr]0)
             Write-Output "key $($parts[1])"
+        }
+        # A menu command, by the id the menu puts in WM_COMMAND.
+        'cmd' {
+            [void][Drive]::SendMessageW($h, 0x0111, [IntPtr][int]$parts[1], [IntPtr]0)
+            Write-Output "cmd $($parts[1])"
+        }
+        # Bring the window back without taking the focus: PrintWindow needs it to
+        # exist on screen, and a capture must not interrupt whoever is working.
+        'show' {
+            [void][Drive]::ShowWindow($h, 4)   # SW_SHOWNOACTIVATE
+            Write-Output "show"
         }
         'wait' { Start-Sleep -Milliseconds ([int]$parts[1]) }
         'shot' { Shot $parts[1] }

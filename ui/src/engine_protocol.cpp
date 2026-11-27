@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 
 namespace shuyi {
@@ -147,7 +148,8 @@ bool parseAnalysis(const std::string& json, EngineAnalysisView& out, std::string
     view.backend = stringOf(root, "backend");
     view.nn = stringOf(root, "nn");
     view.visits = intOf(root, "visits");
-    view.nodes = intOf(root, "nodes");
+    // Effort can exceed an int on a long run, and the panel reports it as a rate.
+    view.nodes = static_cast<long long>(std::llround(doubleOf(root, "nodes")));
     view.depth = intOf(root, "depth");
     view.proven = boolOf(root, "proven");
     view.hasScore = boolOf(root, "has_score");
@@ -155,10 +157,7 @@ bool parseAnalysis(const std::string& json, EngineAnalysisView& out, std::string
     view.averageScore = doubleOf(root, "score");
     view.score = static_cast<int>(view.averageScore < 0 ? view.averageScore - 0.5
                                                         : view.averageScore + 0.5);
-    view.elapsedMs = intOf(root, "elapsed_ms");
-    view.window = intOf(root, "window");
-    view.windowResearches = intOf(root, "window_researches");
-    view.pvsResearches = intOf(root, "pvs_researches");
+    view.elapsedMs = static_cast<long long>(std::llround(doubleOf(root, "elapsed_ms")));
     view.best = parseMoveToken(stringOf(root, "best"));
     view.valid = view.best.valid() || view.kind == "random";
 
@@ -218,6 +217,14 @@ bool parseAnalysis(const std::string& json, EngineAnalysisView& out, std::string
 
     out = std::move(view);
     return true;
+}
+
+bool analysisOutranks(const EngineAnalysisView& fresh, const EngineAnalysisView& cached) {
+    if (!fresh.valid) return false;
+    if (!cached.valid) return true;
+    // A solved line is exact whatever it cost; a larger sample beats a smaller one.
+    if (fresh.proven != cached.proven) return fresh.proven;
+    return fresh.visits >= cached.visits;
 }
 
 } // namespace shuyi

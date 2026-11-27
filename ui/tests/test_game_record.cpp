@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <sstream>
 #include <string>
 
 using namespace shuyi;
@@ -108,10 +109,46 @@ void testSaveLoad() {
     GameRecord record;
     const int a = record.play(0, moveAt("a4-2"));
     const int b = record.play(a, moveAt("b2-5"));
+    // An analysis rich enough to exercise every field the file carries: a proven
+    // verdict, a score, a cell with its own margin, and a candidate.
+    EngineAnalysisView view = evaluated(0.62, 1.5);
+    view.visits = 1200;
+    view.nodes = 2400000;
+    view.elapsedMs = 950;
+    view.backend = "cuda";
+    view.best = moveAt("b2-5");
+    CellAnalysisView cell;
+    cell.move = moveAt("b2-5");
+    cell.winrate = 0.62;
+    cell.visits = 1200;
+    cell.averageScore = 1.5;
+    cell.hasData = true;
+    cell.hasScore = true;
+    view.cells[cell.move.cell] = cell;
+    view.hasCell[cell.move.cell] = true;
+    CellAnalysisView solved;
+    solved.move = moveAt("c3-4");
+    solved.winrate = 1.0;
+    solved.proven = true;
+    solved.hasData = true;
+    solved.hasScore = true;
+    solved.averageScore = 7.0;
+    view.cells[solved.move.cell] = solved;
+    view.hasCell[solved.move.cell] = true;
+    AnalysisCandidateView candidate;
+    candidate.move = moveAt("b2-5");
+    candidate.winrate = 0.62;
+    candidate.visits = 1200;
+    candidate.averageScore = 1.5;
+    view.candidates.push_back(candidate);
+    record.setAnalysis(a, view);
     record.setAnalysis(b, evaluated(0.6, 2.0));
     record.play(a, moveAt("c3-1"));            // a variation beside the trunk
     record.play(b, moveAt("d4-7"));
     const std::string text = record.save(Ruleset::Blocking);
+    check(text.find("#node a4:2 wr 0.6200") != std::string::npos,
+          "the analysis is written with its move path");
+    check(text.find("#cell a4:2 b2:5 0.6200 1200") != std::string::npos, "cells are written");
 
     GameRecord loaded;
     Ruleset ruleset = Ruleset::Classic;
@@ -133,17 +170,56 @@ void testSaveLoad() {
           "the continuation under the trunk survives");
     check(loaded.node(loaded.childrenOf(first).back()).move == moveAt("c3-1"),
           "the variation is still a sibling");
+    // The analysis came back with it, on the right nodes.
+    const EngineAnalysisView& back = loaded.node(first).analysis;
+    check(back.valid, "the analysis survives");
+    check(back.visits == 1200 && back.nodes == 2400000 && back.elapsedMs == 950,
+          "effort survives");
+    check(std::fabs(back.winrate - 0.62) < 1e-9 && back.hasScore &&
+              std::fabs(back.averageScore - 1.5) < 1e-9,
+          "the verdict survives");
+    check(back.backend == "cuda" && back.best == moveAt("b2-5"), "backend and best move survive");
+    check(back.hasCell[cell.move.cell] && back.cells[cell.move.cell].visits == 1200,
+          "a cell survives");
+    check(back.hasCell[solved.move.cell] && back.cells[solved.move.cell].proven &&
+              std::fabs(back.cells[solved.move.cell].averageScore - 7.0) < 1e-9,
+          "a solved cell keeps its exact margin");
+    check(back.candidates.size() == 1 && back.candidates.front().move == moveAt("b2-5"),
+          "candidates survive");
+    check(loaded.node(trunk).analysis.valid, "the other analysed node came back too");
     // The text is canonical: saving the loaded tree gives the same bytes.
     check(loaded.save(Ruleset::Blocking) == text, "save/load round trips to the same text");
     // Loading starts at the end of the main line, not at the last token read.
     check(loaded.current() == loaded.childrenOf(trunk).front(),
           "the current node is the end of the trunk");
 
+    // The file is still readable by a reader that knows only the moves: the
+    // analysis lines are comments, so dropping them gives the old record.
+    std::string plain;
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (line.rfind("#node ", 0) == 0 || line.rfind("#cell ", 0) == 0 ||
+            line.rfind("#cand ", 0) == 0) {
+            continue;
+        }
+        plain += line;
+        plain += "\n";
+    }
+    GameRecord noAnalysis;
+    check(noAnalysis.load(plain, nullptr, &error), "the same file loads without its analysis");
+    check(noAnalysis.count() == record.count() && !noAnalysis.node(first).analysis.valid,
+          "the moves are all there and no analysis is invented");
+
     GameRecord broken;
     check(!broken.load("a4-2 (b2-5", nullptr, &error), "an unbalanced '(' is refused");
     check(!error.empty(), "the refusal has a reason");
     check(!broken.load("a4-2 zz-1", nullptr, &error), "a bad move is refused");
     check(!broken.load("# nothing here\n", nullptr, &error), "an empty record is refused");
+    check(broken.load("#node a4:2 wr 0.5\nmoves a4:2\n", nullptr, &error),
+          "an analysis line for a move in the record is accepted");
+    check(!broken.load("moves a4:2\n#node b2:5 wr 0.5\n", nullptr, &error),
+          "an analysis line for a move that is not there is refused");
 
     // A bare move list without a header is accepted.
     GameRecord bare;
@@ -162,11 +238,12 @@ void testPasses() {
     check(loaded.node(loaded.childrenOf(0).front()).move == moveAt("pass"), "and stays a pass");
 }
 
-void testMoveDelta() {
+void testMoveVerdict() {
     GameRecord record;
     const int a = record.play(0, moveAt("a4-2"));
     const int b = record.play(a, moveAt("b2-5"));
-    // The parent predicted 0.6 for that move (from the mover's point of view).
+    // The parent predicted 0.6 for that move (from the mover's point of view) and
+    // 0.7 for the position itself.
     EngineAnalysisView parentView = evaluated(0.7);
     AnalysisCandidateView candidate;
     candidate.move = moveAt("b2-5");
@@ -174,19 +251,32 @@ void testMoveDelta() {
     parentView.candidates.push_back(candidate);
     record.setAnalysis(a, parentView);
 
-    double delta = 0.0;
+    MoveVerdict verdict;
     record.setAnalysis(b, evaluated(0.25));
-    check(moveDelta(record.node(a), record.node(b), &delta), "both sides have numbers");
+    check(moveVerdict(record.node(a), record.node(b), &verdict), "both sides have numbers");
     // The child is the opponent's view: 1 - 0.25 = 0.75 for the mover, i.e. 0.15
     // better than the 0.6 the parent predicted.
-    check(std::fabs(delta - 0.15) < 1e-9, "a better-than-predicted move is positive");
+    check(std::fabs(verdict.delta - 0.15) < 1e-9, "a better-than-predicted move is positive");
+    check(verdict.scored, "the engine had a number for this move");
 
     record.setAnalysis(b, evaluated(0.9));
-    check(moveDelta(record.node(a), record.node(b), &delta), "still computable");
-    check(std::fabs(delta + 0.5) < 1e-9, "a worse-than-predicted move is negative");
+    check(moveVerdict(record.node(a), record.node(b), &verdict), "still computable");
+    check(std::fabs(verdict.delta + 0.5) < 1e-9, "a worse-than-predicted move is negative");
 
-    record.setAnalysis(b, EngineAnalysisView{});
-    check(!moveDelta(record.node(a), record.node(b), &delta), "no child analysis, no delta");
+    // A move the engine never scored is compared with the position it was played
+    // from: 1 - 0.9 = 0.1 against the parent's own 0.7.
+    const int other = record.play(a, moveAt("c3-1"));
+    record.setAnalysis(other, evaluated(0.9));
+    check(moveVerdict(record.node(a), record.node(other), &verdict),
+          "an unscored move still has a baseline");
+    check(!verdict.scored, "the engine had no number for this move");
+    check(std::fabs(verdict.delta + 0.6) < 1e-9, "the position's own verdict is the baseline");
+
+    record.setAnalysis(other, EngineAnalysisView{});
+    check(!moveVerdict(record.node(a), record.node(other), &verdict), "no child analysis, no verdict");
+    record.setAnalysis(b, evaluated(0.25));
+    record.setAnalysis(a, EngineAnalysisView{});
+    check(!moveVerdict(record.node(a), record.node(b), &verdict), "no parent analysis, no verdict");
 }
 
 void testLabels() {
@@ -218,8 +308,8 @@ int main() {
     testSaveLoad();
     step("passes");
     testPasses();
-    step("move delta");
-    testMoveDelta();
+    step("move verdict");
+    testMoveVerdict();
     step("labels");
     testLabels();
     if (failures == 0) std::printf("game record tests passed\n");

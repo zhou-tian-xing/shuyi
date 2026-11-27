@@ -191,6 +191,28 @@ void testDistinctSymmetricCells() {
           "an asymmetric position keeps every cell");
 }
 
+// The window keeps what the engine said about a position, so a snapshot has to
+// earn the right to replace it: re-opening a record or restarting the engine
+// begins again from a handful of visits.
+void testAnalysisOutranks() {
+    EngineAnalysisView cached;
+    check(parseAnalysis(kAnalysis, cached, nullptr), "fixture parses");
+    EngineAnalysisView richer = cached;
+    richer.visits = 4096;
+    check(analysisOutranks(richer, cached), "more visits replaces fewer");
+    check(analysisOutranks(cached, cached), "the same effort replaces itself");
+    EngineAnalysisView restart = cached;
+    restart.visits = 12;
+    check(!analysisOutranks(restart, cached), "a restart does not blank a richer analysis");
+    check(!analysisOutranks(EngineAnalysisView{}, cached), "an empty snapshot replaces nothing");
+    EngineAnalysisView solved = restart;
+    solved.proven = true;
+    check(analysisOutranks(solved, cached), "a proof beats a larger sample");
+    EngineAnalysisView provedCached = cached;
+    provedCached.proven = true;
+    check(!analysisOutranks(solved, provedCached), "a proof does not replace a larger proof");
+}
+
 void testBrokenInput() {
     EngineAnalysisView view;
     std::string error;
@@ -217,6 +239,7 @@ int main() {
     testRankAnalysisCells();
     testRankTiedAnalysisCells();
     testDistinctSymmetricCells();
+    testAnalysisOutranks();
     testBrokenInput();
     testMoveTokens();
     if (failures == 0) std::printf("engine view tests passed\n");

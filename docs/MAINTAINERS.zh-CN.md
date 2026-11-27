@@ -100,7 +100,7 @@ ui/include/
 └── discovery.h      引擎候选路径与 `capabilities` 探测
 ui/src/
 ├── ui_win32.cpp     窗口、菜单、布局、绘制、按键与鼠标
-├── game_record.cpp  棋谱树、PGN 式文本、与上一手预测的差值
+├── game_record.cpp  棋谱树、PGN 式文本（含分析）、与上一手的差值
 ├── engine_client.cpp 进程/管道/读线程
 ├── engine_protocol.cpp  解析 info JSON、着法 token
 ├── json.cpp         JSON 解析

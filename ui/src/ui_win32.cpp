@@ -70,6 +70,7 @@ constexpr int ID_ENGINE_PICK = 5007;
 constexpr int ID_ENGINE_AUTO = 5008;
 constexpr int ID_ENGINE_INFO = 5009;
 constexpr int ID_SETTINGS = 5010;
+constexpr int ID_ENGINE_MOVE = 5011;
 constexpr int ID_MODEL_RESCAN = 6090;
 constexpr int ID_MODEL_BASE = 6100;  // + model index
 constexpr int ID_MODEL_LIMIT = 6400; // exclusive upper bound, below nothing else
@@ -371,6 +372,22 @@ void clearAnalysisState() {
     g_analysisNode = -1;
 }
 
+// The window is a review surface: a position where the computer is to move does
+// not play itself.  Navigating back one move used to make the engine answer
+// immediately, which silently appended a branch to the record -- after a detour
+// through that branch every later move looked like a variation.  Say what the
+// state is instead, and leave the moving to the menu.
+constexpr const wchar_t* kComputerToMove = L"轮到电脑：引擎菜单 → 让电脑走一步";
+void noteComputerToMove() {
+    if (aiToMove()) {
+        g_engineMessage = kComputerToMove;
+    } else if (g_engineMessage == kComputerToMove) {
+        // Leaving that position must take the note with it: a stale "the computer
+        // is to move" on a position where it is not would be a lie in the panel.
+        g_engineMessage = g_engineChoice == EngineChoice::Off ? L"引擎未启用" : L"引擎已同步";
+    }
+}
+
 // Navigation: the same position, another node.  The engine follows by replaying
 // the line, and the panel shows that node's cached analysis instead of whatever
 // happened to be on screen before.
@@ -390,8 +407,8 @@ void goToNode(int id) {
     g_pendingReplyId.clear();
     g_thinking = false;
     if (g_engineChoice != EngineChoice::Off && g_engineReady) syncEnginePosition();
+    noteComputerToMove();
     refresh(true);
-    if (aiToMove()) maybeAiMove();
 }
 
 void sendEngineStopIfRunning() {
@@ -451,17 +468,25 @@ std::wstring fileNameOf(const std::string& path) {
     return widen(name);
 }
 
-std::wstring engineChoiceLabel(EngineChoice choice) {
-    switch (choice) {
-    case EngineChoice::Mcts: return L"MCTS";
-    case EngineChoice::MctsNn: {
-        std::wstring label = g_nnModelPath.empty() ? L"MCTS+NN" : L"MCTS+NN · " + fileNameOf(g_nnModelPath);
-        if (currentAnalysis().backend == "cuda") label += L" (GPU)";
-        else if (!currentAnalysis().backend.empty()) label += L" (CPU)";
-        return label;
+// What the search has spent on this position, and how fast it is spending it.
+// The model is the user's own choice, so naming it in the panel told them nothing
+// they had not just selected; the effort is the number that changes while they
+// watch, and the one that explains why an estimate is what it is.
+std::wstring analysisEffortText(const EngineAnalysisView& view) {
+    // A solved position was not sampled: it has an answer and a node count, and a
+    // rate would be a number about the clock, not about the search.
+    if (view.proven && view.visits == 0) {
+        return L"精确解算 · " + formatVisits(view.nodes) + L" 节点";
     }
-    default: return L"未启用";
+    std::wstring text = formatVisits(view.visits) + L" 次";
+    if (view.elapsedMs > 0) {
+        const double rate =
+            static_cast<double>(view.visits) * 1000.0 / static_cast<double>(view.elapsedMs);
+        text += L" · " + formatVisits(static_cast<long long>(std::llround(rate))) + L"/秒";
     }
+    if (view.proven) text += L" · 已解算";
+    if (view.backend == "cuda") text += L" · GPU";
+    return text;
 }
 
 bool sendEngine(const std::string& line) {
@@ -476,8 +501,12 @@ void applyEngineAnalysis(int node, const std::string& payload) {
         g_engineMessage = L"引擎分析数据无法解析：" + widen(error);
         return;
     }
-    g_record.setAnalysis(node, std::move(view));
     g_engineMessage = g_enginePending ? L"引擎思考中…" : L"分析中…";
+    // Analysis is additive: a snapshot replaces the cached one only when it
+    // searched at least as long.  Otherwise a restart (or a freshly loaded record)
+    // would blank the numbers the user just opened.
+    if (!g_record.contains(node) || !analysisOutranks(view, g_record.node(node).analysis)) return;
+    g_record.setAnalysis(node, std::move(view));
 }
 
 void startEngineAnalysis(int visits) {
@@ -1333,7 +1362,7 @@ void setEngineChoice(EngineChoice choice) {
         }
     }
     syncEngineChecks();
-    if (aiToMove()) maybeAiMove();
+    noteComputerToMove();
     refresh();
 }
 
@@ -1663,6 +1692,11 @@ constexpr double kMarkWinRateWindow = 0.10;
 constexpr double kMarkVisitFloor = 0.20;
 constexpr int kMarkAlwaysShow = 6;
 
+// A move that beat the number the previous position gave it by this much is
+// marked as a find (blue) rather than as a good move (green): half the width of
+// the board's red-to-green ramp, which is where a rise stops being noise.
+constexpr double kRowGainWindow = 0.05;
+
 COLORREF markColor(double relative, bool best) {
     if (best) return RGB(126, 196, 255);  // light blue
     const double t = std::clamp(1.0 + relative / kMarkWinRateWindow, 0.0, 1.0);
@@ -1960,16 +1994,14 @@ void drawLeftPanel(HDC dc, const Layout& layout, const std::vector<int>& rankedC
     if (redPart.right > redPart.left) roundRect(dc, redPart, scale(7), kRed);
     y += scale(14) + scale(10);
 
-    // AI 评估: what the engine is and how much it searched.
+    // AI 评估: how much the search has spent, and how fast.
     drawTextAt(dc, L"AI评估", x, y, scale(56), scale(18), g_fontSmall, kMuted,
                DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    std::wstring engineLine = engineChoiceLabel(g_engineChoice);
+    std::wstring engineLine = L"--";
     if (analysis.valid) {
-        engineLine += L" · 访问 " + std::to_wstring(analysis.visits);
-        if (analysis.visits == 0 && analysis.proven) engineLine = L"精确解算 · " + engineLine;
-        else if (analysis.proven) engineLine += L" · 已解算";
+        engineLine = analysisEffortText(analysis);
     } else if (g_engineChoice != EngineChoice::Off) {
-        engineLine += g_analysisOn ? L" · 搜索中…" : L" · 空格开始分析";
+        engineLine = g_analysisOn ? L"搜索中…" : L"空格开始分析";
     }
     drawTextAt(dc, engineLine, x + scale(56), y, width - scale(56), scale(18), g_fontSmall,
                g_engineChoice == EngineChoice::Off ? kMuted : kCyan,
@@ -2069,14 +2101,6 @@ void drawRecordTree(HDC dc, const Layout& layout) {
         if (cell.box.bottom < box.top + scale(30)) continue;
         if (cell.box.top > box.bottom) break;
         const RecordNode& node = g_record.node(cell.node);
-        // Colour: how the played move did against what the previous position's
-        // analysis predicted, on the same red/green scale as the board marks.
-        COLORREF fill = cell.node == g_record.root() ? kPanelSoft : kPanelDeep;
-        double delta = 0.0;
-        if (node.parent >= 0 && moveDelta(g_record.node(node.parent), node, &delta)) {
-            fill = mixColor(kPanel, markColor(delta, false),
-                            std::clamp(std::fabs(delta) / 0.2, 0.25, 0.9));
-        }
         const bool selected = cell.node == g_record.current();
         const bool trunk = onPath(cell.node);
         const int height = cell.box.bottom - cell.box.top;
@@ -2088,14 +2112,29 @@ void drawRecordTree(HDC dc, const Layout& layout) {
                  cell.box.top + height / 2, RGB(96, 106, 124));
         }
         if (selected) {
-            roundRect(dc, cell.box, scale(3), kPanelSoft);
-            // A gold edge, not a full box: a boxed row across the panel reads like
-            // an edit field, and the row is already the only one with bright text.
-            RECT edge{cell.box.left, cell.box.top + scale(2), cell.box.left + scale(3),
-                      cell.box.bottom - scale(2)};
-            roundRect(dc, edge, scale(1), kGold);
-        } else if (node.parent >= 0 && (fill != kPanelDeep || trunk)) {
-            roundRect(dc, cell.box, scale(3), fill);
+            roundRect(dc, cell.box, scale(3), kPanelSoft, kGold);
+        } else if (trunk) {
+            roundRect(dc, cell.box, scale(3), kPanelDeep);
+        }
+        // What the move did to the number the position before it gave: a small
+        // block on the left of the row, never the row's own colour.  A fill reads
+        // as "this row is tagged", a block reads as "this move scored x", and it
+        // stays visible under the selection, which is exactly when you are looking
+        // at the move in question.
+        MoveVerdict verdict;
+        const bool hasVerdict =
+            node.parent >= 0 && moveVerdict(g_record.node(node.parent), node, &verdict);
+        if (hasVerdict) {
+            // A significant rise on a move the engine never scored is the one case
+            // worth a different colour: it evaluated the position, not the move,
+            // and the move beat that verdict.  Everything else uses the board's own
+            // scale -- green at 0, red at -10 points.
+            const bool found = !verdict.scored && verdict.delta > kRowGainWindow;
+            const COLORREF tint = found ? kCyan : markColor(verdict.delta, false);
+            const int inset = scale(1);
+            RECT dash{cell.box.left + scale(1), cell.box.top + inset,
+                      cell.box.left + scale(5), cell.box.bottom - inset};
+            roundRect(dc, dash, scale(1), tint);
         }
         const int textLeft = cell.box.left + scale(6);
         if (cell.node != g_record.root()) {
@@ -2208,9 +2247,10 @@ void paintAll(HDC dc, const RECT& client) {
     Layout layout = computeLayout(g_hwnd);
     const Chrome chrome = computeChrome(layout);
     const auto& analysis = currentAnalysis();
-    const bool showAnalysis = analysis.valid && g_engineChoice != EngineChoice::Off;
-    const auto rankedCells = showAnalysis ? rankAnalysisCells(analysis, g_position)
-                                          : std::vector<int>{};
+    // A position that carries an analysis shows it, engine running or not: a
+    // record saved with numbers is the case this rule is for.
+    const auto rankedCells = analysis.valid ? rankAnalysisCells(analysis, g_position)
+                                            : std::vector<int>{};
     drawBoard(dc, layout, rankedCells);
     drawLeftPanel(dc, layout, rankedCells);
     drawRecordTree(dc, layout);
@@ -2262,7 +2302,6 @@ void setAValue(double value) {
     if (g_engineChoice != EngineChoice::Off && g_engineReady) {
         sendEngine("set_a " + formatAValue(g_aValue));
         syncEnginePosition();
-        if (aiToMove()) maybeAiMove();
     }
     refresh();
 }
@@ -2279,6 +2318,17 @@ void needEngine(const wchar_t* detail) {
     g_thinking = false;
     g_engineMessage = detail ? detail : L"没有可用的引擎：引擎菜单 → 选择引擎程序…";
     refresh();
+}
+
+// One move, because the user asked for it.  Opening a record or stepping through
+// the tree deliberately does not do this: a move the user did not ask for lands in
+// the record as a new branch, and from then on the game looks like a variation.
+void computerMove() {
+    if (!aiToMove()) {
+        MessageBeep(MB_OK);
+        return;
+    }
+    maybeAiMove();
 }
 
 void maybeAiMove() {
@@ -2486,8 +2536,8 @@ bool loadRecordFromText(const std::string& text) {
         else syncEnginePosition();
     }
     g_treeScroll = std::max(0, treeScrollFor(g_record.current()));
+    noteComputerToMove();
     refresh(true);
-    if (aiToMove()) maybeAiMove();
     return true;
 }
 
@@ -2512,10 +2562,15 @@ void showGuide() {
     text += L"· 数字键 1–9：选择落子的数字（也可以点下方棋子）。\n";
     text += L"· 点击棋盘：落子。\n";
     text += L"· 空格：开始 / 暂停分析；分析到上限后再按一次会继续，不再限量。\n";
-    text += L"· ↑ / ↓：在棋谱里上一步 / 下一步（↓ 走主干）。\n";
+    text += L"· ↑ / ↓：在棋谱里上一步 / 下一步（↓ 走主干）。翻棋谱不会让电脑落子，"
+            L"要它走一步用 引擎 → 让电脑走一步。\n";
     text += L"· Delete：删除当前着法及其后续，连同它们的分析。\n";
+    text += L"· Ctrl+S：保存棋谱（等同 文件 → 保存棋谱…）。\n";
     text += L"· 左侧面板是分析的产物，右侧是棋谱：每一着一行，换个走法会在那一手后面缩进出一段"
             L"变着，回到旧行时原来的分析还在。\n";
+    text += L"· 棋谱每行左边的小色块是这一步相对上一步的评估：蓝 = 比之前明显更好，"
+            L"绿 = 不差，红 = 变差。\n";
+    text += L"· 分析会一起存进棋谱；载入棋谱时，每个局面的分析跟着回来。\n";
     text += L"· 下方每一步棋子右上角的小数字是这种数字还剩几颗（9³ = 还有三颗 9）。\n";
     text += L"· 左下角 A值 可以按 ± 调整（也可在 引擎 → 设置 里改）。\n";
     text += L"· 新局、保存棋谱、载入棋谱在 文件 菜单里。\n\n";
@@ -2526,7 +2581,7 @@ void showGuide() {
 
 void showAbout() {
     std::wstring text;
-    text += L"数弈 1.0\n\n";
+    text += L"数弈\n\n";
     text += L"一个 9×9 的数字落子棋。原生 Win32/GDI 界面，非 Web 实现。\n";
     text += L"界面只负责规则、局面和显示；搜索与计算全部在这个窗口之外的引擎进程里，"
             L"两者只通过行协议对话。\n\n";
@@ -2579,7 +2634,7 @@ void createMenuBar(HWND hwnd) {
 
     AppendMenuW(file, MF_STRING, ID_NEW_GAME, L"新局");
     AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(file, MF_STRING, ID_SAVE_RECORD, L"保存棋谱…");
+    AppendMenuW(file, MF_STRING, ID_SAVE_RECORD, L"保存棋谱…\tCtrl+S");
     AppendMenuW(file, MF_STRING, ID_LOAD_RECORD, L"载入棋谱…");
     AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(file, MF_STRING, ID_EXIT, L"退出");
@@ -2600,6 +2655,8 @@ void createMenuBar(HWND hwnd) {
     // One entry per discovered model, filled in by populateModelMenu().
     AppendMenuW(engine, MF_POPUP | MF_STRING, reinterpret_cast<UINT_PTR>(model), L"MCTS + 网络(&N)");
     g_modelMenuPosition = GetMenuItemCount(engine) - 1;
+    AppendMenuW(engine, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(engine, MF_STRING, ID_ENGINE_MOVE, L"让电脑走一步");
     AppendMenuW(engine, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(engine, MF_STRING, ID_ENGINE_PICK, L"选择引擎程序…");
     AppendMenuW(engine, MF_STRING, ID_ENGINE_AUTO, L"自动探测引擎");
@@ -2792,6 +2849,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         case ID_ENGINE_MCTS_NN: setEngineChoice(EngineChoice::MctsNn); return 0;
         case ID_ENGINE_PICK: pickEngineProgram(); return 0;
         case ID_ENGINE_AUTO: useAutoEngine(); return 0;
+        case ID_ENGINE_MOVE: computerMove(); return 0;
         case ID_ENGINE_INFO: showEngineInfo(); return 0;
         case ID_MODEL_RESCAN: {
             scanModels();
@@ -3011,6 +3069,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
     PostMessageW(g_hwnd, WM_APP_RESET, 0, 0);
     g_pendingOpen = openPath;
 
+    // Ctrl+S saves the record.  It is the only key chord in the window: the menu
+    // says so next to the command, which is where a user looks for it.
+    ACCEL saveKeys[] = {{static_cast<BYTE>(FVIRTKEY | FCONTROL), 'S', ID_SAVE_RECORD}};
+    HACCEL accelerators = CreateAcceleratorTableW(saveKeys, 1);
+
     // If an engine is discoverable next to the window, load it now so analysis is
     // one keypress away.  A package ships no weights, so "an engine but no model"
     // is a normal state: it must open quietly with the engine off, not greet the
@@ -3028,8 +3091,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+        if (accelerators && TranslateAcceleratorW(g_hwnd, accelerators, &message)) continue;
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
+    if (accelerators) DestroyAcceleratorTable(accelerators);
     return static_cast<int>(message.wParam);
 }

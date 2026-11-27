@@ -47,9 +47,6 @@ struct EngineAnalysisView {
     Move best{};
     int depth = 0;
     long long nodes = 0;
-    int window = 0;
-    int windowResearches = 0;
-    int pvsResearches = 0;
     int visits = 0;
     double winrate = 0.5;
     int score = 0;
@@ -75,5 +72,11 @@ Move parseMoveToken(const std::string& text);
 
 // Parses the JSON object of an `info` line (without the `info ` prefix).
 bool parseAnalysis(const std::string& json, EngineAnalysisView& out, std::string* error);
+
+// Whether a fresh snapshot may replace the one cached for the position.  The
+// window keeps what the engine said about a position after the user moves on, so
+// a snapshot that searched less must not overwrite it: re-opening a record that
+// carries numbers, or restarting the engine, begins again from a few visits.
+bool analysisOutranks(const EngineAnalysisView& fresh, const EngineAnalysisView& cached);
 
 } // namespace shuyi

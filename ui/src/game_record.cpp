@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <sstream>
 
@@ -14,6 +16,48 @@ std::string trim(const std::string& text) {
     while (begin < end && std::isspace(static_cast<unsigned char>(text[begin]))) ++begin;
     while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1]))) --end;
     return text.substr(begin, end - begin);
+}
+
+// A number with a fixed number of decimals.  The text form has to be stable:
+// saving a record that was just loaded must not rewrite it.
+std::string fixed(double value, int places) {
+    if (value == 0.0) value = 0.0;  // no "-0.0000"
+    char buffer[64]{};
+    std::snprintf(buffer, sizeof(buffer), "%.*f", places, value);
+    return buffer;
+}
+
+std::vector<std::string> splitWords(const std::string& text) {
+    std::vector<std::string> words;
+    std::string current;
+    for (char c : text) {
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            if (!current.empty()) words.push_back(current);
+            current.clear();
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty()) words.push_back(current);
+    return words;
+}
+
+bool parseDouble(const std::string& text, double* value) {
+    if (text.empty()) return false;
+    char* end = nullptr;
+    const double parsed = std::strtod(text.c_str(), &end);
+    if (end != text.c_str() + text.size()) return false;
+    if (value) *value = parsed;
+    return true;
+}
+
+bool parseInteger(const std::string& text, long long* value) {
+    if (text.empty()) return false;
+    char* end = nullptr;
+    const long long parsed = std::strtoll(text.c_str(), &end, 10);
+    if (end != text.c_str() + text.size()) return false;
+    if (value) *value = parsed;
+    return true;
 }
 
 } // namespace
@@ -171,8 +215,21 @@ void GameRecord::writeLineText(std::string& out, int node) const {
     writeLineText(out, children.front());
 }
 
+// The file format, in full:
+//
+//   # shuyi record v2
+//   ruleset blocking
+//   moves a4:2 b2:5 (c3:1 ) d4:7
+//   #node <path> wr <f> visits <i> proven <0|1> nodes <i> ms <i> best <move|-> score <f|->
+//   #cell <path> <move> <wr> <visits> <proven> <has_score> <score|->
+//   #cand <path> <move> <wr> <visits> <score>
+//
+// `<path>` is the move sequence that reaches the node, in the same spelling the
+// `moves` line uses, joined by '/' (`.` is the empty board).  A path rather than a
+// node number: numbers are an implementation detail of the tree and change when a
+// branch is deleted.
 std::string GameRecord::save(Ruleset ruleset) const {
-    std::string out = "# shuyi record v1\n";
+    std::string out = "# shuyi record v2\n";
     out += "ruleset ";
     out += rulesetName(ruleset);
     out += '\n';
@@ -180,7 +237,72 @@ std::string GameRecord::save(Ruleset ruleset) const {
     writeLineText(out, 0);
     while (!out.empty() && (out.back() == ' ' || out.back() == '\n')) out.pop_back();
     out += '\n';
+    writeAnalysis(out, 0, ".");
     return out;
+}
+
+void GameRecord::writeAnalysis(std::string& out, int node, const std::string& path) const {
+    const EngineAnalysisView& view = nodes_[static_cast<std::size_t>(node)].analysis;
+    if (view.valid) {
+        out += "#node ";
+        out += path;
+        out += " wr ";
+        out += fixed(view.winrate, 4);
+        out += " visits ";
+        out += std::to_string(view.visits);
+        out += " proven ";
+        out += view.proven ? "1" : "0";
+        out += " nodes ";
+        out += std::to_string(view.nodes);
+        out += " ms ";
+        out += std::to_string(view.elapsedMs);
+        out += " best ";
+        out += view.best.valid() ? moveProtocolText(view.best) : std::string("-");
+        out += " score ";
+        out += view.hasScore ? fixed(view.averageScore, 4) : std::string("-");
+        if (!view.backend.empty()) {
+            out += " backend ";
+            out += view.backend;
+        }
+        out += '\n';
+        for (int cell = 0; cell < kCells; ++cell) {
+            if (!view.hasCell[cell]) continue;
+            const CellAnalysisView& info = view.cells[cell];
+            out += "#cell ";
+            out += path;
+            out += ' ';
+            out += moveProtocolText(info.move);
+            out += ' ';
+            out += fixed(info.winrate, 4);
+            out += ' ';
+            out += std::to_string(info.visits);
+            out += ' ';
+            out += info.proven ? "1" : "0";
+            out += ' ';
+            out += info.hasScore ? "1" : "0";
+            out += ' ';
+            out += info.hasScore ? fixed(info.averageScore, 4) : std::string("-");
+            out += '\n';
+        }
+        for (const AnalysisCandidateView& candidate : view.candidates) {
+            if (!candidate.move.valid()) continue;
+            out += "#cand ";
+            out += path;
+            out += ' ';
+            out += moveProtocolText(candidate.move);
+            out += ' ';
+            out += fixed(candidate.winrate, 4);
+            out += ' ';
+            out += std::to_string(candidate.visits);
+            out += ' ';
+            out += fixed(candidate.averageScore, 4);
+            out += '\n';
+        }
+    }
+    for (int child : nodes_[static_cast<std::size_t>(node)].children) {
+        const std::string move = moveProtocolText(nodes_[static_cast<std::size_t>(child)].move);
+        writeAnalysis(out, child, path == "." ? move : path + "/" + move);
+    }
 }
 
 bool GameRecord::load(const std::string& text, Ruleset* ruleset, std::string* error) {
@@ -190,12 +312,21 @@ bool GameRecord::load(const std::string& text, Ruleset* ruleset, std::string* er
     };
     Ruleset parsedRuleset = ruleset ? *ruleset : kDefaultRuleset;
     std::string moves;
+    std::vector<std::string> analysisLines;
     std::istringstream lines(text);
     std::string line;
     while (std::getline(lines, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         const std::string trimmed = trim(line);
-        if (trimmed.empty() || trimmed[0] == '#') continue;
+        if (trimmed.empty()) continue;
+        // Analysis lines are comments to a reader that does not know them, which is
+        // what keeps a record written by this version readable by an older one.
+        if (trimmed.rfind("#node ", 0) == 0 || trimmed.rfind("#cell ", 0) == 0 ||
+            trimmed.rfind("#cand ", 0) == 0) {
+            analysisLines.push_back(trimmed);
+            continue;
+        }
+        if (trimmed[0] == '#') continue;
         if (trimmed.rfind("ruleset ", 0) == 0) {
             if (!parseRuleset(trim(trimmed.substr(8)), parsedRuleset)) {
                 return fail("unknown rule set: " + trimmed.substr(8));
@@ -267,32 +398,157 @@ bool GameRecord::load(const std::string& text, Ruleset* ruleset, std::string* er
     }
     if (!stack.empty()) return fail("unbalanced '(' in the record");
     current_ = mainTail;
+    for (const std::string& analysisLine : analysisLines) {
+        if (!loadAnalysisLine(analysisLine, error)) return false;
+    }
     if (ruleset) *ruleset = parsedRuleset;
     if (error) error->clear();
     return true;
 }
 
-bool moveDelta(const RecordNode& parent, const RecordNode& child, double* delta) {
-    if (!child.analysis.valid) return false;
-    // What the parent's analysis said the move was worth, from the mover's side.
-    bool havePrediction = false;
-    double predicted = 0.0;
+namespace {
+
+// The node a `<path>` names, or -1 when the record has no such line.
+int nodeForPath(const std::vector<RecordNode>& nodes, const std::string& path) {
+    if (path == ".") return 0;
+    int node = 0;
+    std::size_t start = 0;
+    while (true) {
+        const std::size_t slash = path.find('/', start);
+        const std::string token =
+            path.substr(start, slash == std::string::npos ? std::string::npos : slash - start);
+        Move move;
+        if (!parseMoveLabel(token, move)) return -1;
+        int found = -1;
+        for (int child : nodes[static_cast<std::size_t>(node)].children) {
+            if (nodes[static_cast<std::size_t>(child)].move == move) {
+                found = child;
+                break;
+            }
+        }
+        if (found < 0) return -1;
+        node = found;
+        if (slash == std::string::npos) return node;
+        start = slash + 1;
+    }
+}
+
+} // namespace
+
+bool GameRecord::loadAnalysisLine(const std::string& line, std::string* error) {
+    const auto fail = [&](const std::string& why) {
+        if (error) *error = why;
+        return false;
+    };
+    const std::vector<std::string> word = splitWords(line);
+    if (word.size() < 2) return fail("truncated analysis line: " + line);
+    const int node = nodeForPath(nodes_, word[1]);
+    if (node < 0) return fail("analysis for a move that is not in the record: " + word[1]);
+    EngineAnalysisView& view = nodes_[static_cast<std::size_t>(node)].analysis;
+    if (word[0] == "#cell") {
+        // #cell <path> <move> <wr> <visits> <proven> <has_score> <score>
+        if (word.size() < 8) return fail("truncated cell line: " + line);
+        Move move;
+        if (!parseMoveLabel(word[2], move) || isPass(move)) {
+            return fail("not a placement: " + word[2]);
+        }
+        CellAnalysisView info;
+        info.move = move;
+        info.hasData = true;
+        if (!parseDouble(word[3], &info.winrate)) return fail("bad cell win rate: " + word[3]);
+        long long visits = 0;
+        if (!parseInteger(word[4], &visits)) return fail("bad cell visits: " + word[4]);
+        info.visits = static_cast<int>(std::clamp<long long>(visits, 0, 1LL << 30));
+        info.proven = word[5] == "1";
+        info.hasScore = word[6] == "1";
+        if (info.hasScore && !parseDouble(word[7], &info.averageScore)) {
+            return fail("bad cell score: " + word[7]);
+        }
+        view.cells[move.cell] = info;
+        view.hasCell[move.cell] = true;
+        view.valid = true;
+        return true;
+    }
+    if (word[0] == "#cand") {
+        // #cand <path> <move> <wr> <visits> <score>
+        if (word.size() < 6) return fail("truncated candidate line: " + line);
+        Move move;
+        if (!parseMoveLabel(word[2], move)) return fail("not a move: " + word[2]);
+        AnalysisCandidateView candidate;
+        candidate.move = move;
+        if (!parseDouble(word[3], &candidate.winrate)) return fail("bad candidate win rate");
+        long long visits = 0;
+        if (!parseInteger(word[4], &visits)) return fail("bad candidate visits");
+        candidate.visits = static_cast<int>(std::clamp<long long>(visits, 0, 1LL << 30));
+        if (!parseDouble(word[5], &candidate.averageScore)) return fail("bad candidate score");
+        view.candidates.push_back(candidate);
+        view.valid = true;
+        return true;
+    }
+    // #node <path> key value ...
+    if (word.size() % 2 != 0) return fail("odd field list in a node line: " + line);
+    for (std::size_t i = 2; i + 1 < word.size(); i += 2) {
+        const std::string& key = word[i];
+        const std::string& value = word[i + 1];
+        if (key == "wr") {
+            if (!parseDouble(value, &view.winrate)) return fail("bad win rate: " + value);
+        } else if (key == "visits") {
+            long long visits = 0;
+            if (!parseInteger(value, &visits)) return fail("bad visits: " + value);
+            view.visits = static_cast<int>(std::clamp<long long>(visits, 0, 1LL << 30));
+        } else if (key == "proven") {
+            view.proven = value == "1";
+        } else if (key == "nodes") {
+            if (!parseInteger(value, &view.nodes)) return fail("bad node count: " + value);
+        } else if (key == "ms") {
+            if (!parseInteger(value, &view.elapsedMs)) return fail("bad elapsed time: " + value);
+        } else if (key == "best") {
+            if (value == "-") {
+                view.best = Move{};
+            } else {
+                Move move;
+                if (!parseMoveLabel(value, move)) return fail("bad best move: " + value);
+                view.best = move;
+            }
+        } else if (key == "score") {
+            if (value == "-") view.hasScore = false;
+            else {
+                if (!parseDouble(value, &view.averageScore)) return fail("bad score: " + value);
+                view.hasScore = true;
+            }
+        } else if (key == "backend") {
+            view.backend = value;
+        }
+        // An unknown key is skipped: a newer writer may add fields.
+    }
+    view.valid = true;
+    return true;
+}
+
+bool moveVerdict(const RecordNode& parent, const RecordNode& child, MoveVerdict* verdict) {
+    if (!parent.analysis.valid || !child.analysis.valid) return false;
+    // The parent's verdict is from the mover's side and the child's from the
+    // opponent's, so the child has to be flipped before they can be subtracted.
+    const double actual = 1.0 - child.analysis.winrate;
+    bool scored = false;
+    double expected = parent.analysis.winrate;
     for (const AnalysisCandidateView& candidate : parent.analysis.candidates) {
         if (candidate.move != child.move) continue;
-        predicted = candidate.winrate;
-        havePrediction = true;
+        expected = candidate.winrate;
+        scored = true;
         break;
     }
-    if (!havePrediction) {
+    if (!scored && !isPass(child.move)) {
         const int cell = child.move.cell;
-        if (cell < 0 || cell >= kCells || !parent.analysis.hasCell[cell]) return false;
-        predicted = displayWinRate(parent.analysis.cells[cell]);
-        havePrediction = true;
+        if (cell >= 0 && cell < kCells && parent.analysis.hasCell[cell]) {
+            expected = parent.analysis.cells[cell].winrate;
+            scored = true;
+        }
     }
-    if (!havePrediction) return false;
-    // The child's numbers are from the opponent's point of view.
-    const double actual = 1.0 - child.analysis.winrate;
-    if (delta) *delta = actual - predicted;
+    if (verdict) {
+        verdict->delta = actual - expected;
+        verdict->scored = scored;
+    }
     return true;
 }
 

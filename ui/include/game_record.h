@@ -83,20 +83,32 @@ public:
     // written inline in parentheses, right after the move they replace.  The rule
     // set is part of the record: replaying it under another rule set would produce
     // a different game from the same moves.
+    //
+    // With an analysis on any node the file grows a block of `#`-prefixed lines
+    // (see the .cpp for the format), which a reader that only knows the moves
+    // skips as comments.  That is the point of the prefix: a 1.1 build opens a
+    // record saved with analysis and simply does not show the numbers.
     std::string save(Ruleset ruleset) const;
     bool load(const std::string& text, Ruleset* ruleset, std::string* error);
 
 private:
     int addChild(int parent, Move move);
     void writeLineText(std::string& out, int node) const;
+    void writeAnalysis(std::string& out, int node, const std::string& path) const;
+    bool loadAnalysisLine(const std::string& line, std::string* error);
 
     std::vector<RecordNode> nodes_;
     int current_ = 0;
 };
 
-// How the played move turned out against what the parent's analysis predicted,
-// in the mover's own win rate: positive means better than predicted.  A child
-// without an analysis, or a parent that never scored that move, has no delta.
-bool moveDelta(const RecordNode& parent, const RecordNode& child, double* delta);
+// What a move did to the number the previous position's analysis gave it, in the
+// mover's own win rate.  `delta` is positive when the move turned out better than
+// that number; when the engine had never scored this particular move, the number
+// it is compared with is the verdict on the position it was played from.
+struct MoveVerdict {
+    double delta = 0.0;
+    bool scored = false;  // the engine had a value for this move, not just the position
+};
+bool moveVerdict(const RecordNode& parent, const RecordNode& child, MoveVerdict* verdict);
 
 } // namespace shuyi
