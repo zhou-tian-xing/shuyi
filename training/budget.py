@@ -3,9 +3,11 @@
 
 The failure this exists to prevent: a run that is sized by "how many games did I
 feel like" instead of by the box, so ten rented hours end up training a 1M
-parameter network on a few hundred games.  Data per generation and optimizer
-steps per generation scale with the model; the window decides how many
+parameter network on a few hundred games.  The window decides how many
 generations fit, never the other way round.
+
+What it deliberately does *not* do any more is give a bigger network more passes
+over the same data; see `EPOCHS_PER_GENERATION`.
 
 Inputs are measured, not assumed: `run_session.sh` probes the self-play rate with
 the real model and visits, and passes the training rate it observes on the same
@@ -19,17 +21,21 @@ import math
 POSITIONS_PER_GAME = 52      # measured: 36,399 positions / 700 games
 SELF_PLAY_SHARE = 1.0        # games/s already covers the whole self-play pass
 ARENA_SEARCH_FACTOR = 0.8    # a match searches both sides: a bit slower per game
+# Passes over the generation's data.  Fixed, not scaled with the parameter count.
+#
+# The old rule was "a bigger model needs more gradient steps", scaled as
+# `10000 * params / 1.03` and clamped at 60.  For b10c128 that asked for 152
+# passes, produced 60, and the run finished 62 Elo *below* where it started.
+# The arms measured the same shard at 8 / 28 / 60 passes (2026-11-27,
+# docs/reports/B10C128_RECIPE.zh-CN.md): 8 and 28 pass, 60 loses 32 Elo, and on
+# a weaker teacher's data 28 loses 95.  A 3M model at this data volume wants
+# more *data* per generation, never more passes over the same data, so the
+# parameter count no longer enters this number.
+EPOCHS_PER_GENERATION = 28
 
 
 def steps_per_generation(positions, epochs, batch=512, train_share=0.94):
     return int(positions * train_share / batch * epochs)
-
-
-def epochs_for_steps(positions, target_steps, batch=512, train_share=0.94,
-                     low=12, high=60):
-    per_epoch = max(1, positions * train_share / batch)
-    epochs = math.ceil(target_steps / per_epoch)
-    return max(low, min(high, epochs))
 
 
 def deadline_exceeded(remaining_seconds, gen_seconds, slack=1.15):
@@ -47,8 +53,7 @@ def deadline_exceeded(remaining_seconds, gen_seconds, slack=1.15):
 def plan(rate_games_per_s, hours, params_millions=1.03, visits=1024,
          arena_games=100, setup_minutes=15, tail_minutes=12,
          min_gens=4, max_gens=16, min_games=2000, max_games=4000,
-         train_rate=20000.0, batch=512, target_steps_base=10000,
-         replay_gens=2):
+         train_rate=20000.0, batch=512, replay_gens=2):
     """Return a plan dict; raises ValueError when the window fits nothing."""
     if rate_games_per_s <= 0:
         raise ValueError("self-play rate must be positive")
@@ -58,9 +63,7 @@ def plan(rate_games_per_s, hours, params_millions=1.03, visits=1024,
 
     arena_rate = rate_games_per_s * ARENA_SEARCH_FACTOR
     arena_seconds = arena_games / arena_rate
-    # Steps and data both grow with the network: this is the "a bigger model needs
-    # more gradient descent" rule, written down instead of remembered.
-    target_steps = int(target_steps_base * (params_millions / 1.03))
+    epochs = EPOCHS_PER_GENERATION
 
     def size_for(gens):
         budget = usable / gens
@@ -70,17 +73,14 @@ def plan(rate_games_per_s, hours, params_millions=1.03, visits=1024,
         # clock; the first generation has nothing to replay, so the average over
         # the run is used.
         train_factor = 1.0 + (replay_gens - 1) * max(0, gens - 1) / max(1, gens)
-        epochs = 24
         games = 0.0
-        for _ in range(6):
+        for _ in range(4):
             seconds_per_game = 1.0 / rate_games_per_s
             train_per_game = POSITIONS_PER_GAME * epochs * train_factor / train_rate
             games = (budget - arena_seconds) / (seconds_per_game + train_per_game)
             positions = games * POSITIONS_PER_GAME
-            epochs = epochs_for_steps(positions * train_factor, target_steps, batch=batch)
         games = int(max(0, games))
         positions = games * POSITIONS_PER_GAME
-        epochs = epochs_for_steps(positions * train_factor, target_steps, batch=batch)
         steps = steps_per_generation(positions * train_factor, epochs, batch=batch)
         train_seconds = positions * train_factor * epochs / train_rate
         gen_seconds = games / rate_games_per_s + train_seconds + arena_seconds
@@ -191,10 +191,13 @@ def self_test():
         pass
     else:
         raise AssertionError("a box this slow cannot hold the 2,000-game floor in ten hours")
-    # A bigger network must ask for more gradient steps per position.
+    # The parameter count must not buy more passes: that is the rule this file
+    # used to encode, and it is what took b10c128 from +29 to -32 in one
+    # generation.  A bigger network gets the same passes over more data.
     small = plan(0.58, 10.0, 1.03, 1024)
     big = plan(0.58, 30.0, 3.00, 1024)
-    assert big["optimizer_steps_per_generation"] > small["optimizer_steps_per_generation"]
+    assert big["epochs"] == small["epochs"] == EPOCHS_PER_GENERATION
+    assert EPOCHS_PER_GENERATION <= 32, "the arms measured 60 passes as destructive"
     # A window too short to do anything useful must fail loudly, not silently
     # produce a 40-game generation.
     try:
