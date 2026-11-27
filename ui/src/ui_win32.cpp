@@ -2102,9 +2102,14 @@ void drawRecordTree(HDC dc, const Layout& layout) {
                  cell.box.top + height / 2, RGB(96, 106, 124));
         }
         if (selected) {
-            roundRect(dc, cell.box, scale(4), fill, kGold, 2);
-        } else if (trunk) {
-            roundRect(dc, cell.box, scale(4), fill, RGB(74, 84, 102));
+            roundRect(dc, cell.box, scale(3), kPanelSoft);
+            // A gold edge, not a full box: a boxed row across the panel reads like
+            // an edit field, and the row is already the only one with bright text.
+            RECT edge{cell.box.left, cell.box.top + scale(2), cell.box.left + scale(3),
+                      cell.box.bottom - scale(2)};
+            roundRect(dc, edge, scale(1), kGold);
+        } else if (node.parent >= 0 && (fill != kPanelDeep || trunk)) {
+            roundRect(dc, cell.box, scale(3), fill);
         }
         const int textLeft = cell.box.left + scale(6);
         if (cell.node != g_record.root()) {
