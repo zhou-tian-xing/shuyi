@@ -27,6 +27,7 @@
 |---|---|
 | [plans/SERVER_PLAN.zh-CN.md](plans/SERVER_PLAN.zh-CN.md) | 服务器预案：预算模型、visits 取值、质量闸门 |
 | [plans/NEXT_STEPS.zh-CN.md](plans/NEXT_STEPS.zh-CN.md) | 当前棋力提升计划、固定参照、停滞诊断 |
+| [reports/LADDER_512.zh-CN.md](reports/LADDER_512.zh-CN.md) | 512 visits 阶梯：按不确定度分配局数、两表对比、断开图的坑 |
 | [reports/RUN_20261127A.zh-CN.md](reports/RUN_20261127A.zh-CN.md) | 修复后首轮 4 代：提升只在 512/1024 visits 显现，64 visits 几乎不动 |
 | [reports/SCALING_ANALYSIS.zh-CN.md](reports/SCALING_ANALYSIS.zh-CN.md) | 变慢归因：数据量–Elo 曲线、两轮对比、已修的三处训练缺陷、容量对照方案 |
 | [reports/RUN_20261126A.zh-CN.md](reports/RUN_20261126A.zh-CN.md) | 十一小时 12 代：续训规模、固定参照竞技场、64 visits 补测新末代、四个观察 |

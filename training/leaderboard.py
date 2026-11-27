@@ -123,6 +123,22 @@ def leaderboard(path: Path, anchor: str = "random"):
     if not pairs:
         return order, {}, {}, games, {}
     names = sorted({name for (a, b, *_) in pairs for name in (a, b)})
+
+    # A table with no path between two groups has no rating for one of them: the
+    # prior alone would place both at zero and quietly compress everything toward
+    # it.  Rate the anchor's group, and say what was left out.
+    groups = components(names, {k: v for k, v in results.items()
+                                if k[0] in set(names) and k[1] in set(names)})
+    if len(groups) > 1:
+        home = next((g for g in groups if anchor in g), groups[0])
+        stranded = [g for g in groups if g is not home]
+        print(f"warning: {path.name}: {len(groups)} 个互不相连的组；只给含 {anchor} 的那组"
+              f"（{len(home)} 个模型）定分，另 {sum(len(g) for g in stranded)} 个没有连上："
+              + "; ".join(", ".join(sorted(g)[:3]) + ("…" if len(g) > 3 else "")
+                          for g in stranded), file=sys.stderr)
+        names = sorted(home)
+        pairs = [p for p in pairs if p[0] in home and p[1] in home]
+
     rating, moved = fit_elo_checked(names, pairs)
     if moved > 1.0:  # an unconverged fit is compressed toward the prior, i.e. it lies small
         print(f"warning: {path.name}: 拟合没收敛，最后一步还差 {moved:.1f} Elo", file=sys.stderr)
