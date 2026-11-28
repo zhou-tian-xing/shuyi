@@ -2215,7 +2215,10 @@ void drawLeftPanel(HDC dc, const Layout& layout, const std::vector<int>& rankedC
                    g_engineChoice == EngineChoice::Off ? kMuted : kCyan,
                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         y += scale(20);
-        if (g_engineChoice != EngineChoice::Off) {
+        // The status line is drawn whether or not an engine is running: "没有模型：把
+        // .bin 放进 models/" is exactly the sentence a weightless package has to say,
+        // and it used to be swallowed because the engine was off.
+        if (!g_engineMessage.empty()) {
             drawTextAt(dc, g_engineMessage, x + scale(56), y, width - scale(56), scale(16), g_fontSmall,
                        kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
             y += scale(18);
