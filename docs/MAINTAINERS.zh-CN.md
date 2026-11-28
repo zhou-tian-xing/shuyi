@@ -174,7 +174,7 @@ CUDA 构建走 `tools\build_cuda.bat`：nvcc 不接受中文路径，所以源�
 | 网络格式/特征 | `engine/src/nn.cpp`、`training/train_resnet.py`（必须同步） |
 | 协议命令或字段 | `engine/src/protocol.cpp`、`engine/src/protocol_json.cpp`、`protocol/ENGINE_PROTOCOL.md` |
 | 界面绘制/交互 | `ui/src/ui_win32.cpp` |
-| 棋谱树、棋谱文件、行颜色 | `ui/src/game_record.cpp`、`ui/tests/test_game_record.cpp` |
+| 棋谱树、棋谱文件、每手颜色 | `ui/src/game_record.cpp`、`ui/tests/test_game_record.cpp`、`docs/RECORD_FORMAT.zh-CN.md` |
 | 界面如何解析分析 | `ui/src/engine_protocol.cpp`、`protocol/tests/protocol_smoke.py` |
 | 引擎发现/启动 | `ui/src/discovery.cpp`、`startEngineProcess()` |
 | 发布包内容 | `release/build_packages.py`、`release/NOTES-*.md` |

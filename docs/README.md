@@ -6,7 +6,8 @@
 
 | 文档 | 内容 |
 |---|---|
-| [../ui/README.md](../ui/README.md) | 界面：窗口布局、操作、棋谱树与棋谱文件格式 |
+| [../ui/README.md](../ui/README.md) | 界面：窗口布局、操作、棋谱树与分析累积规则 |
+| [RECORD_FORMAT.zh-CN.md](RECORD_FORMAT.zh-CN.md) | 棋谱文件 `.syp` 的数据结构：着法树、路径、`#node`/`#cell`/`#cand`、兼容性与错误 |
 | [../engine/README.md](../engine/README.md) | 引擎：目录与职责、三条硬规矩、协议入口 |
 
 ## 规则与数学

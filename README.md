@@ -17,7 +17,7 @@
 
 目前模型文件没有统一发布通道，因为模型文件会让 clone/push 变得缓慢，目前只会在 release 时发布当时的最强模型。
 
-![数弈原生界面与 MCTS 分析](docs/screenshot_1_1.png)
+![数弈原生界面与 MCTS 分析](docs/screenshot_1_2.png)
 
 ## Windows用户使用
 

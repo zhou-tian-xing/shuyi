@@ -111,25 +111,26 @@ cmake --build build-ui
 
 ## 棋谱文件
 
-`保存` / `载入` 读写 UTF-8 文本，每一着写作 `a4-2`，变着写在括号里：
+`保存` / `载入` 读写 UTF-8 文本，每一着写作 `a4:2`（`a4-2` 也接受），变着写在括号里：
 
 ```
 # shuyi record v2
 ruleset nopass
-moves e5-1 a5-1 (c3-2 d4-3) e6-4
-#node e5-1 wr 0.5312 visits 512 proven 0 nodes 4213 ms 380 best a5-1 score 1.5000 backend cuda
-#cell e5-1 a5-1 0.5312 512 0 1 1.5000
-#cand e5-1 a5-1 0.5312 512 1.5000
+moves e5:1 d4:1 (c3:2 d4:3) e6:4
+#node e5:1 wr 0.5312 visits 512 proven 0 nodes 4213 ms 380 best d4:1 score 1.5000 backend cuda
+#cell e5:1 d4:1 0.5312 512 0 1 1.5000
+#cand e5:1 d4:1 0.5312 512 1.5000
 ```
 
 * 文件里带着规则集，因为同一串着法在不同规则下不是同一局棋。
 * `#node` / `#cell` / `#cand` 是**可选**的分析：一个局面一行 `#node`，它算过的每个格子一行
   `#cell`，候选着法一行 `#cand`。路径写的是到达那个局面的着法（`a4:2/b2:5`，空棋盘是 `.`），
   不是节点编号——编号是树的实现细节，删一枝就变了。载入时这些数字回到对应的局面，棋盘标记、
-  选点列表和坐标图立刻可用，不必重算。
+  选点列表、走势折线和每手颜色立刻可用，不必重算。
 * 三个前缀都是 `#`，也就是注释：只有 `moves` 的旧程序打开一个带分析的棋谱，看到的是同一局棋，
   只是没有数字。
 * `shuyi.exe --open game.syp` 可以按这个格式直接打开（也便于把 `.syp` 关联到本程序）。
+* 每个字段的类型和含义见 **[docs/RECORD_FORMAT.zh-CN.md](../docs/RECORD_FORMAT.zh-CN.md)**。
 
 ## 分析怎么累积
 
