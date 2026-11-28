@@ -280,11 +280,6 @@ void filledCircle(HDC dc, int cx, int cy, int radius, COLORREF fill, COLORREF bo
     DeleteObject(brush);
 }
 
-std::wstring signedText(int value) {
-    if (value > 0) return L"+" + std::to_wstring(value);
-    return std::to_wstring(value);
-}
-
 // The A value lives on a half-integer grid, so it prints without trailing zeros.
 std::string formatAValue(double value) {
     char buffer[32]{};
@@ -377,6 +372,32 @@ void rebuildPosition() {
     if (humanToMove()) g_selected = firstAvailable(g_position.sideToMove());
 }
 
+// A finished position is not a search problem: the rules decide its value, and they
+// decide it exactly.  Written as an analysis, the statement is "this is proven".
+EngineAnalysisView terminalView() {
+    EngineAnalysisView view;
+    view.valid = true;
+    view.proven = true;
+    const Outcome outcome = g_position.outcome(g_aValue);
+    const double redRate = outcome == Outcome::RedWin ? 1.0
+                           : outcome == Outcome::BlackWin ? 0.0 : 0.5;
+    const double redScore = g_position.finalScore(g_aValue);
+    const bool redToMove = g_position.sideToMove() == Player::Red;
+    view.winrate = redToMove ? redRate : 1.0 - redRate;
+    view.hasScore = true;
+    view.averageScore = redToMove ? redScore : -redScore;
+    return view;
+}
+
+// Give the node that ended the game its exact value.  Nothing ever searches a
+// position with no move in it, so without this the last move was the one row in the
+// record with no colour, and the chart stopped at the last estimate instead of at
+// the result.
+void recordResultIfOver() {
+    if (!g_position.gameOver()) return;
+    g_record.setAnalysis(g_record.current(), terminalView(), g_analysisRun);
+}
+
 void clearAnalysisState() {
     g_analysisOn = false;
     g_analysisFinished = false;
@@ -437,6 +458,7 @@ void goToNode(int id) {
     clearAnalysisState();
     g_record.select(id);
     rebuildPosition();
+    recordResultIfOver();
     g_enginePending = false;
     g_pendingReplyId.clear();
     g_thinking = false;
@@ -493,6 +515,7 @@ void recordMove(Move move, Player mover) {
         }
         rebuildPosition();
     }
+    recordResultIfOver();
     clearAnalysisState();
     g_treeScroll = treeScrollFor(g_record.current());
     refresh(true);
@@ -2101,130 +2124,166 @@ void drawLeftPanel(HDC dc, const Layout& layout, const std::vector<int>& rankedC
     int y = box.top + scale(10);
     const auto& analysis = currentAnalysis();
 
-    // 行棋方
+    // 行棋方, or the end of the game.  A finished game is not a headline: the
+    // header says so in grey and the row below carries the result.
+    const bool over = g_position.gameOver();
     const Player side = g_position.sideToMove();
-    const COLORREF sideColour = side == Player::Red ? kRed : RGB(15, 17, 22);
-    filledCircle(dc, x + scale(8), y + scale(11), scale(6), sideColour,
-                 side == Player::Red ? RGB(244, 164, 150) : kBlackSoft, 1);
-    std::wstring turn = side == Player::Red ? L"红方行棋" : L"黑方行棋";
-    if (g_position.gameOver()) turn = std::wstring(L"终局 · ") + outcomeText(g_position.outcome(g_aValue));
-    else if (g_thinking) turn = L"电脑思考中…";
-    drawTextAt(dc, turn, x + scale(22), y, width - scale(22), scale(24), g_fontTurn, kText,
-               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (over) {
+        filledCircle(dc, x + scale(8), y + scale(11), scale(6), RGB(92, 98, 110));
+        drawTextAt(dc, L"终局", x + scale(22), y, width - scale(22), scale(24), g_fontTurn, kMuted,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    } else {
+        const COLORREF sideColour = side == Player::Red ? kRed : RGB(15, 17, 22);
+        filledCircle(dc, x + scale(8), y + scale(11), scale(6), sideColour,
+                     side == Player::Red ? RGB(244, 164, 150) : kBlackSoft, 1);
+        const std::wstring turn = g_thinking ? std::wstring(L"电脑思考中…")
+                                             : (side == Player::Red ? L"红方行棋" : L"黑方行棋");
+        drawTextAt(dc, turn, x + scale(22), y, width - scale(22), scale(24), g_fontTurn, kText,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
     y += scale(26);
 
-    // The headline of the best line, then the bar that splits the board between
-    // the two sides.
-    double rate = 0.5;
-    bool hasRate = false;
-    std::wstring scoreText = L"--";
-    if (analysis.valid) {
-        // The engine's own choice, in its own terms: a solved move carries its
-        // exact rate, an estimated one the confidence bound it is ranked by.
-        const int bestCell = analysis.best.cell;
-        if (analysis.hasCell[bestCell]) {
-            const auto& info = analysis.cells[bestCell];
-            rate = displayWinRate(info);
-        } else {
-            rate = analysis.proven ? analysis.winrate
-                                   : winRateLowerBound(analysis.winrate, analysis.visits);
+    // The bar splits the board between the two sides; over a finished game it is
+    // the result, and repeating that as a win rate would only say it twice.
+    double redRate = 0.5;
+    if (over) {
+        const Outcome outcome = g_position.outcome(g_aValue);
+        const COLORREF colour = outcome == Outcome::RedWin ? kRedSoft
+                                : outcome == Outcome::BlackWin ? RGB(198, 204, 216)
+                                                               : kGreen;
+        drawTextAt(dc, outcomeText(outcome), x, y, width / 2, scale(20), g_fontUi, colour,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        drawTextAt(dc, signedDecimal(g_position.finalScore(g_aValue)), x + width / 2, y,
+                   width / 2, scale(20), g_fontSmall, kMuted,
+                   DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    } else {
+        double rate = 0.5;
+        bool hasRate = false;
+        std::wstring scoreText = L"--";
+        if (analysis.valid) {
+            // The engine's own choice, in its own terms: a solved move carries its
+            // exact rate, an estimated one the confidence bound it is ranked by.
+            const int bestCell = analysis.best.cell;
+            if (analysis.hasCell[bestCell]) {
+                const auto& info = analysis.cells[bestCell];
+                rate = displayWinRate(info);
+            } else {
+                rate = analysis.proven ? analysis.winrate
+                                       : winRateLowerBound(analysis.winrate, analysis.visits);
+            }
+            hasRate = true;
+            if (analysis.hasScore) scoreText = signedDecimal(analysis.averageScore);
         }
-        hasRate = true;
-        if (analysis.hasScore) scoreText = signedDecimal(analysis.averageScore);
+        redRate = side == Player::Red ? rate : 1.0 - rate;
+        drawTextAt(dc, hasRate ? L"胜率 " + formatWinRate(redRate) : L"胜率 --", x, y,
+                   width / 2, scale(20), g_fontUi, hasRate ? kText : kMuted,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        drawTextAt(dc, L"目差 " + scoreText, x + width / 2, y, width / 2, scale(20), g_fontUi,
+                   analysis.hasScore ? kText : kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
-    const double redRate = (side == Player::Red || g_position.gameOver()) ? rate : 1.0 - rate;
-    drawTextAt(dc, hasRate ? L"胜率 " + formatWinRate(redRate) : L"胜率 --", x, y,
-               width / 2, scale(20), g_fontUi, hasRate ? kText : kMuted,
-               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    drawTextAt(dc, L"目差 " + scoreText, x + width / 2, y, width / 2, scale(20), g_fontUi,
-               analysis.hasScore ? kText : kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     y += scale(22);
 
     RECT bar{x, y, x + width, y + scale(14)};
-    roundRect(dc, bar, scale(7), RGB(20, 22, 27));  // black side
-    RECT redPart = bar;
-    redPart.right = bar.left + static_cast<int>(std::lround((bar.right - bar.left) * std::clamp(redRate, 0.0, 1.0)));
-    if (redPart.right > redPart.left) roundRect(dc, redPart, scale(7), kRed);
+    if (over) {
+        // A finished game has a winner, not a split: an all-black bar on a black
+        // win would look like "no data", so the whole bar takes the winner's colour.
+        const Outcome outcome = g_position.outcome(g_aValue);
+        const COLORREF won = outcome == Outcome::RedWin ? kRed
+                             : outcome == Outcome::BlackWin ? RGB(74, 79, 90) : kGreen;
+        roundRect(dc, bar, scale(7), won);
+    } else {
+        roundRect(dc, bar, scale(7), RGB(20, 22, 27));  // black side
+        RECT redPart = bar;
+        redPart.right = bar.left + static_cast<int>(std::lround((bar.right - bar.left) * std::clamp(redRate, 0.0, 1.0)));
+        if (redPart.right > redPart.left) roundRect(dc, redPart, scale(7), kRed);
+    }
     y += scale(14) + scale(10);
 
-    // AI 评估: how much the search has spent, and how fast.
-    drawTextAt(dc, L"AI评估", x, y, scale(56), scale(18), g_fontSmall, kMuted,
-               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    std::wstring engineLine = L"--";
-    if (analysis.valid) {
-        engineLine = analysisEffortText(analysis);
-    } else if (g_engineChoice != EngineChoice::Off) {
-        engineLine = g_analysisOn ? L"搜索中…" : L"空格开始分析";
-    }
-    drawTextAt(dc, engineLine, x + scale(56), y, width - scale(56), scale(18), g_fontSmall,
-               g_engineChoice == EngineChoice::Off ? kMuted : kCyan,
-               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    y += scale(20);
-    if (g_engineChoice != EngineChoice::Off) {
-        drawTextAt(dc, g_engineMessage, x + scale(56), y, width - scale(56), scale(16), g_fontSmall,
-                   kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        y += scale(18);
-    }
-    y += scale(4);
-    line(dc, x, y, x + width, y, RGB(58, 66, 80));
-    y += scale(8);
-
-    // 选点: one row per distinct move.  A solved move is a fact, so it is marked
-    // and never hidden by the visit floor.
-    drawTextAt(dc, L"选点", x, y, scale(56), scale(18), g_fontSmall, kMuted,
-               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    y += scale(20);
-    if (analysis.valid && !rankedCells.empty()) {
-        const std::vector<int> rows = distinctSymmetricCells(rankedCells, analysis, g_position);
-        const int count = std::min<int>(5, static_cast<int>(rows.size()));
-        const double topRate = displayWinRate(analysis.cells[rows.front()]);
-        for (int i = 0; i < count; ++i) {
-            const auto& info = analysis.cells[rows[i]];
-            const double value = displayWinRate(info);
-            const int rowY = y + i * scale(23);
-            const std::wstring label = moveLabel(info.move);
-            drawTextAt(dc, label, x, rowY, scale(46), scale(20), g_fontUi,
-                       i == 0 ? kText : kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-            if (info.proven) {
-                drawTextAt(dc, L"解", x + scale(42), rowY, scale(16), scale(20), g_fontSmall, kGold,
-                           DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-            }
-            RECT track{x + scale(60), rowY + scale(7), x + width - scale(88), rowY + scale(15)};
-            roundRect(dc, track, scale(3), RGB(55, 62, 75));
-            RECT fill = track;
-            fill.right = fill.left + static_cast<int>(std::lround((track.right - track.left) *
-                                                                std::clamp(value, 0.0, 1.0)));
-            if (fill.right > fill.left) {
-                roundRect(dc, fill, scale(3), i == 0 ? kCyan : RGB(76, 140, 176));
-            }
-            drawTextAt(dc, formatWinRate(value), x + width - scale(86), rowY, scale(40), scale(20),
-                       g_fontSmall, i == 0 ? kText : kMuted,
-                       DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-            std::wstring score = L"--";
-            if (info.hasScore) score = signedDecimal(info.averageScore);
-            if (info.proven && info.hasScore) score = formatPoints(info.averageScore);
-            drawTextAt(dc, score, x + width - scale(44), rowY, scale(44), scale(20), g_fontSmall,
-                       info.proven ? kGold : kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    // Nothing to analyse and no move to pick once the game is over: the rest of the
+    // panel is the result and the chart.
+    if (!over) {
+        // AI 评估: how much the search has spent, and how fast.
+        drawTextAt(dc, L"AI评估", x, y, scale(56), scale(18), g_fontSmall, kMuted,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        std::wstring engineLine = L"--";
+        if (analysis.valid) {
+            engineLine = analysisEffortText(analysis);
+        } else if (g_engineChoice != EngineChoice::Off) {
+            engineLine = g_analysisOn ? L"搜索中…" : L"空格开始分析";
         }
-        (void)topRate;
-        y += count * scale(23);
-    } else {
-        drawTextAt(dc, L"还没有分析", x + scale(56), y, width - scale(56), scale(20), g_fontSmall,
-                   kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        y += scale(23);
+        drawTextAt(dc, engineLine, x + scale(56), y, width - scale(56), scale(18), g_fontSmall,
+                   g_engineChoice == EngineChoice::Off ? kMuted : kCyan,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        y += scale(20);
+        if (g_engineChoice != EngineChoice::Off) {
+            drawTextAt(dc, g_engineMessage, x + scale(56), y, width - scale(56), scale(16), g_fontSmall,
+                       kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += scale(18);
+        }
+        y += scale(4);
+        line(dc, x, y, x + width, y, RGB(58, 66, 80));
+        y += scale(8);
+
+        // 选点: one row per distinct move.  A solved move is a fact, so it is marked
+        // and never hidden by the visit floor.
+        drawTextAt(dc, L"选点", x, y, scale(56), scale(18), g_fontSmall, kMuted,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        y += scale(20);
+        if (analysis.valid && !rankedCells.empty()) {
+            const std::vector<int> rows = distinctSymmetricCells(rankedCells, analysis, g_position);
+            const int count = std::min<int>(5, static_cast<int>(rows.size()));
+            const double topRate = displayWinRate(analysis.cells[rows.front()]);
+            for (int i = 0; i < count; ++i) {
+                const auto& info = analysis.cells[rows[i]];
+                const double value = displayWinRate(info);
+                const int rowY = y + i * scale(23);
+                const std::wstring label = moveLabel(info.move);
+                drawTextAt(dc, label, x, rowY, scale(46), scale(20), g_fontUi,
+                           i == 0 ? kText : kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                if (info.proven) {
+                    drawTextAt(dc, L"解", x + scale(42), rowY, scale(16), scale(20), g_fontSmall, kGold,
+                               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                }
+                RECT track{x + scale(60), rowY + scale(7), x + width - scale(88), rowY + scale(15)};
+                roundRect(dc, track, scale(3), RGB(55, 62, 75));
+                RECT fill = track;
+                fill.right = fill.left + static_cast<int>(std::lround((track.right - track.left) *
+                                                                    std::clamp(value, 0.0, 1.0)));
+                if (fill.right > fill.left) {
+                    roundRect(dc, fill, scale(3), i == 0 ? kCyan : RGB(76, 140, 176));
+                }
+                drawTextAt(dc, formatWinRate(value), x + width - scale(86), rowY, scale(40), scale(20),
+                           g_fontSmall, i == 0 ? kText : kMuted,
+                           DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+                std::wstring score = L"--";
+                if (info.hasScore) score = signedDecimal(info.averageScore);
+                if (info.proven && info.hasScore) score = formatPoints(info.averageScore);
+                drawTextAt(dc, score, x + width - scale(44), rowY, scale(44), scale(20), g_fontSmall,
+                           info.proven ? kGold : kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            }
+            (void)topRate;
+            y += count * scale(23);
+        } else {
+            drawTextAt(dc, L"还没有分析", x + scale(56), y, width - scale(56), scale(20), g_fontSmall,
+                       kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            y += scale(23);
+        }
     }
     y += scale(4);
     line(dc, x, y, x + width, y, RGB(58, 66, 80));
     y += scale(6);
 
-    // 当前分值: what the board is worth if the game ended now.
-    drawTextAt(dc, L"当前分值", x, y, scale(76), scale(22), g_fontSmall, kMuted,
-               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    const double total = g_position.finalScore(g_aValue);
-    drawTextAt(dc, signedDecimal(total), x + scale(76), y, width - scale(76), scale(22), g_fontBig,
-               total > 0.0 ? kRedSoft : (total < 0.0 ? RGB(174, 181, 195) : kGreen),
-               DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-    y += scale(26);
+    // 当前分值: what the board is worth if the game ended now.  Over a finished
+    // game that is the number already on the result row, so it is not said twice.
+    if (!over) {
+        drawTextAt(dc, L"当前分值", x, y, scale(76), scale(22), g_fontSmall, kMuted,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        const double total = g_position.finalScore(g_aValue);
+        drawTextAt(dc, signedDecimal(total), x + scale(76), y, width - scale(76), scale(22),
+                   g_fontBig, total > 0.0 ? kRedSoft : (total < 0.0 ? RGB(174, 181, 195) : kGreen),
+                   DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        y += scale(26);
+    }
 
     const RECT chart{x, y, x + width, box.bottom - scale(12)};
     drawChart(dc, chart);
@@ -2374,27 +2433,6 @@ void drawBottomBar(HDC dc, const Layout& layout, const Chrome& chrome) {
                g_fontSmall, kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 
-void drawOverlay(HDC dc, const Layout& layout) {
-    if (!g_position.gameOver()) return;
-    const int boardSize = layout.board.right - layout.board.left;
-    const int width = std::min(scale(360), boardSize - scale(30));
-    const int height = scale(96);
-    const int cx = layout.board.left + boardSize / 2;
-    const int cy = layout.board.top + boardSize / 2;
-    const RECT box{cx - width / 2, cy - height / 2, cx + width / 2, cy + height / 2};
-    roundRect(dc, box, scale(14), RGB(31, 36, 45), kGold, scale(2));
-    const Outcome outcome = g_position.outcome(g_aValue);
-    const COLORREF colour = outcome == Outcome::RedWin ? RGB(240, 137, 122)
-                             : outcome == Outcome::BlackWin ? RGB(196, 202, 214)
-                                                           : kGreen;
-    drawTextAt(dc, outcomeText(outcome), box.left + scale(16), box.top + scale(12),
-               width - scale(32), scale(46), g_fontTitle, colour);
-    const std::wstring detail = L"局面分 " + signedText(g_position.rawScore()) + L"　+　A值 " +
-                                signedValue(g_aValue) + L"　=　" + signedDecimal(g_position.finalScore(g_aValue));
-    drawTextAt(dc, detail, box.left + scale(12), box.top + scale(58), width - scale(24), scale(24),
-               g_fontSmall, kText);
-}
-
 void paintAll(HDC dc, const RECT& client) {
     fillRectColor(dc, client, kBackground);
     Layout layout = computeLayout(g_hwnd);
@@ -2408,7 +2446,6 @@ void paintAll(HDC dc, const RECT& client) {
     drawLeftPanel(dc, layout, rankedCells);
     drawRecordTree(dc, layout);
     drawBottomBar(dc, layout, chrome);
-    drawOverlay(dc, layout);
 }
 
 void refresh(bool immediate) {
@@ -2678,6 +2715,7 @@ bool loadRecordFromText(const std::string& text) {
     clearAnalysisState();
     g_engineMessage = L"棋谱已载入";
     rebuildPosition();
+    recordResultIfOver();
     syncRulesetChecks();
     saveSettings();
     if (g_engineChoice != EngineChoice::Off && g_engineReady) {
@@ -2724,6 +2762,8 @@ void showGuide() {
             L"变着，回到旧行时原来的分析还在。\n";
     text += L"· 左侧走势折线画整盘棋：实线走主干（每处分叉优先左侧），只在当前点的分叉处另画一支"
             L"虚线变着；青色是胜率、金色是目差，目差在右边有刻度。\n";
+    text += L"· 终局时棋盘上不盖任何东西：左侧第一行是灰色的“终局”，下面写“谁胜”和最终分值，"
+            L"胜率横条整条是赢家的颜色。\n";
     text += L"· 棋盘上每个分析标记：胜率 / 访问数 / 预期终局分，右上角的上标是要落的那颗子的数字"
             L"（同一个格子能下九个数字）。\n";
     text += L"· 棋谱每行左边的小色块是这一步相对上一步的评估：蓝 = 比之前明显更好，"
