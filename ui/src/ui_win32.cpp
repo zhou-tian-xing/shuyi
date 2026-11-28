@@ -241,8 +241,9 @@ void roundRect(HDC dc, const RECT& rect, int radius, COLORREF fill, COLORREF bor
     DeleteObject(brush);
 }
 
-void line(HDC dc, int x1, int y1, int x2, int y2, COLORREF color, int width = 1) {
-    HPEN pen = CreatePen(PS_SOLID, width, color);
+void line(HDC dc, int x1, int y1, int x2, int y2, COLORREF color, int width = 1,
+          bool dashed = false) {
+    HPEN pen = CreatePen(dashed ? PS_DASH : PS_SOLID, width, color);
     HGDIOBJ old = SelectObject(dc, pen);
     MoveToEx(dc, x1, y1, nullptr);
     LineTo(dc, x2, y2);
@@ -1915,6 +1916,24 @@ double redScore(const EngineAnalysisView& view, int depth) {
     return (depth % 2 == 0) ? view.averageScore : -view.averageScore;
 }
 
+// The score axis gets numbers, the win-rate axis does not: the win rate is always
+// 0-100% and its curve is read against the band, while the score is what grows with
+// the position -- on move 40 the same curve can mean +3 or +30.
+double scoreStep(double maxScore) {
+    static const double steps[] = {1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0};
+    for (double step : steps) {
+        // Two or three labels a side: one is not a scale, four is a grid.
+        if (maxScore / step <= 3.0 + 1e-9) return step;
+    }
+    return 100.0;
+}
+
+// The whole game, not just the line to the node on screen.  A record is a tree, and
+// a chart of a tree needs one line: the trunk is drawn solid -- children[0]
+// everywhere, the rows the record panel shows without an indent -- from the start,
+// through the node on screen, and on to the end of the game.  Only at the node on
+// screen is the first alternative drawn dashed as well, because that is the fork
+// the user is looking at; a fork further along is not, it just follows the trunk.
 void drawChart(HDC dc, const RECT& box) {
     if (box.bottom - box.top < scale(60)) return;
     const int node = g_record.current();
@@ -1922,28 +1941,48 @@ void drawChart(HDC dc, const RECT& box) {
     const int width = box.right - box.left;
     roundRect(dc, box, scale(8), kPanelDeep);
 
+    std::vector<int> main = path;
+    for (int walk = node; !g_record.childrenOf(walk).empty();) {
+        walk = g_record.childrenOf(walk).front();
+        main.push_back(walk);
+    }
+    std::vector<int> alternative;
+    // `path` is empty at the root, and a fork needs the column of the position it
+    // forks from: there is none before the first move, so the opening shows the
+    // trunk alone.
+    if (!path.empty() && g_record.childrenOf(node).size() >= 2) {
+        // The fork itself first, so the dashed line leaves the solid one at the
+        // point where they actually part.
+        alternative.push_back(node);
+        for (int walk = g_record.childrenOf(node)[1];;) {
+            alternative.push_back(walk);
+            if (g_record.childrenOf(walk).empty()) break;
+            walk = g_record.childrenOf(walk).front();
+        }
+    }
+    const int forkColumn = static_cast<int>(path.size()) - 1;
+
     int analysed = 0;
-    for (int id : path) {
+    for (int id : main) {
         if (g_record.node(id).analysis.valid) ++analysed;
     }
     if (analysed == 0) {
-        const wchar_t* message = path.empty() ? L"走势：还没有着法" : L"走势：这条线还没有分析";
+        const wchar_t* message = main.empty() ? L"走势：还没有着法" : L"走势：这条线还没有分析";
         drawTextAt(dc, message, box.left + scale(8), box.top, width - scale(16),
                    box.bottom - box.top, g_fontSmall, kMuted);
         return;
     }
 
-    const int padLeft = scale(8);
-    const int padRight = scale(8);
-    const int plotTop = box.top + scale(14);
-    const int plotBottom = box.bottom - scale(16);
-    const int plotLeft = box.left + padLeft;
-    const int plotRight = box.right - padRight;
-    if (plotBottom - plotTop < scale(20)) return;
-    const int columns = static_cast<int>(path.size());
-    const double stepX = columns > 1 ? static_cast<double>(plotRight - plotLeft) / (columns - 1) : 0.0;
-    const auto xAt = [&](int index) {
-        return plotLeft + static_cast<int>(std::lround(index * stepX));
+    const int plotTop = box.top + scale(12);
+    const int plotBottom = box.bottom - scale(12);
+    const int plotLeft = box.left + scale(8);
+    // A gutter on the right for the score labels, so they never sit on the curves.
+    const int plotRight = box.right - scale(26);
+    if (plotBottom - plotTop < scale(20) || plotRight - plotLeft < scale(40)) return;
+    const int columns = std::max(2, static_cast<int>(main.size()));
+    const double stepX = static_cast<double>(plotRight - plotLeft) / (columns - 1);
+    const auto xAt = [&](int column) {
+        return plotLeft + static_cast<int>(std::lround(column * stepX));
     };
     const auto yWin = [&](double rate) {
         return plotBottom - static_cast<int>(std::lround((plotBottom - plotTop) * std::clamp(rate, 0.0, 1.0)));
@@ -1951,63 +1990,107 @@ void drawChart(HDC dc, const RECT& box) {
 
     // Score curve: its own scale, symmetric around 0.
     double maxScore = 2.0;
-    for (int id : path) {
-        const auto& view = g_record.node(id).analysis;
-        if (!view.valid || !view.hasScore) continue;
-        maxScore = std::max(maxScore, std::fabs(redScore(view, g_record.depth(id))));
+    for (const std::vector<int>* curve : {&main, &alternative}) {
+        for (int id : *curve) {
+            const auto& view = g_record.node(id).analysis;
+            if (!view.valid || !view.hasScore) continue;
+            maxScore = std::max(maxScore, std::fabs(redScore(view, g_record.depth(id))));
+        }
     }
     const auto yScore = [&](double score) {
         const double t = std::clamp(score / maxScore, -1.0, 1.0);
         return plotBottom - static_cast<int>(std::lround((plotBottom - plotTop) * (t + 1.0) / 2.0));
     };
 
+    // The win-rate band.  There is no alpha on a GDI bitmap, so "half transparent"
+    // is a colour mixed towards the panel: two faint lines at 100% and 0% so a curve
+    // near the edge reads as "one side is winning", not as a clipped line.
+    const COLORREF band = mixColor(kPanelDeep, kCyan, 0.40);
+    line(dc, plotLeft, plotTop, plotRight, plotTop, band);
+    line(dc, plotLeft, plotBottom, plotRight, plotBottom, band);
     line(dc, plotLeft, yWin(0.5), plotRight, yWin(0.5), RGB(58, 66, 80));
-    line(dc, plotLeft, yScore(0.0), plotRight, yScore(0.0), RGB(48, 54, 66));
+
+    // Score labels, +step, -step, ... up to the range.  Every one also gets a faint
+    // rule, so a point's margin can be read off the chart instead of guessed.
+    // Without a single score in the game there is nothing to label and the axis is
+    // not drawn: an empty scale would suggest the margins were all zero.
+    bool haveScore = false;
+    for (const std::vector<int>* curve : {&main, &alternative}) {
+        for (int id : *curve) {
+            const auto& view = g_record.node(id).analysis;
+            if (view.valid && view.hasScore) haveScore = true;
+        }
+    }
+    if (haveScore) {
+        const double step = scoreStep(maxScore);
+        for (double value = step; value <= maxScore + 1e-9; value += step) {
+            for (double signedValue : {value, -value}) {
+                const int y = yScore(signedValue);
+                line(dc, plotLeft, y, plotRight, y, RGB(44, 50, 60));
+                drawTextAt(dc, formatPoints(signedValue), plotRight + scale(2), y - scale(7),
+                           scale(22), scale(14), g_fontSmall, RGB(150, 126, 70),
+                           DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            }
+        }
+    }
+
+    // Where the node on screen sits in the whole game.
+    if (!path.empty()) {
+        line(dc, xAt(forkColumn), plotTop, xAt(forkColumn), plotBottom, RGB(52, 58, 70), 2);
+    }
 
     // A segment is drawn only between two *analysed* points: a gap is the honest
     // rendering of "the engine never looked at this position".
-    int previous = -1;
-    for (int i = 0; i < columns; ++i) {
-        const auto& view = g_record.node(path[i]).analysis;
-        if (!view.valid) {
-            previous = -1;
-            continue;
+    const auto drawLine = [&](const std::vector<int>& nodes, int firstColumn, bool dashed) {
+        const COLORREF winColour = dashed ? mixColor(kPanelDeep, kCyan, 0.70) : kCyan;
+        const COLORREF scoreColour = dashed ? mixColor(kPanelDeep, kGold, 0.70) : kGold;
+        int previous = -1;
+        for (std::size_t i = 0; i < nodes.size(); ++i) {
+            const auto& view = g_record.node(nodes[i]).analysis;
+            if (!view.valid) {
+                previous = -1;
+                continue;
+            }
+            if (previous >= 0) {
+                const auto& before = g_record.node(nodes[static_cast<std::size_t>(previous)]).analysis;
+                const int depthBefore = g_record.depth(nodes[static_cast<std::size_t>(previous)]);
+                const int depthNow = g_record.depth(nodes[i]);
+                // GDI only draws a dashed style on a one-pixel pen: a thicker one
+                // is solid whatever the style says.
+                const int penWidth = dashed ? 1 : 2;
+                line(dc, xAt(firstColumn + previous), yWin(redWinRate(before, depthBefore)),
+                     xAt(firstColumn + static_cast<int>(i)), yWin(redWinRate(view, depthNow)),
+                     winColour, penWidth, dashed);
+                if (before.hasScore && view.hasScore) {
+                    line(dc, xAt(firstColumn + previous), yScore(redScore(before, depthBefore)),
+                         xAt(firstColumn + static_cast<int>(i)), yScore(redScore(view, depthNow)),
+                         scoreColour, penWidth, dashed);
+                }
+            }
+            previous = static_cast<int>(i);
         }
-        if (previous >= 0) {
-            const auto& before = g_record.node(path[previous]).analysis;
-            line(dc, xAt(previous), yWin(redWinRate(before, g_record.depth(path[previous]))),
-                 xAt(i), yWin(redWinRate(view, g_record.depth(path[i]))), kCyan, 2);
-            if (before.hasScore && view.hasScore) {
-                line(dc, xAt(previous), yScore(redScore(before, g_record.depth(path[previous]))),
-                     xAt(i), yScore(redScore(view, g_record.depth(path[i]))), kGold, 2);
+    };
+    drawLine(main, 0, false);
+    if (alternative.size() >= 2) drawLine(alternative, forkColumn, true);
+
+    const auto drawDots = [&](const std::vector<int>& nodes, int firstColumn, bool dim) {
+        for (std::size_t i = 0; i < nodes.size(); ++i) {
+            const auto& view = g_record.node(nodes[i]).analysis;
+            if (!view.valid) continue;
+            const bool here = nodes[i] == node;
+            const int dot = here ? scale(4) : (dim ? scale(2) : scale(3));
+            const int cx = xAt(firstColumn + static_cast<int>(i));
+            const int depth = g_record.depth(nodes[i]);
+            filledCircle(dc, cx, yWin(redWinRate(view, depth)), dot,
+                         dim ? mixColor(kPanelDeep, kCyan, 0.6) : kCyan);
+            if (view.hasScore) {
+                filledCircle(dc, cx, yScore(redScore(view, depth)), dot,
+                             dim ? mixColor(kPanelDeep, kGold, 0.6) : kGold);
             }
         }
-        previous = i;
-    }
-    for (int i = 0; i < columns; ++i) {
-        const auto& view = g_record.node(path[i]).analysis;
-        if (!view.valid) continue;
-        const bool current = path[i] == node;
-        const int cx = xAt(i);
-        filledCircle(dc, cx, yWin(redWinRate(view, g_record.depth(path[i]))),
-                     current ? scale(4) : scale(3), kCyan);
-        if (view.hasScore) {
-            filledCircle(dc, cx, yScore(redScore(view, g_record.depth(path[i]))),
-                         current ? scale(4) : scale(3), kGold);
-        }
-    }
-
-    // Axis labels, minimal: 100% / 0% for the win rate, the score range on the
-    // right.  Anything more is noise in a 200 px box.
-    drawTextAt(dc, L"100%", box.left + scale(4), plotTop - scale(12), scale(34), scale(14),
-               g_fontSmall, kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    drawTextAt(dc, L"0%", box.left + scale(4), plotBottom, scale(30), scale(14), g_fontSmall,
-               kMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    if (maxScore > 0.0) {
-        drawTextAt(dc, signedDecimal(maxScore), box.right - scale(44), plotTop - scale(12),
-                   scale(40), scale(14), g_fontSmall, RGB(150, 126, 70),
-                   DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-    }
+    };
+    drawDots(main, 0, false);
+    drawDots(alternative, forkColumn, true);
 }
 
 void drawLeftPanel(HDC dc, const Layout& layout, const std::vector<int>& rankedCells) {
@@ -2639,6 +2722,8 @@ void showGuide() {
     text += L"· Ctrl+S：保存棋谱（等同 文件 → 保存棋谱…）。\n";
     text += L"· 左侧面板是分析的产物，右侧是棋谱：每一着一行，换个走法会在那一手后面缩进出一段"
             L"变着，回到旧行时原来的分析还在。\n";
+    text += L"· 左侧走势折线画整盘棋：实线走主干（每处分叉优先左侧），只在当前点的分叉处另画一支"
+            L"虚线变着；青色是胜率、金色是目差，目差在右边有刻度。\n";
     text += L"· 棋盘上每个分析标记：胜率 / 访问数 / 预期终局分，右上角的上标是要落的那颗子的数字"
             L"（同一个格子能下九个数字）。\n";
     text += L"· 棋谱每行左边的小色块是这一步相对上一步的评估：蓝 = 比之前明显更好，"
