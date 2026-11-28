@@ -178,10 +178,20 @@ def stage(stage_dir: Path, engine: Path, ui: Path | None, model: Path | None,
         shutil.copy2(ui, stage_dir / "shuyi.exe")
         (stage_dir / "shuyi-ui.ini").write_text(INI, encoding="utf-8")
         shutil.copy2(REPO / "docs" / "RULES.zh-CN.md", stage_dir / "RULES.zh-CN.md")
-    shutil.copy2(REPO / "protocol" / "ENGINE_PROTOCOL.md", stage_dir / "ENGINE_PROTOCOL.md")
-    if model is not None and ui is not None:
+        # The folder exists even when it is empty: the UI scans it, and a README in
+        # it says where weights come from -- an absent folder looks like a mistake.
         (stage_dir / "models").mkdir()
-        shutil.copy2(model, stage_dir / "models" / model.name)
+        if model is not None:
+            shutil.copy2(model, stage_dir / "models" / model.name)
+        else:
+            (stage_dir / "models" / "README.txt").write_text(
+                "把权重放进这个目录：b<blocks>c<channels>-s<steps>-d<data>.bin\n\n"
+                "模型不随这个包发布，在发布页单独下载：\n"
+                "https://github.com/zhou-tian-xing/shuyi/releases\n\n"
+                "规则集必须和棋局匹配（nopass 的权重不能用 classic 局面），页面上标了每个\n"
+                "权重对应的规则集；不匹配的模型会被拒绝加载。\n",
+                encoding="utf-8")
+    shutil.copy2(REPO / "protocol" / "ENGINE_PROTOCOL.md", stage_dir / "ENGINE_PROTOCOL.md")
     shutil.copy2(REPO / "LICENSE", stage_dir / "LICENSE")
 
     engine_note = ("CUDA 引擎。**前置条件：CUDA 12 运行时**（cudart64_12.dll、"
